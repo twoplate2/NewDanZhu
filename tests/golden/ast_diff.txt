@@ -14,7 +14,7 @@ DIFF       _await_ready                       18325cc9ed
 DIFF       _bench_counters_begin              b9a56503a0
 DIFF       _bench_counters_end                5758585227
 DIFF       _bench_done                        bca3f86d9a
-DIFF       _bench_frame_log                   f3380918b7
+DIFF       _bench_frame_log                   471309434f
 DIFF       _bench_restore_board               377c5d7ba0
 ONLY_NEW   _bench_running                     644bbdb055
 DIFF       _bench_save_board                  0cef014aba
