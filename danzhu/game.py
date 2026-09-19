@@ -1186,7 +1186,19 @@ class Game(object):
         if not silent and self.sound_mode == "on" and self.now >= self._result_until:
             self._snd("voice_rtp_%d" % int(t * 100), 1.0, 0.6)
         self.multipliers = self._boards[t]   # 切换: 直接取该档盘面, 不刷新(只有发射才刷新)
-        self._emit("redraw")
+        # ⚠️ **只换 9 个倍率槽, 不整块重画**(2026-09-19)。切档时**几何一点没变** —— 变的只有
+        #    `multipliers` 那 9 个值, 与 `park_ball` 重掷是**同一种改动**, 而那边早就走
+        #    `update_slots` 了(见 `game.py::park_ball`)。
+        #    这是老版交接文档 `android/jiaojie.md` 方案四明写的下一步:
+        #    「现有代码已将"仅倍率槽变化"改为 `_update_slots()`。下一步只检查仍然触发整块
+        #      `GameArea._redraw()` 的真实场景: 尺寸变化、首帧、重置、**切换档位**、异常兜底。」
+        #    代价: `_redraw` 要 `canvas.clear()` + 重建全部指令(桌面实测 0.529ms, 真机约 9ms),
+        #    而 165Hz 的帧预算只有 6.06ms ⇒ 那 9ms 正好是一记肉眼可见的卡顿。
+        # ⚠️ `_update_slots` **自带结构守卫**(9 个槽的列表长度对不上就自己退回 `_redraw`),
+        #    所以"尺寸刚变过 / 首帧"这些情形不会被它半更新。
+        # ⚠️ 它顺手做的事与 `_redraw` **等价**: 作废槽位白闪(`_pulse = None`)+ 熄灭全部投中
+        #    指示灯(`lamps_off()`) —— 后者本来就是 `_redraw` 重建 `_lamp_cols` 时"顺手"做的。
+        self._emit("update_slots")
         self._save_config()
 
     def _regular_rtp(self):

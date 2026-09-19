@@ -139,7 +139,7 @@ DIFF       set_bet                            25713a70a6
 ONLY_NEW   set_fps_cap_setting                b7fd305edd
 ONLY_NEW   set_fx                             60b601daaa
 ONLY_NEW   set_max_plays                      644c4fe447
-DIFF       set_rtp                            787f235b90
+DIFF       set_rtp                            93f005379a
 ONLY_NEW   set_sound_enabled                  43112d83b7
 DIFF       settle                             4d319d6b4a
 ONLY_NEW   shared_rng                         1bd6b3c375

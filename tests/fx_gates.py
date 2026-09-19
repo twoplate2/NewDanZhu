@@ -1811,11 +1811,22 @@ def main():
             self.sfx = _RecSfx()
 
             class _GA(object):
-                """`redraw` 事件会调 `game_area._redraw()` —— 给个计数桩就够(老版夹具同款)。"""
+                """盘面事件(`redraw` / `update_slots`)会调 `game_area` 的方法 —— 给计数桩就够
+                (老版夹具同款)。
+
+                ⚠️ **两个方法都要留**: 2026-09-19 起 `set_rtp` 切档**不再整块重画**, 改走
+                   `_update_slots()`(切档时几何一点没变, 只换 9 个倍率槽 —— 见 `Game.set_rtp`
+                   的注释与老版交接文档 `android/jiaojie.md` 方案四)。当时正是这里抛
+                   `AttributeError: '_GA' object has no attribute '_update_slots'` 把门禁打红的。
+                   ⇒ **桩件必须跟着"出货代码真实会调的方法"走**, 少一个就是假红/假绿。
+                """
                 def __init__(self):
                     self.redraws = 0
+                    self.slot_updates = 0
                 def _redraw(self):
                     self.redraws += 1
+                def _update_slots(self):
+                    self.slot_updates += 1
 
             self.game_area = _GA()
             # 老版 `_ask_unlock_rtp` 画完弹窗后不再自己搬事件; 新版把两半接起来的那一步
