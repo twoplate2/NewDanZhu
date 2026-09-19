@@ -39,7 +39,7 @@ DIFF       _guard_immersive_now               db9494924d
 DIFF       _guard_warm                        af45b7a225
 DIFF       _hide_bench_status                 1f68153597
 DIFF       _hp_done                           130d993d05
-ONLY_NEW   _live_cpu_freq_line                cd41fb1ca4
+ONLY_NEW   _live_cpu_freq_line                4f00c99164
 DIFF       _load_config                       3f01e48a4d
 DIFF       _load_history                      8ea0a2467d
 ONLY_NEW   _log_settle                        ce55b38d89
