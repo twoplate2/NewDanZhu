@@ -274,8 +274,19 @@ _GLYPH_FONT = "Roboto"       # 就是项目注册的那个中文字体
 # 刷新率档位。`maxfps` 只约束 Kivy Clock, 不能要求 Android 切显示模式; 反过来只请求
 # Android 高刷也解不开 Kivy 自己的 60fps 睡眠 —— 两层必须同时设。
 FPS_CAP_OPTIONS = (60, 90, 120, 144, 165, 185)
-FPS_CAP_DEFAULT = 120
 FPS_CAP_MAX = max(FPS_CAP_OPTIONS)
+# ⚠️⚠️ **默认档 = `FPS_CAP_MAX` = "跟随面板最高档"**(玩家 2026-09-20 定)。
+#    为什么它能表达"跟随面板": `platform/device.py _request_android_high_hz()` 里是
+#    `target = min(屏幕最高档, Android系统峰值, 用户档位)` ⇒ 用户档位设到 ≥ 任何面板时,
+#    target 就**等于面板最高档**(只受系统"峰值刷新率"设定限制, 那是玩家自己的省电开关)。
+#    ⚠️ **旧默认 120 把 165Hz 的面板压成了 120Hz 显示模式**: 同一句 `min` 之后还有
+#    `at_or_below`(选 ≤target 的模式) 与 `target = min(target, mode_hz)` ⇒ 屏幕上真的
+#    只跑 120。而工程自己的真机账是 `1%Low ≈ 0.70 × 生效刷新率`(120Hz→83.3 / 60Hz→42.2,
+#    见 `ui/bench.py` 的"节拍真值"那段注释) ⇒ 面板多出来的 45Hz 白扔了。
+#    ⚠️ **不许单独把这一档改回 120**: 165Hz 面板配 120 上限 = 165/120 = 1.375 **不是整数**,
+#    一定拍频(老版 `android/temp/_msg.txt` 实测: 60Hz 屏上 120 上限比**不设上限还慢**)。
+#    ⇒ 上限必须**整除**屏幕的 vsync 周期, 而"跟随面板最高档"是唯一永远整除的选择。
+FPS_CAP_DEFAULT = FPS_CAP_MAX
 FPS_CAP_FALLBACK = FPS_CAP_DEFAULT
 FPS_CAP_PC = 120
 _FPS_USER_CAP = [FPS_CAP_DEFAULT]

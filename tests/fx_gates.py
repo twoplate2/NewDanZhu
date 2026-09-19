@@ -1314,6 +1314,29 @@ def main():
           "实时行的高度预算: 初始化 `= 0` 之后**只准 `+= 1` 累加** —— "
           "写死 `= 1` 时加第二行不会撑高弹窗, 尾巴被裁")
 
+    # ---- 13c. 帧率默认档 = 「跟随面板最高档」, 且两处真源不许分裂(玩家 2026-09-20 定) ----
+    # ⚠️ **新版独有的一条纪律**(老版的默认档是 120), 所以**不与老版 FAIL 集合对账**。
+    # 为什么要单独立一组: 这个常量在 `config.py` 与 `game.py` 里**各有一份**(后者是存档字段
+    # 的读/写侧), 只改一处就是"读写两侧不同一份" —— 本工程栽过的形状。
+    # 而它的值直接决定**生效刷新率**(`platform/device.py _request_android_high_hz()` 里
+    # `target = min(屏幕最高档, Android系统峰值, 用户档位)`), 工程自己的真机账又是
+    # `1%Low ≈ 0.70 × 生效刷新率`(120Hz→83.3 / 60Hz→42.2)。**改错了没有任何别的东西会报错。**
+    check(CFG.FPS_CAP_DEFAULT == CFG.FPS_CAP_MAX,
+          "帧率默认档 == `FPS_CAP_MAX`(=「跟随面板最高档」)—— 用户档位必须设到 ≥ 任何面板, "
+          "上面那句 `min(屏幕, 系统, 用户档位)` 才会落到面板真实最高档",
+          "FPS_CAP_DEFAULT=%r 而 FPS_CAP_MAX=%r ⇒ 默认档把面板压低了"
+          % (CFG.FPS_CAP_DEFAULT, CFG.FPS_CAP_MAX))
+    check(GAME.FPS_CAP_DEFAULT == CFG.FPS_CAP_DEFAULT,
+          "`game.py` 与 `config.py` 的 `FPS_CAP_DEFAULT` **是同一份**(存档读/写两侧不许分裂)",
+          "game.py=%r 而 config.py=%r" % (GAME.FPS_CAP_DEFAULT, CFG.FPS_CAP_DEFAULT))
+    check(GAME.FPS_CAP_OPTIONS == CFG.FPS_CAP_OPTIONS,
+          "`game.py` 与 `config.py` 的 `FPS_CAP_OPTIONS` **是同一份**(白名单与滑条同源)",
+          "game.py=%r 而 config.py=%r" % (GAME.FPS_CAP_OPTIONS, CFG.FPS_CAP_OPTIONS))
+    check(CFG.FPS_CAP_DEFAULT in CFG.FPS_CAP_OPTIONS,
+          "默认档必须在选项表里 —— `_fps_user_cap()` 与 `set_fps_cap_setting()` 都拿 "
+          "`cap in FPS_CAP_OPTIONS` 当白名单, 不在表里的默认值会被**静默丢掉**换回自己",
+          "FPS_CAP_DEFAULT=%r 不在 %r 里" % (CFG.FPS_CAP_DEFAULT, CFG.FPS_CAP_OPTIONS))
+
     # ---- 14. 装杯落珠的音量 ----
     # 玩家 2026-09-11: "弹珠掉落容器的声音, 音量太小了"。同一个 bounce 波形主游戏给到 1.0
     # (不削波), 装杯原来只有 0.25~0.72 —— 这条钉住"两跳都不低于主游戏那个 0.55 的落槽音量"。

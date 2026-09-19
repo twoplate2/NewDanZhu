@@ -58,7 +58,7 @@ def _game(path, **kw):
 
 
 def main():
-    from danzhu.config import FPS_CAP_OPTIONS, POWER_GRAINS, PRESETS
+    from danzhu.config import FPS_CAP_DEFAULT, FPS_CAP_OPTIONS, POWER_GRAINS, PRESETS
 
     tmp = tempfile.mkdtemp(prefix="danzhu_persist_")
     path = os.path.join(tmp, "plinko_config.json")
@@ -115,7 +115,10 @@ def main():
         ("round_plays", 999, 0, "round_plays 不得 > max_plays"),
         ("plays", -1, 0, "次数不许为负"),
         ("hits", -1, 0, "中奖数不许为负"),
-        ("fps_cap_setting", 61, 120, "只认 FPS_CAP_OPTIONS"),
+        # ⚠️ 期望值**不许写死字面量** —— 它以前就是写死的 120, 而 2026-09-20 玩家把默认档
+        #    改成了"跟随面板最高档"(`FPS_CAP_DEFAULT = FPS_CAP_MAX`), 这条闸当场变红。
+        #    挡坏值这个**行为**没变, 变的是"挡回哪一个默认值" ⇒ 期望值必须跟着真源走。
+        ("fps_cap_setting", 61, FPS_CAP_DEFAULT, "只认 FPS_CAP_OPTIONS"),
         ("power_grain", "每3秒", "每帧", "只认 POWER_GRAINS=%s" % (POWER_GRAINS,)),
     ]
     for key, badval, default, why in cases:
