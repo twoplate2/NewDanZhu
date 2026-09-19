@@ -48,6 +48,7 @@ DIFF       _on_key_down                       8fde188e42
 DIFF       _on_key_up                         c9b83acff4
 DIFF       _on_title_touch_down               5250160689
 DIFF       _on_title_touch_up                 480ce259fc
+ONLY_NEW   _ondraw_wrap                       61dcb5e9b6
 DIFF       _orient_guard                      9f0a63a42f
 DIFF       _play_charge_sound                 7235c0b50f
 DIFF       _play_events                       cd59a905a9
@@ -90,7 +91,7 @@ DIFF       _space_fire                        eb268dbd9c
 DIFF       _start_bench_test                  2404014333
 DIFF       _start_hp_test                     f24006f946
 ONLY_NEW   _status                            15bd304f79
-DIFF       _swap_wrap                         b12d9dc4a7
+DIFF       _swap_wrap                         ef02aa403b
 ONLY_OLD   _unlock_rtp                        2954b2e951
 DIFF       _update_slots                      0287b5b9a2
 DIFF       _veil_title_state                  129a87e2a8
@@ -107,7 +108,7 @@ ONLY_NEW   begin_bench_hold                   81f3892864
 ONLY_NEW   begin_rtp_hold                     59b6cc9041
 DIFF       benchmark_trajectories             369107d7c3
 ONLY_NEW   bet                                497f8b772f
-DIFF       build                              007553af44
+DIFF       build                              e29e649a85
 ONLY_NEW   check_title_hold                   02f8fd1675
 ONLY_NEW   click                              2d992b22fb
 ONLY_NEW   close_rtp_hidden                   1e6848fa9e

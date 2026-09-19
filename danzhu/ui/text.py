@@ -72,6 +72,10 @@ _TEXUPD = [0]
 _TEXUPD_BY = {}
 _TEXUPD_ACTIVE = [False]         # 采样闸门: 避免启动/成绩弹窗的重排污染游戏采样
 _CLOCK_END = [0.0]               # Clock.tick 结束那一刻(「尾」三分段的中间那一刀)
+# 本帧 `Window.on_draw`(画布遍历 + GL 提交)花了多少**毫秒**。
+# ⚠️ 它同时进 `_FRAME_BRK["尾·on_draw"]`, 而 `_swap_wrap` 算「尾·空档」时会**把它减掉**
+#    —— 两格不重叠, 加得起来。见 `_ondraw_wrap`。
+_ON_DRAW_MS = [0.0]
 
 
 def _brk_add(tag, t0):
@@ -761,10 +765,17 @@ def _swap_wrap():
             if _ce > _FRAME_END[0]:
                 _FRAME_BRK["尾·回调"] = (_FRAME_BRK.get("尾·回调", 0.0)
                                         + (_ce - _FRAME_END[0]))
+                # ⚠️⚠️ **减掉 on_draw** —— 这一格的定义是「Clock.tick 结束 → flip 开始」,
+                #    而 `Window.on_draw` 正落在里面。不减的话 `尾·空档` 和 `尾·on_draw`
+                #    **重叠**, 读数的人一相加就得到比整帧还长的"总耗时"。
                 _FRAME_BRK["尾·空档"] = (_FRAME_BRK.get("尾·空档", 0.0)
-                                        + (time.perf_counter() - _ce))
+                                        + max(0.0, (time.perf_counter() - _ce)
+                                              - _ON_DRAW_MS[0] / 1000.0))
             else:
                 _brk_add("尾", _FRAME_END[0])
+                _FRAME_BRK["尾"] = max(0.0, _FRAME_BRK.get("尾", 0.0)
+                                       - _ON_DRAW_MS[0] / 1000.0)
+            _ON_DRAW_MS[0] = 0.0
             _FRAME_END[0] = 0.0
         _t0 = time.perf_counter()
         try:
@@ -775,6 +786,54 @@ def _swap_wrap():
     flip._probe_wrapped = True
     try:
         _cls.flip = flip
+    except Exception:
+        pass
+
+
+def _ondraw_wrap():
+    """把 `Window.on_draw()`(**画布遍历 + GL 提交**)单独计时, 写进 `_FRAME_BRK["尾·on_draw"]`。
+
+    ⚠️ **为什么非要单独这一刀** —— 原来的「尾·空档」= `Clock.tick` 结束 → `flip` 开始,
+       里面**混着三件事**: Kivy 的 `Clock.tick_draw()`(派发子控件画布)、`Window.on_draw()`
+       (`self.clear()` + `self.render_context.draw()`, 即遍历全部画布指令并逐条发 GL 调用)、
+       以及输入派发。真机上那种「**主线程 15.9ms 而 `_frame` 自算只有 0.07ms**」的慢帧
+       (见 `danzhu/ui/bench.py` 的慢帧归因与老版 `android/jiaojie.md` 方案六), 就卡在
+       这三件的其中一件上 —— **混在一起就没法决策**:
+         · 拆开后 **on_draw 大** ⇒ 是 GL 提交 / 驱动 / 合成器那一侧贵的, **改 Python 没用**;
+         · 拆开后 **空档大而 on_draw 小** ⇒ 是 Kivy 的 Python 画布派发贵的, 该去减控件/指令。
+       老版交接文档对这一步的要求原话: 「定位是否为系统栏、功耗策略或合成器节拍,
+       **而不是猜测游戏代码**」。
+
+    ⚠️ 三条与 `_swap_wrap` 相同的规矩:
+       ① 包的是 **`type(Window).on_draw`**(类上的), 不是实例属性;
+       ② 埋点**绝不能让主循环抛** —— 全程 try/except;
+       ③ **必须由启动路径调一次**(`app.py`, 挨着 `_swap_wrap()`)。漏了是**静默**的:
+          那一格恒为 0, 看着像"on_draw 根本不花时间"。
+    ⚠️ 只有 `_TEXUPD_ACTIVE`(采样期)才记 —— 平时 `_FRAME_BRK` 没人读, 记了白记。
+    """
+    try:
+        from kivy.core.window import Window
+    except Exception:
+        return
+    _cls = type(Window)
+    _orig = getattr(_cls, "on_draw", None)
+    if _orig is None or getattr(_orig, "_probe_wrapped", False):
+        return
+
+    def on_draw(self, *a, **k):
+        if not _TEXUPD_ACTIVE[0]:
+            return _orig(self, *a, **k)
+        _t0 = time.perf_counter()
+        try:
+            return _orig(self, *a, **k)
+        finally:
+            _ON_DRAW_MS[0] = (time.perf_counter() - _t0) * 1000.0
+            _brk_add("尾·on_draw", _t0)
+
+    on_draw._probe_wrapped = True
+    on_draw.__name__ = "on_draw"
+    try:
+        _cls.on_draw = on_draw
     except Exception:
         pass
 
