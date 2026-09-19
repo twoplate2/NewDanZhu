@@ -1259,9 +1259,11 @@ def main():
               "核数(%d)取自**分组里数出来的**那个, 不是 `os.cpu_count()` —— "
               "两者不等时(核 offline)会和 1+3+4 那个 shape 自相矛盾" % _n_want,
               repr(_plain.split("\n")[0]))
-        check("可跑核" in _got and "4-7" in _got,
-              "锁核状态按 `os.sched_getaffinity` 印**可跑核**(per-thread; 文案不许写成「已锁核」)",
-              repr(_got.split("\n")[-1]) if _got else repr(_got))
+        check("可跑核" in _got and "4-7" in _got and "可跑核" in _got.split("\n")[0],
+              "锁核状态按 `os.sched_getaffinity` 印**可跑核**(per-thread; 文案不许写成「已锁核」), "
+              "且**并进第一行**(玩家 2026-09-19 定:「放在 CPU:X核 x+Y 后面, 多个空格即可」—— "
+              "它和「几个核」是同一件事的两面, 单独占一行白吃一块高度)",
+              repr(_got.split("\n")[0]) if _got else repr(_got))
         BC._read_int_file = lambda _p: None
         check(BC._live_cpu_freq_line() == "",
               "阴性对照: 簇结构读到了、但**当前频率一个都读不到** ⇒ 仍返回空串(不印半张表充数)")

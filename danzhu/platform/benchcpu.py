@@ -895,12 +895,11 @@ def _live_cpu_freq_line():
     ⚠️ **这是新版独有的功能(老版没有)** —— 2026-09-19 用户要求, 见 `changelog/2026-09-19.md`
        第 23 条。产品行为超出 1:1 的**唯一**一处, 老版那半边仍守逐位一致。
 
-    形态(每簇一行, 核号范围 + 上限 + 当前):
-        CPU：8 核　1+3+4
+    形态(每簇一行, 核号范围 + 上限 + 当前;**可跑核并进第一行**):
+        CPU：8 核　1+3+4　　可跑核 0-7
         　核 7　　3187M　当前 1804M
         　核 4-6　2745M　当前 2400M
         　核 0-3　2016M　当前 2800M
-        　可跑核　0-7
 
     ⚠️ 分组**复用 `audio.backend._cpu_groups()`**(它已经按 `cpuinfo_max_freq` 分好簇) ——
        本工程明令"不新写一份, 两处各写一份必然漂移"。函数体内 import 是为了守住模块头那条
@@ -926,21 +925,13 @@ def _live_cpu_freq_line():
         #    (印出"8 核　1+3+4"但加起来只有 9 个以外的数)。
         _n = sum(len(_v) for _k, _v in _grp)
         _shape = "+".join(str(len(_v)) for _k, _v in _grp)
-        _lines = ["CPU：[color=%s]%d[/color] 核　%s" % (_GOLD_MK, _n, _shape)]
-        _any = False
-        for _k, _v in _grp:
-            _base = "/sys/devices/system/cpu/cpu%d/cpufreq/" % _v[0]
-            _cur = _read_int_file(_base + "scaling_cur_freq")
-            # 核号用**范围**而不是逐个列: 「核 4-6」比「核 4 5 6」短, 也不猜"大核/中核"那种语义。
-            _rng = ("%d" % _v[0]) if len(_v) == 1 else ("%d-%d" % (min(_v), max(_v)))
-            if _cur:
-                _any = True
-                _lines.append("　核 %s　%dM　当前 [color=%s]%d[/color]M"
-                              % (_rng, int(_k) // 1000, _GOLD_MK, _cur // 1000))
-            else:
-                _lines.append("　核 %s　%dM" % (_rng, int(_k) // 1000))
-        if not _any:
-            return ""                                # 一个当前频率都没有 ⇒ 不印半张表充数
+        # ⚠️ **可跑核并进第一行**(玩家 2026-09-19 定:「放在 CPU:X核 x+Y 后面, 多个空格即可」)。
+        #    它和「几个核」是同一件事的两面, 单独占一行白吃一块高度。
+        #    ⚠️ 分隔用**全角空格**、不用 ASCII 空格: 夹在汉字/全角括号之间时 ASCII 空格太窄,
+        #       会挤成「1+3+4可跑核」; 本行其它分隔(`核　%s`)也都是全角。
+        #    ⚠️ 折行**不会裁切**: `_mk_lbl` 自动撑高, 且开窗后 `_popup_fit_content` 按**真实
+        #       排版**重算弹窗高度 —— 窄屏(等效 360 / 系统字体 1.3 倍)上这行折成两句是允许的。
+        _aff = ""
         try:
             _a = sorted(os.sched_getaffinity(0))
         except Exception:
@@ -955,7 +946,22 @@ def _live_cpu_freq_line():
                     _segs.append(str(_s) if _s == _e else "%d-%d" % (_s, _e))
                     _s = _e = _x
             _segs.append(str(_s) if _s == _e else "%d-%d" % (_s, _e))
-            _lines.append("　可跑核　[color=%s]%s[/color]" % (_GOLD_MK, ",".join(_segs)))
+            _aff = "　　可跑核 [color=%s]%s[/color]" % (_GOLD_MK, ",".join(_segs))
+        _lines = ["CPU：[color=%s]%d[/color] 核　%s%s" % (_GOLD_MK, _n, _shape, _aff)]
+        _any = False
+        for _k, _v in _grp:
+            _base = "/sys/devices/system/cpu/cpu%d/cpufreq/" % _v[0]
+            _cur = _read_int_file(_base + "scaling_cur_freq")
+            # 核号用**范围**而不是逐个列: 「核 4-6」比「核 4 5 6」短, 也不猜"大核/中核"那种语义。
+            _rng = ("%d" % _v[0]) if len(_v) == 1 else ("%d-%d" % (min(_v), max(_v)))
+            if _cur:
+                _any = True
+                _lines.append("　核 %s　%dM　当前 [color=%s]%d[/color]M"
+                              % (_rng, int(_k) // 1000, _GOLD_MK, _cur // 1000))
+            else:
+                _lines.append("　核 %s　%dM" % (_rng, int(_k) // 1000))
+        if not _any:
+            return ""                                # 一个当前频率都没有 ⇒ 不印半张表充数
         return "\n".join(_lines)
     except Exception:
         return ""
