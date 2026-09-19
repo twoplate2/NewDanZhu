@@ -1,0 +1,25 @@
+# ⚠️⚠️ **这个文件不是可选的** —— 本工程靠 sha256 / 逐字节对账（`_mksum.py`、`trace_parity`、
+#    `tests/golden/*.json`），换行符一旦被 git 悄悄转换，哈希就变、对账就红 —— 而且是
+#    "在我机器上好好的"那种红。加它之前本仓库没有任何属性声明，行为取决于
+#    每个人的 `core.autocrlf`（本机是 `true`，来自系统级 gitconfig）。
+#    ⇒ 老版 `android/` 也没有这个文件；它没出事只是因为**老版没有字节级对账**。
+#
+# 规矩：**进仓库的一律 LF，工作区也一律 LF**（= 两边完全一致，没有"转换"这回事）。
+* text=auto eol=lf
+
+# 下面这些明确标 binary：绝不参与行尾转换。少标一个就可能**损坏资源文件**。
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.wav   binary
+*.mp3   binary
+*.ogg   binary
+*.otf   binary
+*.ttf   binary
+*.apk   binary
+*.jar   binary
+*.zip   binary
+*.pyc   binary
+*.so    binary
