@@ -41,7 +41,10 @@ source.include_patterns = fonts/*.otf,voice/*.wav,assets/*.png
 #    下面那行显式钉死 —— **别删, 也别改成跟 version 联动的写法**: 版本号字符串退回去而
 #    versionCode 跟着退, Android 会**拒绝安装**(INSTALL_FAILED_VERSION_DOWNGRADE),
 #    玩家得先卸载 ⇒ 攒的历史(球数 / 性能测试历史)一起清掉。
-version = 0.8.71
+# ⚠️ **每次提交都要 +1**（玩家 2026-09-19 定的规矩）—— 一次提交一个号，不跳号、不连跳。
+#    上面这段"versionCode 不许联动"说的是 **android.numeric_version 不许动**，
+#    跟这里的字符串递增是两码事：version 纯显示，随便加。
+version = 0.8.73
 android.numeric_version = 1000000
 
 requirements = python3,kivy==2.3.0,pyjnius
