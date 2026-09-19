@@ -1,6 +1,7 @@
 DIFF       __init__                           b64dc79ade
 ONLY_NEW   __repr__                           6a1ac130d3
 ONLY_NEW   _act                               f2bf268e8f
+ONLY_NEW   _activity_cls                      e5ec85a8ee
 DIFF       _add_rtp_button                    ada4baed7e
 DIFF       _app_version                       1a7b438eee
 DIFF       _apply_fps_cap                     d66fb8c770
@@ -65,6 +66,7 @@ DIFF       _refresh_mute_btn                  2649213c40
 DIFF       _refresh_stats                     1b878b9294
 DIFF       _remove_rtp_button                 691013b211
 DIFF       _reopen_curve                      139aca3166
+DIFF       _request_android_high_hz           72496a3b15
 DIFF       _restyle_buttons                   c143c01a3a
 DIFF       _reveal_win                        0a385d7ac5
 ONLY_OLD   _rtp_is_hidden                     df5eb2d6b2
@@ -72,6 +74,7 @@ DIFF       _run_hp_test                       bfe6115fbc
 DIFF       _save_config                       72608d36b3
 DIFF       _save_history                      a81f104454
 ONLY_NEW   _schedule                          2d445f323a
+DIFF       _screen_hz                         0afe9c1146
 DIFF       _set_controls_enabled              b46755aa05
 ONLY_OLD   _set_fps_cap_setting               e6619c1b68
 ONLY_OLD   _set_game_status                   4ca8703f76

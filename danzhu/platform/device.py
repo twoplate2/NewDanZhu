@@ -33,6 +33,14 @@ except Exception:
 # ⚠️ 拿不到(桌面 / 被 SELinux 挡住)一律当"读不到": 日志里那一段**不印**, 不印一行 0 假装量到了。
 _CPUFRQ = {"freqs": [], "cap": 0.0, "stop": True, "thr": None}
 
+# `PythonActivity` 的**类对象**缓存 —— 见 `_activity_cls()`。
+# ⚠️ 存在的唯一理由: `autoclass()` 每次调用都走一趟 JNI `FindClass`, 而本工程**实测它是
+#    毫秒级的**(老版 `android/temp/adv_out.md` C7)。它热的路径 `_bench_hz_tick` →
+#    `_screen_hz()` 在采样窗口里每 0.5 秒调一次 ⇒ 25 秒约 50 次**主线程**卡顿。
+#    缓存类对象把那 50 次查表砍掉, 只留 `getRefreshRate()` 那一下。
+# ⚠️ **只缓存类, 不缓存 `mActivity`**: activity 重建后旧引用会失效, 那个必须每次现取。
+_ACT_CLS = [None]
+
 
 def _cpufreq_cores():
     """逐核当前频率 `[(核号, MHz请求值, MHz实际值), ...]`, 只列**读得到**的核。
@@ -149,17 +157,47 @@ def _android_system_fps_cap(activity):
         return 0.0
 
 
+def _activity_cls():
+    """缓存 `PythonActivity` 的**类对象**(不是 activity 本身)。拿不到返回 None。
+
+    ⚠️⚠️ **为什么必须缓存**: `autoclass()` 每次调用都要走一趟 JNI `FindClass`, 本工程
+       **实测过它是毫秒级的** —— 老版对抗审查的原话:
+         「简报引的 `ui_worst 3.8~7.1ms` 不能当 `setSystemUiVisibility` 的代价:
+           **计时块里含两次 `autoclass(...)`, 那才是毫秒级的东西** —— 探针在测自己的查表开销。」
+       (`android/temp/adv_out.md` C7; `autoclass` 内部**没有**对本工程可依赖的缓存。)
+    ⚠️ 它热的路径是**采样窗口内每 0.5 秒一次**(`_bench_hz_tick` → `_screen_hz`): 25 秒的
+       窗口 ≈ **50 次**。这正是"方向守卫/沉浸重申每 0.7 秒一记"那条被搬走之前的形状 ——
+       那两条当时就是「**周期性停顿里唯一的常驻项**」。⇒ 把每次 ms 级的查表砍掉,
+       只留 `getRefreshRate()` 那一下(廉价), 是这一刀的全部目的。
+    ⚠️ 只缓存**类对象**: `mActivity` 必须每次现取(进程重建 / activity 重建后旧引用会失效)。
+    """
+    c = _ACT_CLS[0]
+    if c is not None:
+        return c
+    try:
+        from jnius import autoclass
+        c = autoclass("org.kivy.android.PythonActivity")
+        _ACT_CLS[0] = c
+    except Exception:
+        return None
+    return c
+
+
 def _screen_hz():
     """当前屏幕刷新率(Hz)。拿不到返回 None。
 
     ⚠️ `getRefreshRate()` 给的是**当前模式**的刷新率, 会随智能刷新率/外接屏变 ——
        所以切回前台时会再算一次(见 `_apply_fps_cap` 的调用点)。
+    ⚠️ `autoclass` 走 `_activity_cls()` 的**缓存**(毫秒级查表, 见那里的说明) ——
+       这一句省下来的正是采样窗口里那约 50 次主线程卡顿。
     """
     if platform != "android":
         return None
     try:
-        from jnius import autoclass
-        act = autoclass("org.kivy.android.PythonActivity").mActivity
+        _c = _activity_cls()
+        if _c is None:
+            return None
+        act = _c.mActivity
         disp = act.getWindowManager().getDefaultDisplay()
         try:
             return float(disp.getMode().getRefreshRate())     # API 23+
@@ -180,7 +218,13 @@ def _request_android_high_hz():
         return (0.0, float(min(FPS_CAP_PC, _fps_user_cap())))
     try:
         from jnius import autoclass
-        activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        # ⚠️ 走 `_activity_cls()` 的缓存 —— 与 `_screen_hz` 同一个理由(autoclass 是毫秒级)。
+        #    本函数在**生命周期切换**时被调(`_apply_fps_cap`: 回前台 / 弹窗关闭 / 切上限),
+        #    而那些时刻正落在采样窗口里。
+        _ac = _activity_cls()
+        if _ac is None:
+            return (0.0, float(_fps_user_cap()))
+        activity = _ac.mActivity
         window = activity.getWindow()
         display = window.getWindowManager().getDefaultDisplay()
         current = display.getMode()
