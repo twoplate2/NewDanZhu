@@ -87,7 +87,9 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
-          name: plinko-apk
+          # ⚠️ 2026-09-19 跟着 `package.name` 一起从 `plinko-apk` 改成 `tiao-apk` ——
+          #    应用 ID 已经是 `org.danzhu.tiao`, 这里再叫 plinko 会让人以为下错了包。
+          name: tiao-apk
           path: bin/*.apk
           if-no-files-found: error
           retention-days: 30

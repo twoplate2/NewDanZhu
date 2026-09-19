@@ -16,7 +16,17 @@
 [app]
 
 title = 跳跳的弹珠机
-package.name = plinko
+# ⚠️ 2026-09-19: `plinko` → `tiao`, 目的是**与老版 APK 共存**（用户要求 `org.danzhu.tiao`）。
+#    老版是 `org.danzhu.plinko`, 新版若沿用同名, 安卓会当成**同一个应用**:
+#    包名相同 + versionCode 相同 + **签名不同**(两台机器各自的 debug 证书, 互不兼容)
+#    ⇒ 装新版报签名冲突, 只能先卸载老版 —— 而卸载 = **存档全清**(余额/轮次/跑分历史)。
+#    改成 `org.danzhu.tiao` 之后两者是**独立应用**: 可同时装, 存档各存各的
+#    (全部走 `user_data_dir` = `/data/data/<包名>/files`; 诊断日志那条降级链的第②③级
+#     也含包名, 只有第①级公共 Download 是共享的, 而它带时间戳不会撞)。
+#    ⚠️ `java/com/plinko/SoundGate.java` **不受影响** —— 它的 `package com.plinko;` 是
+#       独立的 Java 包名, 与这个应用 ID 无关, 而且它没引用 p4a 生成的 PythonActivity。
+#    ⚠️ 代价: 新版**看不到老版的存档**(这正是共存的意义); 老版那份原样留着。
+package.name = tiao
 package.domain = org.danzhu
 
 source.dir = .
