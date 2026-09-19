@@ -3419,11 +3419,56 @@ class BenchMixin(object):
         _adv = [float(_r[10]) if len(_r) > 10 else 0.0 for _r in _fr] if _fr else []
         if len(_adv) != len(gaps):
             _adv = [0.0] * len(gaps)
+        # ---- 「差额律」三列(2026-09-20) ----
+        # 病根: 真机 14 条慢帧里有 **8 条对不平** —— `dt − 主线程 − 等屏幕` 差出稳定的
+        # 4.1~5.5ms, 而这笔账**一直没进过仪表**(上一轮是拿纸笔在
+        # `android/temp/_real_dev_slow.txt` 上手算出来的, 手算完才发现是什么)。
+        # 手算结论: `差_i + (主线程+等屏幕)_{i−1} ≈ 常数`, 而 Kivy `clock.py::_check_ready`
+        # 的睡眠律给出这个常数 = `1/cap − (4/5)·res = (11/15)/cap`
+        # (`res = Clock.get_resolution() = 1/(3·cap)`)。
+        # ⇒ 那一大块缺口**很可能就是 Kivy 自己按公式睡掉的**, 不是未知开销。
+        # ⇒ 这三列就是用来**判死/判活**这条律的(判据写在下面那条 `★差额律` 里):
+        #     ① `差`            = dt − 主线程 − 等屏幕
+        #     ② `上一帧body`     = (主线程 + 等屏幕)_{i−1}  ← 用来验 ①+② ≈ T
+        #     ③ `别的线程CPU`    = 全进程 CPU − 本线程 CPU  ← **独立**的第二假说(GIL 争用):
+        #        大 ⇒ 后台 Python 线程在抢 GIL; ≈0 ⇒ 那条假说当场出局。
+        # ⚠️ 三列都是**已有采样的算术**, 不新增任何逐帧开销。
+        _pc_ms = [float(_r[2]) if len(_r) > 2 else 0.0 for _r in _fr] if _fr else []
+        if len(_pc_ms) != len(gaps):
+            _pc_ms = [0.0] * len(gaps)
+        _body = [_thr_ms[_i] + _adv[_i] for _i in range(len(gaps))]
+        _gap_ms = [gaps[_i] - _body[_i] for _i in range(len(gaps))]
+        _othr = [_pc_ms[_i] - _thr_ms[_i] for _i in range(len(gaps))]
+        _prev_body = [_body[_i - 1] if _i else 0.0 for _i in range(len(gaps))]
+        try:
+            _cap = float(getattr(Clock, "_max_fps", 0.0) or 0.0)
+        except Exception:
+            _cap = 0.0
+        _T_ms = ((11.0 / 15.0) / _cap * 1000.0) if _cap > 0 else 0.0
+        if _T_ms > 0 and len(gaps) >= 8:
+            _pair = sorted(_gap_ms[_i] + _body[_i - 1] for _i in range(1, len(gaps)))
+            _pm = _pair[len(_pair) // 2]
+            _lines.append("# ★差额律: Kivy上限 %.1f ⇒ 睡眠常数 T=(11/15)/cap = %.3f 毫秒 · "
+                          "实测「差_i + 上一帧body」中位 %.3f 毫秒(样本 %d)"
+                          % (_cap, _T_ms, _pm, len(_pair)))
+            _lines.append("#   ← 两者接近 ⇒ 那笔 4~5 毫秒的缺口就是 **Kivy 主动睡掉的**"
+                          "(不是未知开销, 改 Python 没用); 明显不接近 ⇒ 缺口另有其人, "
+                          "去看「别的线程CPU」与「等屏幕」两列")
+        if gaps:
+            _oth = sorted(_othr)
+            _lines.append("# 别的线程烧的 CPU(全进程 − 本线程, 逐帧): 中位 %.2f · 最大 %.2f 毫秒"
+                          "  ← 明显 >0 ⇒ 后台 Python 线程在抢 GIL(发声 drain / 烘焙 / "
+                          "主频采样 / 落盘); ≈0 ⇒ 这条假说出局"
+                          % (_oth[len(_oth) // 2], _oth[-1]))
+        # ⚠️ 新列**只能加在末尾**: 前面几列的位置被 `_bench_frames` 的下标和外部脚本按号取,
+        #    插在中间会让旧解析器静默错位(比报错更难发现)。
         _lines.append("# 每行: 帧间隔毫秒,阶段,文字重建,_frame自算ms,主线程ms,发声,震动,最大子步骤,"
-                      "等屏幕ms")
-        _lines.extend("%.2f,%s,%d,%.2f,%.2f,%d,%d,%s,%.2f" % (g, t, x, s, m, sn, vb, b, w)
-                      for g, t, x, s, m, sn, vb, b, w
-                      in zip(gaps, tags, tex, _self_ms, _thr_ms, _snd_n, _vib_n, _top1, _adv))
+                      "等屏幕ms,差ms,上一帧body_ms,别的线程CPUms")
+        _lines.extend("%.2f,%s,%d,%.2f,%.2f,%d,%d,%s,%.2f,%.2f,%.2f,%.2f"
+                      % (g, t, x, s, m, sn, vb, b, w, gp, pb, ot)
+                      for g, t, x, s, m, sn, vb, b, w, gp, pb, ot
+                      in zip(gaps, tags, tex, _self_ms, _thr_ms, _snd_n, _vib_n, _top1, _adv,
+                             _gap_ms, _prev_body, _othr))
         return "\n".join(_lines) + "\n"
 
     def _copy_bench_log(self, btn=None):
