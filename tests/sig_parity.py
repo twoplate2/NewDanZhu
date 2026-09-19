@@ -153,12 +153,14 @@ def main():
     got = _diff()
     if "--freeze" in sys.argv:
         os.makedirs(os.path.dirname(GOLDEN), exist_ok=True)
-        io.open(GOLDEN, "w", encoding="utf-8").write("\n".join(got) + "\n")
+        # ⚠️ `newline="\n"` 不能省 —— 同 `ast_parity.py:401` 那条注释:
+        #    Windows text mode 会把 `\n` 写成 `\r\n`, 与 `.gitattributes` 的 `eol=lf` 打架。
+        io.open(GOLDEN, "w", encoding="utf-8", newline="\n").write("\n".join(got) + "\n")
         print("已采基线: %s（%d 条）" % (GOLDEN, len(got)))
         for l in got:
             print("   " + l)
         _cf = _const_diff_lines()
-        io.open(GOLDEN_C, "w", encoding="utf-8").write("\n".join(_cf) + "\n")
+        io.open(GOLDEN_C, "w", encoding="utf-8", newline="\n").write("\n".join(_cf) + "\n")
         print("已采常量基线: %s（%d 条）" % (GOLDEN_C, len(_cf)))
         for l in _cf:
             print("   " + l)

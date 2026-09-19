@@ -76,6 +76,7 @@ from danzhu.audio import backend as BACKEND                          # noqa: E40
 from danzhu.audio import bus as BUS                                  # noqa: E402
 from danzhu import config as CFG                                     # noqa: E402
 from danzhu.fx import pile                                           # noqa: E402
+from danzhu.platform import benchcpu as BC                           # noqa: E402
 from danzhu.platform import device as DEV                            # noqa: E402
 from danzhu.ui import bench as BENCH                                 # noqa: E402
 from danzhu.ui import game_area as GAREA                             # noqa: E402
@@ -1225,6 +1226,72 @@ def main():
           "时刻是 24 小时制(%H, 不是 %I): 23:05 要显示 23:05, 午夜要显示 00:05",
           "23:05 -> %s / 00:05 -> %s" % (time.strftime(DEV.BUILD_TIME_FMT, _mid),
                                          time.strftime(DEV.BUILD_TIME_FMT, _midn)))
+
+    # ---- 13b. 「游戏信息」面板的两条实时行(温度/功率 + **CPU 频率**) ----
+    # ⚠️ **CPU 频率那一块是新版独有的, 老版完全没有** —— 见 `changelog/2026-09-19.md` 第 23 条。
+    #    ⇒ 这一组**不与老版 FAIL 集合对账**(老版没有可比的东西), 它钉的是**新版自己**的纪律。
+    # ⚠️ 判据分两层: **运行期**(真的调一次, 看降级与排版) + **静态**(去注释后 grep, 防注释喂绿)。
+    _keep_g = BACKEND._cpu_groups
+    _keep_r = BC._read_int_file
+    _keep_a = getattr(os, "sched_getaffinity", None)
+    # 一台典型的 1+3+4(降序: 最高频簇在前, 与 `_cpu_groups` 的 `sorted(reverse=True)` 一致)
+    _FAKE_GRP = [(3187000, [7]), (2745000, [4, 5, 6]), (2016000, [0, 1, 2, 3])]
+    try:
+        BACKEND._cpu_groups = lambda: []
+        check(BC._live_cpu_freq_line() == "",
+              "阴性对照: 没有 cpufreq(PC / 权限 / 核离线) ⇒ `_live_cpu_freq_line()` 返回**空串** —— "
+              "调用方据此整块不出现, **绝不印一排 0 假装量到了**")
+        BACKEND._cpu_groups = lambda: _FAKE_GRP
+        # ⚠️ 路径里 `cpu` 出现**三次**(`/cpu/`、`cpuN`、`cpufreq`) ⇒ 只能正则取核号, 不能 split。
+        BC._read_int_file = lambda _p: {7: 1804000, 4: 2400000, 0: 2800000}.get(
+            int(re.search(r"/cpu(\d+)/", _p).group(1)))
+        os.sched_getaffinity = lambda _m: set((4, 5, 6, 7))
+        _got = BC._live_cpu_freq_line()
+        check("1+3+4" in _got and "核 4-6" in _got and "核 0-3" in _got,
+              "有 cpufreq ⇒ 印**簇结构**(1+3+4) + 每簇**核号范围**与当前频率(核号不逐个列, 用范围)",
+              repr(_got.split("\n")[0]) if _got else repr(_got))
+        # ⚠️ 判据必须**先去 markup**: 输出是 `8[/color] 核`, 裸文本 `"8 核"` 根本不在里面 ——
+        #    我第一版就那么写的, 当场判红。(这正是"写完先跑一遍看它是否真通过"的用处:
+        #    写「期望通过」的判据而不先验, 等于给自己埋一条永远红的闸。)
+        _plain = re.sub(r"\[/?color[^\]]*\]", "", _got)
+        _n_want = sum(len(_v) for _k, _v in _FAKE_GRP)
+        check(("%d 核" % _n_want) in _plain,
+              "核数(%d)取自**分组里数出来的**那个, 不是 `os.cpu_count()` —— "
+              "两者不等时(核 offline)会和 1+3+4 那个 shape 自相矛盾" % _n_want,
+              repr(_plain.split("\n")[0]))
+        check("可跑核" in _got and "4-7" in _got,
+              "锁核状态按 `os.sched_getaffinity` 印**可跑核**(per-thread; 文案不许写成「已锁核」)",
+              repr(_got.split("\n")[-1]) if _got else repr(_got))
+        BC._read_int_file = lambda _p: None
+        check(BC._live_cpu_freq_line() == "",
+              "阴性对照: 簇结构读到了、但**当前频率一个都读不到** ⇒ 仍返回空串(不印半张表充数)")
+    finally:
+        BACKEND._cpu_groups = _keep_g
+        BC._read_int_file = _keep_r
+        if _keep_a is None:
+            try:
+                del os.sched_getaffinity          # Windows 上本来就没有, 别留个假的在那
+            except Exception:
+                pass
+        else:
+            os.sched_getaffinity = _keep_a
+    _bc = _code_only(bench_src)
+    check("Clock.schedule_interval(_tick_live, 0.5)" in _bc,
+          "两条实时行**共用同一个** 0.5 秒 tick(不是各开一个 Clock 事件)")
+    check("_live.text = _t2" in _bc and "_live_cpu.text = _c2" in _bc,
+          "同一个 tick 里**两行都刷** —— 加了行却忘了刷它 = 那一行是死的, 玩家会当它坏了")
+    check("popup.bind(on_dismiss=_stop_live)" in _bc and "Clock.unschedule(_live_ev)" in _bc
+          and "_live is not None or _live_cpu is not None" in _bc,
+          "⚠️ 关窗必须 `unschedule`, 且判据是**两条行任一存在**就挂上 —— 写死 "
+          "`if _live is not None:` 的话, PC 上没有温度行 ⇒ 定时器**永远不摘**(每开一次面板攒一个)")
+    # ⚠️⚠️ 判据**不许**写成 `"_n_extra += 1" in _bc` —— 那样是**空转的**, 阴性对照当场抓到:
+    #     把**第一处**改成 `_n_extra = 1`(第二处仍是 `+= 1`), 裸 `in` 照样为真 ⇒ 照样绿。
+    #     现在钉「初始化 `= 0`」+「累加**至少两处**」+「**一处裸赋值都不许有**」 ——
+    #     加第三行实时行也不用改判据, 而任何一处写死 `= 1` 都会红。
+    check("_n_extra = 0" in _bc and _bc.count("_n_extra += 1") >= 2
+          and "_n_extra = 1" not in _bc,
+          "实时行的高度预算: 初始化 `= 0` 之后**只准 `+= 1` 累加** —— "
+          "写死 `= 1` 时加第二行不会撑高弹窗, 尾巴被裁")
 
     # ---- 14. 装杯落珠的音量 ----
     # 玩家 2026-09-11: "弹珠掉落容器的声音, 音量太小了"。同一个 bounce 波形主游戏给到 1.0

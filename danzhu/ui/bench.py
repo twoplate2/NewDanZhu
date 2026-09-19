@@ -86,9 +86,9 @@ from ..platform.benchcpu import (BENCH_TARGET_LAUNCHES, HP_FREQ_TRIM_SEC, HP_PWR
                                  _SUST_SPEED, _battery_sampler_start, _battery_temp_c,
                                  _bench_pin_fast_cpus, _bench_raise_thread_priority,
                                  _bench_restore_cpu_affinity, _bench_restore_thread_priority,
-                                 _freq_core_stats, _freq_sampler_start, _live_power_temp_line,
-                                 _mad_coef, _thermal_probe, _thermal_status, benchmark_sustained,
-                                 benchmark_trajectories)
+                                 _freq_core_stats, _freq_sampler_start, _live_cpu_freq_line,
+                                 _live_power_temp_line, _mad_coef, _thermal_probe, _thermal_status,
+                                 benchmark_sustained, benchmark_trajectories)
 from ..platform.boot import _BOOT_LOG, _BOOT_T0, _PROBE_COST, _PROBE_TRACE, _boot_log
 from ..platform.device import (BUILD_TIME_FMT, _BENCH_FPS_FORCE, _CFG_STAT, _CPUFRQ, _JNI_STAT,
                                _VIB_STAT, _bench_fps_force_now, _bench_fps_lock_off,
@@ -1091,6 +1091,7 @@ class BenchMixin(object):
         #    **读不到就整行不出现** —— 与 `audio_detail()` 里"不适用的行直接不出现"同一条规矩;
         #    PC 上 `_battery_snapshot()` 恒返回 None ⇒ 自然满足。
         _live = None
+        _n_extra = 0
         try:
             _lt = _live_power_temp_line()
         except Exception:
@@ -1098,9 +1099,22 @@ class BenchMixin(object):
         if _lt:
             _live = _mk_lbl(_lt, 'left', _markup=True)   # 数字是金色的
             content.add_widget(_live)
-            _n_extra = 1
-        else:
-            _n_extra = 0
+            _n_extra += 1
+        # ⚠️ 实时「CPU 频率」块 —— **新版独有**(老版没有), 见 `_live_cpu_freq_line` 与
+        #    `changelog/2026-09-19.md` 第 23 条。与上面那行**共用同一个 0.5 秒定时器**,
+        #    不各开一个: 少一个 Clock 事件, 也让"关窗 unschedule"只有一处。
+        #    ⚠️ 它是**多行** Label(每簇一行), 但 `_n_extra` 只当 1 个控件算 ——
+        #       多出来的高度由开窗后的 `_popup_fit_content` 按真实排版兜住(见 1180 行那段注释)。
+        #    ⚠️ 簇结构是静态的(cpuinfo_max_freq 不变) ⇒ **行数开窗后就固定**, 不会越长越高。
+        _live_cpu = None
+        try:
+            _ct = _live_cpu_freq_line()
+        except Exception:
+            _ct = ""
+        if _ct:
+            _live_cpu = _mk_lbl(_ct, 'left', _markup=True)
+            content.add_widget(_live_cpu)
+            _n_extra += 1
         ok_btn = Button(text='确定', font_size='17sp', bold=True,
                         background_normal='', background_color=hex_rgb(COL_BTN) + (1,),
                         size_hint_y=None, height=dp(52))
@@ -1140,15 +1154,24 @@ class BenchMixin(object):
         popup = self._popup(0.84, need + dp(64), title='', content=content,
                             auto_dismiss=True, separator_height=0)
         # ⚠️ 实时行的定时器: **弹窗一关就必须 unschedule** —— 否则它会一直跑下去
-        #    (每开一次面板再攒一个), 而它每 0.5 秒要 `registerReceiver` 一次。
-        if _live is not None:
+        #    (每开一次面板再攒一个), 而它每 0.5 秒要 `registerReceiver` 一次(还要读 3 个
+        #    sysfs 取 CPU 频率)。两条实时行**共用这一个 tick**, 所以这里只有一处 unschedule。
+        if _live is not None or _live_cpu is not None:
             def _tick_live(_dt):
-                try:
-                    _t2 = _live_power_temp_line()
-                    if _t2:
-                        _live.text = _t2
-                except Exception:
-                    pass
+                if _live is not None:
+                    try:
+                        _t2 = _live_power_temp_line()
+                        if _t2:
+                            _live.text = _t2
+                    except Exception:
+                        pass
+                if _live_cpu is not None:
+                    try:
+                        _c2 = _live_cpu_freq_line()
+                        if _c2:
+                            _live_cpu.text = _c2
+                    except Exception:
+                        pass
             _live_ev = Clock.schedule_interval(_tick_live, 0.5)
 
             def _stop_live(*_a):

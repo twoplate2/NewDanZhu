@@ -398,7 +398,12 @@ def main():
         return 0
     if "--freeze" in sys.argv:
         os.makedirs(os.path.dirname(GOLDEN), exist_ok=True)
-        io.open(GOLDEN, "w", encoding="utf-8").write("\n".join(got) + "\n")
+        # ⚠️⚠️ `newline="\n"` **不能省**: Windows 上 text mode 会把 `\n` 转成 `\r\n`,
+        #     而 `.gitattributes` 规定 `* text=auto eol=lf` ⇒ 下次 checkout 内容就变了。
+        #     实测踩过: 2026-09-19 重采一次基线, 工作区是 161 个 CRLF 而索引是 LF
+        #     (`git status` 当场报 "CRLF will be replaced by LF"), 那一版基线等于埋了个雷。
+        #     `tests/trace.py:1084` 早就写了 `newline="\n"`, 这里是补上。
+        io.open(GOLDEN, "w", encoding="utf-8", newline="\n").write("\n".join(got) + "\n")
         print("已采基线: %s（%d 条）" % (GOLDEN, len(got)))
         for l in got:
             print("   %s" % l)

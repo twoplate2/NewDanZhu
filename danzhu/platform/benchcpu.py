@@ -889,6 +889,78 @@ def _live_power_temp_line():
         return ""
 
 
+def _live_cpu_freq_line():
+    """「启动信息」里那几行实时 CPU 频率 + 可跑核; **读不到就返回空串**(调用方据此整块不出现)。
+
+    ⚠️ **这是新版独有的功能(老版没有)** —— 2026-09-19 用户要求, 见 `changelog/2026-09-19.md`
+       第 23 条。产品行为超出 1:1 的**唯一**一处, 老版那半边仍守逐位一致。
+
+    形态(每簇一行, 核号范围 + 上限 + 当前):
+        CPU：8 核　1+3+4
+        　核 7　　3187M　当前 1804M
+        　核 4-6　2745M　当前 2400M
+        　核 0-3　2016M　当前 2800M
+        　可跑核　0-7
+
+    ⚠️ 分组**复用 `audio.backend._cpu_groups()`**(它已经按 `cpuinfo_max_freq` 分好簇) ——
+       本工程明令"不新写一份, 两处各写一份必然漂移"。函数体内 import 是为了守住模块头那条
+       「平台层 import 期不许拖别的子系统」的规矩。
+    ⚠️ 每簇只读**一个代表核**的 `scaling_cur_freq`(8 核 3 簇 ⇒ 3 次 open, 不是 32 次) ——
+       这一行每 0.5 秒跑一次, 是**上屏**路径, 不是跑分那条可以慢慢来的路径。
+    ⚠️ 「当前」读的是 `scaling_cur_freq`(**调频器请求值**)。这里**故意不读**
+       `cpuinfo_cur_freq`(硬件实际值): 后者很多内核根本不实现(`device.py:42-43` 记着这条),
+       而这一行要的是**每簇一个数**的实时观感, 不是跑分要的那种精确归因。真要实际值看跑分历史。
+    ⚠️ 全部簇的当前值都读不到 ⇒ 返回空串(整块不出现), 与温度行同一条规矩: **绝不编数**。
+    ⚠️ `os.sched_getaffinity(0)` 是 **per-thread** 的: 面板主线程读到的是**主线程**的亲和性。
+       锁核只发生在跑分 / CPU 高压测试期间(`_bench_pin_fast_cpus`), **游戏主循环本身不锁**。
+       ⇒ 文案写「可跑核」而不是「已锁核」, 免得让人以为平时锁着。
+    """
+    try:
+        from ..audio.backend import _cpu_groups      # 函数体内 import: 见模块头那条规矩
+        _grp = _cpu_groups()
+        if not _grp:
+            return ""                                # PC / 权限 / 无 cpufreq ⇒ 整块不出现
+        # ⚠️ 核数用**分组里数出来的**那个, 不用 `os.cpu_count()` —— 后者是**逻辑核数**,
+        #    而 `_cpu_groups()` 只统计"有 cpufreq 节点可读"的核。两者不等时(核 offline /
+        #    部分核没注册调频节点)`os.cpu_count()` 会和后面 `1+3+4` 那个 shape **自相矛盾**
+        #    (印出"8 核　1+3+4"但加起来只有 9 个以外的数)。
+        _n = sum(len(_v) for _k, _v in _grp)
+        _shape = "+".join(str(len(_v)) for _k, _v in _grp)
+        _lines = ["CPU：[color=%s]%d[/color] 核　%s" % (_GOLD_MK, _n, _shape)]
+        _any = False
+        for _k, _v in _grp:
+            _base = "/sys/devices/system/cpu/cpu%d/cpufreq/" % _v[0]
+            _cur = _read_int_file(_base + "scaling_cur_freq")
+            # 核号用**范围**而不是逐个列: 「核 4-6」比「核 4 5 6」短, 也不猜"大核/中核"那种语义。
+            _rng = ("%d" % _v[0]) if len(_v) == 1 else ("%d-%d" % (min(_v), max(_v)))
+            if _cur:
+                _any = True
+                _lines.append("　核 %s　%dM　当前 [color=%s]%d[/color]M"
+                              % (_rng, int(_k) // 1000, _GOLD_MK, _cur // 1000))
+            else:
+                _lines.append("　核 %s　%dM" % (_rng, int(_k) // 1000))
+        if not _any:
+            return ""                                # 一个当前频率都没有 ⇒ 不印半张表充数
+        try:
+            _a = sorted(os.sched_getaffinity(0))
+        except Exception:
+            _a = []
+        if _a:
+            _segs = []
+            _s = _e = _a[0]
+            for _x in _a[1:]:
+                if _x == _e + 1:
+                    _e = _x
+                else:
+                    _segs.append(str(_s) if _s == _e else "%d-%d" % (_s, _e))
+                    _s = _e = _x
+            _segs.append(str(_s) if _s == _e else "%d-%d" % (_s, _e))
+            _lines.append("　可跑核　[color=%s]%s[/color]" % (_GOLD_MK, ",".join(_segs)))
+        return "\n".join(_lines)
+    except Exception:
+        return ""
+
+
 def _pwr_sysfs_paths():
     """枚举 `/sys/class/power_supply/*/current_now` 候选路径(读不到就是空表)。"""
     _out = []
