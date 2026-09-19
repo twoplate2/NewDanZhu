@@ -1,0 +1,712 @@
+{
+ "subsystem": "中奖玻璃杯装球演出 (WinPileFX + pile3d 球堆数学 + HUD/板面双压暗)",
+ "features": [
+  {
+   "id": "cup-geom",
+   "name": "玻璃杯矩形(底缘锚定)",
+   "kind": "player-visible",
+   "behavior": "杯子在 520x660 逻辑画布里的矩形由 CUP_W 决定宽度、按资产 800x460 同比算高,水平居中,底边钉在 CUP_BOTTOM(只往上长)。CUP_L 是负数 ⇒ 杯子矩形比游戏区矩形左右各宽 12.5 逻辑px,今天不穿帮只是因为玻璃 PNG 非透明内容只到 design x 24.00..775.50(留 3.85px 余量)。",
+   "trigger": "模块导入即算;每帧 _sync_geom 换算到屏幕",
+   "source": "8253-8266 (CUP_W/CUP_H/CUP_L/CUP_BOTTOM/CUP_T), 8973-8990 (_sync_geom)",
+   "params": "CUP_W=545.0, CUP_H=545*460/800=313.375, CUP_L=520/2-545/2=-12.5, CUP_BOTTOM=578.0, CUP_T=578-313.375=264.625, DESIGN_W=800, DESIGN_H=460, CW=520, CH=660, VISIBLE_TOP=-460*CUP_T/CUP_H=-388.44"
+  },
+  {
+   "id": "enter-exit-geom",
+   "name": "进场/退场位移与缩放(临时矩形)",
+   "kind": "player-visible",
+   "behavior": "动画只写 _abx/_aby/_abw/_abh 四个临时字段,_bx/_by/_bw/_bh 是基准绝不写回(写回会和绑在 size/pos 上的 _sync_geom 打架)。缩放必须 bw/bh 同比(否则球变椭圆或从杯口冒出去);位移单位是 520x660 逻辑px,要乘 _s。位移只能朝上(杯底 578 离槽区隔板顶 606 只有 28px 余量,往下压住倍率槽)。",
+   "trigger": "_redraw 每帧调 _apply_anim_rect(k, dy)",
+   "source": "8992-9007 (_apply_anim_rect), 8332-8366 (常量), 9009-9013 (_map)",
+   "params": "ENTER_RISE=56.0 逻辑px, ENTER_SCALE=0.92, EXIT_LIFT=52.0, EXIT_SCALE=0.90, CUP_BOTTOM=578, SLOT_TOP-10=606"
+  },
+  {
+   "id": "glass-layers",
+   "name": "玻璃分层贴图 back/front/over + 两级回退",
+   "kind": "platform-glue",
+   "behavior": "三层: glass_tumbler_back.png(后层,压暗前) / glass_tumbler_front.png(前层,球之后) / glass_tumbler_over.png(远侧环独立层,压暗之后原样画、不许再乘整体 alpha)。分层图缺失 → 退回整图 glass_tumbler.png 当**后层**用(print CUP-TEX FALLBACK);再失败 → (None,None,None) + print CUP-TEX MISSING,画面变成『没有杯子的一团弹珠』但不崩。over 缺失 → 静默 None,杯口环改走补画。",
+   "trigger": "首次 _redraw 时 _glass_textures()/_glass_over();prebake_step 启动期预热",
+   "source": "8693-8720 (_glass_textures), 8665-8690 (_glass_over), 8244 (_CoreImage 导入)",
+   "params": "assets/glass_tumbler_{back,front,over}.png, 两 filter 均 linear, _GLASS_TEX/_GLASS_OVER 模块级缓存"
+  },
+  {
+   "id": "ball-texture",
+   "name": "投注色弹珠贴图(纯 Python 逐像素合成)",
+   "kind": "player-visible",
+   "behavior": "球身颜色由投注档决定;未知档回退**金球**配色(不 KeyError)。径向 9 段色标 + 边缘暗环收窄 + 猫眼斜带(角 -32°,偏移 0.08d,宽 0.085d) + 3% 边缘羽化。贴图边长 256(1900p 设备上球屏幕直径 250px,256 才 1.02 texel/px)。",
+   "trigger": "首次用该档时合成,由 prebake_step 分帧预烘(当前档排最前)",
+   "source": "8456-8475 (常量), 8577-8663 (_ball_texture), 8574-8575 (_mix_rgb)",
+   "params": "_CUP_BALL_TEX_PX=256, _BALL_RIM_K=0.74, _BALL_BAND_W=0.66, _BALL_BAND_S=0.76, _BALL_BAND_SPAN=0.92, 羽化带=3% 半径, band 角=-32.0°, off=0.08*d, band_w=0.085*d"
+  },
+  {
+   "id": "bet-colors",
+   "name": "投注档 → 球色映射",
+   "kind": "player-visible",
+   "behavior": "1=绿 #39c98a / 10=蓝 #4da8ff / 50=红 #e0533b / 100=紫 #a335ee。play_win 里 `self._value = bet if bet in BET_COLORS else DEFAULT_BET` —— 不在表里的投注按 10(蓝)走。",
+   "trigger": "play_win(multiplier, bet)",
+   "source": "8246-8251, 9095",
+   "params": "BET_COLORS={1:'#39c98a',10:'#4da8ff',50:'#e0533b',100:'#a335ee'}, DEFAULT_BET=10"
+  },
+  {
+   "id": "halfwidth",
+   "name": "杯内壁半宽查表(几何真源)",
+   "kind": "silent-invariant",
+   "behavior": "左壁三次贝塞尔 _bez_at(t) 采样 n+1=161 点 → 按离地高度 h 排序的 (h, halfwidth) 表,二分插值,表外钳制。所有球堆约束(可用半径、杯口半宽、抛光钳回)都读它。改 _WALL_BEZ = 球穿杯/悬空/落地断言连环炸。",
+   "trigger": "halfwidth(h) / floor_radius() 首次调用时建表",
+   "source": "7710-7751 (_WALL_BEZ/_bez_at/_build_hw_table/halfwidth/floor_radius)",
+   "params": "_WALL_BEZ=((39.0,80.0),(65.0,262.0),(110.0,404.0)), n=160, FLOOR_Y=404.0, CX=400.0, RIM_Y=80.0 → halfwidth(0)=290.0 (floor_radius), halfwidth(324)=361.0 (杯口半宽, mouth_half 用它)"
+  },
+  {
+   "id": "pilespec",
+   "name": "PileSpec 堆形参数集",
+   "kind": "silent-invariant",
+   "behavior": "十一个字段: count/r(dp→px)/seed/jitter/polish/over_f/wall_f/rot_deg/sites/scatter/quota。over_f 只管 h>RIM_H 的层(杯口以上自由堆收窄成墩);wall_f 只管 h<=RIM_H(略小于 1 会把球挤到杯口之上冒尖,缝宽=壁半宽x(1-wall_f));rot_deg 是刚性绕杯轴旋转(唯一『零容量』自由度,只改相位不改形状);sites 是层间注册序列(唯一改形状不改密度);scatter 只对 count<=_SCATTER_MAX 生效;quota 是每层颗数上限(被卡的球流到上一层,总颗数不变)。",
+   "trigger": "build_pile 的回退路径现场 new;baked 表命中时不构造",
+   "source": "7753-7802",
+   "params": "r_dp 默认 11.5, dp2px=DESIGN_W/430=1.8605, jitter=0.10, polish=30, over_f=1.0, wall_f=1.0, rot_deg=0.0"
+  },
+  {
+   "id": "volume-h",
+   "name": "体积守恒初值 H",
+   "kind": "silent-invariant",
+   "behavior": "N 球体积 / 三角格盘面密度 = 半椭球堆体积 (2/3)πR²H, R=TAPER*H 反解 H;再钳到 [2r, (FLOOR_Y-RIM_Y)*0.78]。只给『土丘』档(count<35)当初值,『一坛子』档直接用 h_cap。",
+   "trigger": "build_pile 里 not wall_mode 时",
+   "source": "7804-7809",
+   "params": "PACK_PHI=0.907, TAPER=1.43, cap=(404-80)*0.78=252.72, 下限 2r"
+  },
+  {
+   "id": "scatter-floor",
+   "name": "小档自由摆放(散开/贴壁/偏心)",
+   "kind": "player-visible",
+   "behavior": "count<=10 的档(x2/x3/x5/x10,占中奖场次约 90%)不走格点:scatter 对 3 取模,1=贴壁一圈/2=偏心一侧/0=随机散开;前 6 个变体按黄金角相位把一圈半径从『间距恰好 2r』单调拉到贴壁,后 6 个随机撒点(400 次拒绝采样保证两两 >=2r)。随机失败或约束不满足返回 None → 悄悄退回格点。",
+   "trigger": "_enumerate 内,count<=_SCATTER_MAX 且 spec.scatter is not None",
+   "source": "7811-7859 (_SCATTER_MAX/_scatter_floor)",
+   "params": "_SCATTER_MAX=10, _NSTEP=6, 相位步进=137.508°, rg 种子=raw*7919+seed*131+n, 半径用 floor_radius()-r-jit(不是 dome 的 a)"
+  },
+  {
+   "id": "enumerate",
+   "name": "确定性格点枚举(一坛子/土丘两模式)",
+   "kind": "silent-invariant",
+   "behavior": "层距 hv=sqrt(8/3)r=1.633r(上一层坐在下层三角谷上),面内 pitch=sqrt(3)*r*k_p,真三角格(奇行错开半格 row_shift);俯视是圆,纳入判据 (x/a)²+(z/b)²<=0.94;格点按 x²+z² **由内而外**排序 ⇒ 圆顶自然收肩。sites 给层间注册位(A/B/C),quota 限本层颗数。壁模式逐层填到 h_cap,土丘模式填到 h>H+0.5r。",
+   "trigger": "build_pile 每次(含缩球重试)",
+   "source": "7861-7967",
+   "params": "k_p=1.02(wall,count>=35)/1.25(dome), jit=(0.09 if wall else spec.jitter)*2r, hv=1.633r, 椭圆阈=0.94, sites 缺省=奇偶交替(1 if k%2 else 0), ox=r*k_p, oz=±0.577*r*k_p, h_cap=RIM_H*0.95+OVERFLOW_MAX=307.8"
+  },
+  {
+   "id": "build-pile",
+   "name": "球堆组装 + 两级兜底 + 硬断言",
+   "kind": "silent-invariant",
+   "behavior": "count==0 → 空堆。wall_mode = count>=35(x50/x100 走『一坛子』)。土丘档装不满就 H*=1.08 最多长 24 次;仍不够就**原地把 spec.r *=0.94** 最多缩 4 次(『颗数=倍率的硬承诺优先于目标粒径』)。最后 assert 颗数严格相等 → _polish 推重叠 → _assert_pile 三条断言(在壁内 / 不沉底 / 3D 球心距 > 2r-slop)。",
+   "trigger": "build_pile(spec);baked 表缺项时由 _pile_projected 回退调用",
+   "source": "7969-8056",
+   "params": "wall 阈值=35, 长高×1.08 上限 24 次, 缩球×0.94 上限 4 次, slop=2.0, 抛光轮数=30, 高度上限 (FLOOR_Y-RIM_Y)*0.78"
+  },
+  {
+   "id": "project-pile",
+   "name": "斜投影 + 按绝对高度的明暗",
+   "kind": "player-visible",
+   "behavior": "(x,h,z) → 屏幕 design px: sx=CX+x, sy=FLOOR_Y-h-K2*z(k1=0 纯纵剪)。明暗 shade=1-0.22*clamp((RIM_H-h)/RIM_H) —— 按**离地高度的绝对刻度**,不是这一堆自己的 z 跨度的 min-max(旧写法让每堆亮度跨度恒为 1.61:1,两颗球的堆读起来像两种材质)。同层亮度一致、越高越亮(与玻璃左上来光一致)。返回按 -z 排序的画家序表(远先画)。",
+   "trigger": "_pile_projected 建缓存时一次",
+   "source": "8058-8085",
+   "params": "K2=0.20, PILE_SHADE_RANGE=0.22, 杯底最暗=0.78(不是 0.62)"
+  },
+  {
+   "id": "baked-table",
+   "name": "离线烘焙球堆坐标表 + 逐位对拍门禁",
+   "kind": "silent-invariant",
+   "behavior": "7 档 x 12 变体 = 84 个 key 的球心坐标表(定点 design px x10,格式 'x,z,h;...')。存的是**球心不是投影**,所以改 K2/CX/FLOOR_Y 不用重烘。改任何堆参数(_PILE_SITES/_PILE_QUOTA/_PILE_ROT_STEP/_r_dp_for/k_p/jit/_SCATTER_MAX...)都必须重跑 tools/bake_pile_data.py,否则表与行为脱钩(fx_probe 有『表 vs 现算逐位对拍』门禁)。",
+   "trigger": "模块导入;`_beads_from_baked` 查表",
+   "source": "8087-8210 (_PILE_BAKED_SCALE/_PILE_BAKED_R/_PILE_BAKED)",
+   "params": "_PILE_BAKED_SCALE=10, _PILE_BAKED_R={2:50.233,3:50.233,5:50.233,10:50.233,20:44.385,50:50.233,100:50.233}"
+  },
+  {
+   "id": "beads-from-baked",
+   "name": "烘焙表查询 + 静默回退",
+   "kind": "silent-invariant",
+   "behavior": "查 (count,v);缺项/半径缺/任一项解不开/条数≠count → 一律返回 None(整表当坏),调用方回退到程序化 build_pile。『表坏了 → 那一局没球』是线上事故,所以这里必须安静地退,不能抛。",
+   "trigger": "_pile_projected 缓存未命中时",
+   "source": "8722-8743",
+   "params": "_PILE_BAKED_SCALE=10, layer 字段恒填 0(不能拿它分层)"
+  },
+  {
+   "id": "support-topo",
+   "name": "支撑偏序 + 随机拓扑发牌序",
+   "kind": "silent-invariant",
+   "behavior": "_support_map 对每颗球 j 找所有 h 更低且水平距 <2r 的球(用**水平**距不用 3D 距 —— 3D 会漏掉约 2/3 阻挡关系,实测那样跑出来的顺序比不改还差)。_topo_deal 跑 Kahn,每次从『支撑已全部发牌』的集合里**均匀随机**挑一颗 ⇒ 屏幕上不再有『一层一块』的施工缝。有环(坏数据)则安静退回画家序,绝不锁死演出。",
+   "trigger": "建缓存时算一次挂在 proj 上;每局 _make_balls 跑一次 Kahn",
+   "source": "8745-8822",
+   "params": "阈值 thr2=(2r)², 层距反推 h=FLOOR_Y-sy-K2*z(不吃 beads 的 layer 字段)"
+  },
+  {
+   "id": "pile-cache",
+   "name": "投影表缓存(FIFO 淘汰)+ 变体号",
+   "kind": "silent-invariant",
+   "behavior": "key=(count, seed % 12);命中只 get 就返回,**从不把 key 挪到队尾** —— 是 FIFO 不是 LRU。超 128 从队首 pop。seed 是 self._seq(每中奖 +1),所以 12 个变体由 _PILE_SITES/_PILE_QUOTA 的一对组合 + scatter=_v + rot_deg=_v*137.508° 派生。",
+   "trigger": "_pile_projected(count, seed) / prebake 全量预热",
+   "source": "8519-8537, 8824-8867",
+   "params": "_PILE_CACHE_MAX=128, _PILE_VARIANTS=12, _PILE_ROT_STEP=137.508, _PILE_SITES/_PILE_QUOTA 各 12 组(联合搜索产物,不能单独换其中一个)"
+  },
+  {
+   "id": "r-dp-for",
+   "name": "球半径:全档同径",
+   "kind": "player-visible",
+   "behavior": "7 档统一 27.0 dp ⇒ dp2px=1.8605 → r=50.23(所有档的球一样大,玩家 2026-09-11 定稿)。唯一例外是 x20:走『土丘』堆法(count<35)容量小,兜底缩到 r=44.385。",
+   "trigger": "build_pile 回退路径 new PileSpec 时",
+   "source": "8558-8572",
+   "params": "_r_dp_for→27.0, dp2px=DESIGN_W/430.0=1.8605, x20 实测 r=44.4"
+  },
+  {
+   "id": "rim-bands",
+   "name": "远侧环补画(杯口环后半 + 杯底环后半)",
+   "kind": "player-visible",
+   "behavior": "压暗改到『后层玻璃之后』以后,back 贴图里的半环跟着被压暗(杯口远环 68→29,杯底远半 16.7→5.3 基本读不出来)。按**几何(贴图行段)**切两段,每段再横切 12 条,每条一个 alpha 从段顶 RIM_BAND_ALPHA_TOP 线性升到切开线 1.0 ⇒ 『远侧暗→近侧亮』成一圈连续渐变。两段缺一不可(只补杯口环的话杯底环远半消失)。有 over 层时**杯口那段交给 over**,杯底那段仍走补画(over 的杯底段 alpha 只有 46,整条换过去会暗约 11%)。",
+   "trigger": "_tbl_build 建表时;尺寸/贴图变化时重建",
+   "source": "8496-8518 (RIM_BACK_BANDS/_rim_band_alpha), 8869-8912 (_rim_back_strips), 9588-9605 (取舍逻辑)",
+   "params": "RIM_BAND_STRIPS=12, RIM_BAND_ALPHA_TOP=0.55, RIM_BACK_BANDS=((0.0,166/920),(694/920,808/920)), 相邻条 alpha 差 4%"
+  },
+  {
+   "id": "tbl-build-order",
+   "name": "持久指令表:绘制次序红线",
+   "kind": "silent-invariant",
+   "behavior": "建表顺序一个字不许动:接地阴影 < 后层玻璃(under) < 压暗(dim) < 远侧环(oseam) < 杯口环补画(rim, 24 条) < 弹珠 < 前层玻璃(front)。压暗若放到后层玻璃之前 ⇒ 杯内只压 12% 而杯外压 46%(杯子周围反而最亮)。球层必须按 self._balls 原始顺序**单趟**建(拆成『落定+飞行』两趟实测 25.5% 重叠帧层次错乱);每颗球自带 PushMatrix/PopMatrix 包住 Rotate(Kivy Rotate 是上下文指令,漏 Pop 会把 20 个旋转叠到后面那块前层玻璃上,『落杯动画一塌糊涂』);不可见的球不删指令只把 size 置 (0,0),条数本局内恒定。",
+   "trigger": "_redraw 发现 _tbl_key_ok 为假时",
+   "source": "9536-9632 (_tbl_key_ok/_tbl_build)",
+   "params": "固定层 56 条(阴影2+下2+压暗2+over2+补画24+前2),x100 整块 684 条"
+  },
+  {
+   "id": "tbl-key",
+   "name": "持久表重建判据",
+   "kind": "silent-invariant",
+   "behavior": "四项: _tbl_ok / self._balls **对象身份**(不比长度 —— 新一局 8 颗换 8 颗会拿上一局的球继续画) / 三张贴图元组 / (self.width,self.height)(子纹理按建表时尺寸切)。任一不符就重建。",
+   "trigger": "每帧 _redraw",
+   "source": "9536-9547",
+   "params": "_tbl_ok/_tbl_balls/_tbl_tex/_tbl_wh"
+  },
+  {
+   "id": "tbl-drop",
+   "name": "表作废(红线 3)",
+   "kind": "silent-invariant",
+   "behavior": "每次 mode 迁移(idle 早退 / 两边都透明)都必须显式 _tbl_drop() 调 canvas.clear()。少了它退出装杯后杯子与压暗会**永久留在画布上** —— canvas.clear() 是唯一能擦掉它们的机制(旧实现每帧都 clear 所以从没暴露过)。",
+   "trigger": "_redraw 的 idle 分支 / a_dim<=0 且 a_cup<=0 分支",
+   "source": "9708-9721, 9740-9749"
+  },
+  {
+   "id": "tbl-apply-fixed",
+   "name": "固定层每帧只改属性",
+   "kind": "silent-invariant",
+   "behavior": "每帧只写 rgba/pos/size,不重建指令。阴影 = 一块椭圆(替代逐球贴球心阴影),在杯底 (CX,FLOOR_Y) 处、宽 bw*0.68 高 bh*0.09、alpha=a_cup*0.35。dim 矩形 = self.pos/self.size(GameArea 整块),色 DIM_RGB、alpha=DIM_ALPHA*a_dim。rim 条 alpha = a_cup*_a。",
+   "trigger": "每帧 _redraw",
+   "source": "9634-9680",
+   "params": "阴影色 (0.02,0.02,0.03) alpha=a_cup*0.35, 阴影尺寸 bw*0.68 x bh*0.09"
+  },
+  {
+   "id": "tbl-apply-balls",
+   "name": "球层每帧属性写入",
+   "kind": "silent-invariant",
+   "behavior": "与 _draw_bead 逐字一致:未落定且 tt<f_enter → 不画(size 0);越过可见顶边后 alpha *= clamp((tt-f_enter)/0.08);飞行球 shade=min(1, shade+0.10) 提亮一档;落定球用原 shade。旋转角、原点、pos、size 全部写进既有指令。",
+   "trigger": "每帧 _redraw",
+   "source": "9682-9706",
+   "params": "ENTER_FADE=0.08, 飞行提亮=+0.10"
+  },
+  {
+   "id": "ball-screen",
+   "name": "逐球屏幕位置插值(飞行/两次弹跳)",
+   "kind": "player-visible",
+   "behavior": "落定球直接用终点 (sxf,syf),角度冻结在 ring_angle。飞行中:下落段 x 走 smoothstep(p)(先近垂直进杯口,接近堆面才被导向目标槽位)、y=sy0+(syf-sy0)*p²(加速下坠)、sy_k=1+0.045p(纵向拉伸);第一跳 sx=sxf+hop*sin(πq)、sy=syf-a1_amp*sin(πq);第二跳横向只有 0.35 倍;两跳都带撞击压扁(d=max(0,1-(tt-t_land)/0.045)),压扁时底边钉在落点上(视觉不穿地)。自转角度 = ring_angle + spin_deg*min(tt, f+t1+t2)。",
+   "trigger": "每帧 _advance_balls → _tbl_apply_balls → _ball_screen",
+   "source": "9421-9459, 9379-9398",
+   "params": "SQUASH_W=0.045, hop=u(-0.24,0.24)*r, spin_deg=u(-420,420), ring_angle=u(-180,180), 下落段 sy_k=1+0.045p, 二跳横向 0.35 倍"
+  },
+  {
+   "id": "make-balls",
+   "name": "每球参数独立抽样 + 投放节奏",
+   "kind": "player-visible",
+   "behavior": "发牌顺序 = 随机拓扑序(_topo_deal),但 t0 按发牌序递增;绘制序另按 -z(画家序)。每颗球:起点 x=CX±0.8*mouth_half±0.12r、起点 y=VISIBLE_TOP-r*1.2-u(0,420);下落时长由落差反推 f=clamp(sqrt(2*span/1900)*u(0.88,1.12),0.55,1.30);t1=u(0.13,0.20);t2=t1*u(0.42,0.62);a1=r*u(0.28,0.52);a2=a1*u(0.18,0.36)。投放间隔 interval=max(0.016,min(0.16,1.6/n)),抖动 min(0.035,interval*0.75),cursor 从 0.08 起、每步 max(0.012,interval±jitter)。",
+   "trigger": "play_win → _make_balls(multiplier, value, seq)",
+   "source": "9216-9290",
+   "params": "SPAWN_TOP=0.08, SPAWN_WINDOW=1.6, SPAWN_MIN/CAP=0.016/0.16, FALL_GRAVITY=1900, FALL_MIN/MAX=0.55/1.30, RAIN_HEADROOM=420, mouth_half=halfwidth(324)=361"
+  },
+  {
+   "id": "rain-shift",
+   "name": "整场雨前移(消空杯静止)",
+   "kind": "player-visible",
+   "behavior": "杯子在 settle+0.50 就位,而第一颗球要到 t0+f_enter 才被画(实测 0.94~1.05),中间 0.44~0.55s 屏幕上一个像素都不动 → 被读成『演出结束了』。解法是把**整条时间轴一起前移**,让首球露头固定落在 RAIN_ANCHOR=0.12:shift=clamp(min(t0+f_enter)-0.12, 0, 0.80),所有 b[t0]/b[end] 同时减 shift。安全性靠 shift < min(t0+f_enter) 恒成立 ⇒ t=0 时没有任何一颗球已入画,也不会『开局第一帧补播一串落地音』。",
+   "trigger": "_make_balls 末尾",
+   "source": "8373-8393, 9271-9283",
+   "params": "RAIN_ANCHOR=0.12, RAIN_SHIFT_MAX=0.80, 实测 x2/x3 整场提前约 0.13s"
+  },
+  {
+   "id": "two-clocks",
+   "name": "两个收尾时刻:_last_touch 与 _last_settle",
+   "kind": "silent-invariant",
+   "behavior": "_last_touch = max(t0+f)(最后一颗球**第一次触地**)→ **揭晓基准**;_last_settle = max(end)(最后一颗球**回弹停住**,杯子装满静止) → 退场计时起点。这两个**必须分开**:合成一个会让退场从『刚触地』就开始计时,球还在弹杯子已经在淡出(玩家:『落进容器后消失得太快,没有回味』)。",
+   "trigger": "_make_balls 末尾写;tick 的 win 分支判 t>=_last_settle 切 result",
+   "source": "8285-8287, 9284-9290, 9311-9314",
+   "params": "end = t0+f+t1+t2"
+  },
+  {
+   "id": "timeline",
+   "name": "完整时间轴(一段一义)",
+   "kind": "player-visible",
+   "behavior": "T_land(落袋) → 一切账务/灯/白闪/入袋音在 t=0 → +0.15s(CUP_TRIGGER_DELAY)触发 play_win、mode=pending、_t0=T_land+0.65 → pending 段(ts=settle 起算 0..0.50):压暗 0.30 起 0.16 走完、杯子 0.32 起 0.18 走完(必须 <=WINDUP,否则被 win 分支硬切瞬移)→ t=0 起整屏画面上场(win 态常量) → 落珠(首球 0.12 露头)→ 揭晓 = _last_touch+0.4 → mode=result(t>=_last_settle,装满静止)→ 等玩家点击(最短 HOLD_BASE) → +0.25s 退场 → idle。",
+   "trigger": "settle() 中奖 → _start_cup → play_win",
+   "source": "8283-8397, 9117-9127, 11264-11271, 20255-20285",
+   "params": "CUP_TRIGGER_DELAY=0.15, WINDUP=0.50, REVEAL_DELAY=0.4, HOLD_BASE=0.6, RESULT_FADE=0.25, FX_MAX_SEC=9.0"
+  },
+  {
+   "id": "layers",
+   "name": "_layers() 四条曲线(压暗/道具/缩放/位移)",
+   "kind": "player-visible",
+   "behavior": "**pending**(ts=now-(_t0-WINDUP)):a_dim=_eo((ts-0.30)/0.16), a_cup=_eo((ts-0.32)/0.18), k=0.92+0.08*a_cup, dy=56*(1-a_cup)。**win**:(1,1,1,0) 常量。**result 未点击**:(1,1,1,0) —— dy 必须是 0,否则整组停在『上浮过的』退场姿势上。**result 已点击**(td=now-_closing_at, u=clamp(td/0.25)):u_pos=1-(1-u)²(二次缓出), u_a=clamp(td/0.22)(线性且提前 0.03 归零), u_dim=_eo((td+0.04)/0.25), → a_dim=1-u_dim, a_cup=1-u_a, k=1-0.10*u_pos, dy=52*u_pos。曲线必须按 mode 分支(_settled_at 在 play_win 里置 0,不分模式会算出天文数字 clamp 成 1 → 整场按退场终态渲染)。",
+   "trigger": "_redraw 每帧调 _layers(time.time())",
+   "source": "9463-9513, 8332-8366",
+   "params": "ENTER_DIM_AT/DUR=0.30/0.16, ENTER_CUP_AT/DUR=0.32/0.18, ENTER_SCALE=0.92, ENTER_RISE=56, RESULT_FADE=0.25, EXIT_ALPHA_TAIL=0.03, EXIT_DIM_LEAD=0.04, EXIT_SCALE=0.90, EXIT_LIFT=52"
+  },
+  {
+   "id": "state-machine",
+   "name": "tick 状态机 idle/pending/win/result",
+   "kind": "silent-invariant",
+   "behavior": "idle:只在 _dirty 时重绘。pending:now<_t0 时**无条件**每帧重绘(错峰动画,原来有 if _dirty 掐帧导致整段只画一帧);now>=_t0 → 切 win。win:推进球,若 t>=_last_settle → _settled_at=now、切 result。result:_advance_balls 继续把弹跳播完(_ball_screen 对未落定球按 tt 插值,不推进会冻在半空);_result_busy=(还有球在动) or (有球刚停稳);不自动退场,只等 _closing_at(跑分走 _auto_close);now>=_closing_at+0.25 → idle 并清空 _balls。尾部:**装满静止且没球在动、没点击时整帧跳过 _redraw**(x100 一次重建 684 条指令,真机约 2.8ms/帧),但 _closing_at 必须单独判(退场那 0.25s 每帧都在淡出+上浮,漏判会把淡出掐成『啪一下消失』)。",
+   "trigger": "GameArea.tick_draw() 每帧 → win_fx.tick()",
+   "source": "9294-9355, 12514-12518",
+   "params": "RESULT_FADE=0.25, HOLD_BASE=0.6"
+  },
+  {
+   "id": "pump-reveal",
+   "name": "揭晓的唯一出口(与 mode 解耦)",
+   "kind": "silent-invariant",
+   "behavior": "揭晓(中奖音 + 『弹珠+xx』语音 + 大字/余额)时刻 = _t0 + _last_touch + REVEAL_DELAY,判定放在**所有 mode 迁移之后**、每帧都跑,用单向闩 _done_fired 保证恰好放一次。**不能关在 `if mode=='win'` 里** —— 揭晓时刻通常晚于 win→result 切换点(触地+0.185~0.323),关在里面会让事件永久丢失(实测 86% 的局回调挂到下一局;最惨『中奖后不再发射』时中奖音永久丢失)。`not self._balls` 那条是排空用的(走出 result 时先清空 _balls,保证欠的账必被放掉)。",
+   "trigger": "tick() 尾部每帧",
+   "source": "9334-9377 (含 _pump_reveal)",
+   "params": "REVEAL_DELAY=0.4, 兜底 deadline=reveal_at()+0.05"
+  },
+  {
+   "id": "reveal-sec-at",
+   "name": "揭晓时刻查询(唯一真源)",
+   "kind": "silent-invariant",
+   "behavior": "reveal_sec()= _last_touch+0.4(相对 _t0),reveal_at()= _t0+_last_touch+0.4(绝对)。tick 判揭晓 与 ui 的 _reveal_deadline 兜底**必须同源** —— 兜底曾经自己按 _last_settle 算,比真事件早最多 0.054s ⇒ 数字/语音提前剧透。_balls 为空时返回 0。",
+   "trigger": "tick/_start_cup 调用",
+   "source": "9021-9041, 20277-20283",
+   "params": "REVEAL_DELAY=0.4, deadline 余量 +0.05"
+  },
+  {
+   "id": "expected-sec",
+   "name": "本档预计最短上屏时长",
+   "kind": "silent-invariant",
+   "behavior": "= WINDUP + tail + hold_for(n) + RESULT_FADE,其中 tail=_last_settle+0.05(有球时)或估算 SPAWN_TOP+(n-1)*iv+FALL_MAX+0.33。它是**最短**时长不是整场(退场由玩家点击,result 段可无限长)。唯一消费者是 _result_until(抑制 set_bet/set_rtp 的 UI 语音插嘴)。⚠️ 线上跑的其实是估算分支 —— settle() 调它时 play_win 还没被 CUP_TRIGGER_DELAY 调度。",
+   "trigger": "settle() 里 m>0 时",
+   "source": "9043-9069, 20300-20301",
+   "params": "WINDUP=0.50, +0.05, +HOLD_BASE=0.6, +RESULT_FADE=0.25; _result_until=now+2.5+expected_sec"
+  },
+  {
+   "id": "bounce-sfx",
+   "name": "落地音 + 同步震动 + 装杯音量提升",
+   "kind": "player-visible",
+   "behavior": "每颗球两跳各播一次 bounce 音(第一跳 gain=0.42+0.30*min(1,a1/r),第二跳 =0.25+0.20*min(1,a2/r)),gain 先乘 BOUNCE_GAIN_BOOST=1.8 再夹到 [0.35,1.00];节流 0.10s(10 次/秒),只限速**不按颗数截断**(曾经有 BOUNCE_BUDGET=24,删了 —— x50/x100 后半段会静音 1.4~2.3s)。震动**挂在 sfx.play() 的返回值上**,不自己再判一次时间:节流只有一个真源,两边各判必然漂移(听到响但没震)。sfx 关闭时 play 返回 False ⇒ 有意连震动一起关。",
+   "trigger": "_advance_balls 里 tt>=f / tt>=f+t1",
+   "source": "9398-9417 (_advance_balls/_bounce), 8417-8449 (常量), 11244-11261 (_vibrate_tick), 4313-4325 (play 返回值语义)",
+   "params": "BOUNCE_THROTTLE=0.10, BOUNCE_GAIN_BOOST=1.8, LO/HI=0.35/1.00, A1_BASE/AMP=0.42/0.30, A2_BASE/AMP=0.25/0.20; 震动 ms=round(10+8g), amp=round(80+140g), g=clamp((gain-0.20)/0.55)"
+  },
+  {
+   "id": "request-close",
+   "name": "玩家点击退场(唯一出口)",
+   "kind": "player-visible",
+   "behavior": "root 的 Window 级触摸观察者每一下必到,调 win_fx.request_close();返回 True 表示这一下被消费掉 → **裸 return 早退**,别再走『标题/期望返还比例』的长按计时。受理条件苛刻:mode=='result' **且** 还没有 _closing_at **且** now>=_settled_at+HOLD_BASE(装满后最短停留)。球还在下落(mode!='result')时点击无效。基准用墙钟 _settled_at,不是 _t0 相对秒数。",
+   "trigger": "Window on_touch_down → _on_title_touch_down",
+   "source": "9129-9146, 14218-14246, 13364-13366",
+   "params": "HOLD_BASE=0.6"
+  },
+  {
+   "id": "busy-abort",
+   "name": "输入锁与硬兜底 abort",
+   "kind": "silent-invariant",
+   "behavior": "busy() 对 idle 返回 False;对 **pending/win** 在 now>=_deadline(_t0+FX_MAX_SEC) 时调 _abort() 并无条件放手(那时玩家没有话语权,卡住必须放手,否则是真软锁);**result 段故意不设任何时间兜底** —— 玩家 2026-09-12 定稿『不点就一直在』,定时退场会在切后台回来那一帧把杯子当场擦掉。_abort:mode=idle、清 _balls/_closing_at、_done_fired=True、**把 _on_done 回调补放一次**(出口兜底也算已放,别吞掉奖励感/别在下一帧再放)。",
+   "trigger": "RootWidget._frame 的 landed 分支 + request_close 观察者",
+   "source": "9148-9212, 21387-21390",
+   "params": "FX_MAX_SEC=9.0, 最长非交互段 ≈ WINDUP+最后一颗落定 ≈ 5~6s"
+  },
+  {
+   "id": "play-win",
+   "name": "演出入口(重入/异常/种子)",
+   "kind": "silent-invariant",
+   "behavior": "multiplier/bet 强转 int 失败或 multiplier<=0 → 返回 False(调用方照常解锁,失败绝不能影响结算 —— 余额这时已经加过了)。重入时先补执行上一局遗留的 _on_done(否则玩家少听一次中奖音)。_make_balls 抛异常 → print CUP-PILE FAIL、清空 _balls、mode 回 idle、返回 False。auto_close=True 时 _rng 换成 Random(BENCH_SEED+2000+multiplier)(跑分那 5 发倍率钉死 ⇒ 每次跑分每一发的杯子完全一样);**正常游戏照旧随机**。",
+   "trigger": "settle() 中奖 / 彩蛋路径",
+   "source": "9071-9127",
+   "params": "BENCH_SEED=20260914, _deadline=_t0+9.0, _t0=now+WINDUP"
+  },
+  {
+   "id": "dim-alpha",
+   "name": "HUD 压暗取数(与板面同帧同值)",
+   "kind": "silent-invariant",
+   "behavior": "dim_alpha(peak) = peak * self._a_dim_now,_a_dim_now 由 _redraw 每帧写入(本帧**真正画上去的**曲线值)。**不能在 HUD 侧重新 _layers(time.time())** —— 那是两次独立采样,曲线最陡处约 12.75 alpha/s,差 10ms 就看得出来;更致命的是退场结束那一帧(tick 把 mode 切成 idle 后 _redraw 不再画板面),HUD 会**多暗一整帧**。idle 直接返 0 双保险(_settled_at 在 idle 是残值,交给 _layers 会 clamp 成 1)。异常也吞成 0。",
+   "trigger": "每帧 RootWidget._frame → _sync_hud_dim",
+   "source": "9167-9189, 13818-13838, 21420-21427",
+   "params": "peak=DIM_ALPHA=0.68"
+  },
+  {
+   "id": "hud-dim-rects",
+   "name": "HUD 两块压暗矩形(整屏减游戏区)",
+   "kind": "player-visible",
+   "behavior": "五行 HUD 不在 GameArea 矩形里,板面那块压暗盖不到,横屏时两侧还亮着(实测左条 36.6/右条 29.6 vs 压暗后板面 14~17)。所以在 RootWidget.canvas.after 里补**两块**矩形(上块 = 视口顶到 game_area 顶,下块 = 视口底到 game_area 底),横向铺到视口边(宽窗口下 RootWidget 比视口窄,只盖 self.width 会留两条亮带)。几何的**视口取 self.parent 那个 AnchorLayout**(横屏反旋转时它恰好铺满整块物理屏),不按 self.pos 反推。两块必须**不重叠**(重叠会 0.68 叠 0.68 变成 0.90,缝从更亮翻成更暗)。",
+   "trigger": "_build_hud_dim 构造期 + _relayout_hud_dim 绑 pos/size",
+   "source": "13755-13797, 13799-13816, 13350-13353",
+   "params": "DIM_RGB=(0.02,0.03,0.05), HUD_ALPHA=DIM_ALPHA=0.68, force_geo=(_hud_dim_last<0)"
+  },
+  {
+   "id": "cup-trigger-delay",
+   "name": "落容器事件延后 0.15s",
+   "kind": "player-visible",
+   "behavior": "第 0 秒进倍率槽立即播声音,但『落容器』事件本身(play_win)延后 0.15s 才触发。账务/指示灯/槽位白闪/入袋音全部留在 t=0,演出内部时间轴一律不动 ⇒ 整场只是起点后移 0.15s,总时长不变。同一帧必须把 _reveal_deadline **先归零再调度**,否则上一轮残留的非零 deadline 会在这 0.15s 窗口里让兜底提前开火(提前剧透)。landed 分支要求 landed_at+_land_hold 已过,而 _land_hold 最小 0.3s>0.15s ⇒ park_ball 不会抢跑。",
+   "trigger": "settle() 中奖分支 Clock.schedule_once(_start_cup, 0.15)",
+   "source": "11264-11271, 20255-20285",
+   "params": "CUP_TRIGGER_DELAY=0.15, LAND_HOLD=0.60, _land_hold 最小=0.3"
+  },
+  {
+   "id": "reveal-gate",
+   "name": "揭晓幂等闸(序号丢弃迟到回调)",
+   "kind": "silent-invariant",
+   "behavior": "唯一真源是 settle() 里的 `_on_settled` 闭包:_win_seq += 1 得 seq,_reveal_done 置 False;回调里 `if _reveal_done or seq != _win_seq: return`,然后 _reveal_done=True → _reveal_win(大字/余额/coin) → _play_win_voice(语音)同拍。三个历史洞:语音曾经没闸;闸曾在 play_win **之前**复位而 play_win 开头会补执行上一局回调(把上一局数字画在本局第 0 帧并锁死本局闸,实测 300 局里 258 局如此);兜底路径曾另写一份揭晓(漏了语音)。_reveal_win 里**不许再加第二道闸**(两处判同一个东西必静默脱钩,hold_for 上已经踩过)。",
+   "trigger": "win_fx 的 _pump_reveal 放行 / _frame 的兜底 deadline",
+   "source": "20216-20239, 20304-20327, 21408-21417",
+   "params": "_reveal_deadline = reveal_at()+0.05"
+  },
+  {
+   "id": "easter-path",
+   "name": "彩蛋路径:同步 ×2 装杯 + 装完才弹窗",
+   "kind": "player-visible",
+   "behavior": "彩蛋结算直接 play_win(2, bet)(**不走 CUP_TRIGGER_DELAY**,同步触发)并置 _easter_hold 一路锁到『装杯播完 + 弹窗关掉』;排不上球堆也必须弹窗(_on_easter_settled 是这条路径唯一的结果说明)。回调挂在『最后一颗球第一次触地』,但弹窗必须等 win_fx 真正回 idle(否则弹窗盖在还在淡出的杯子上),用 Clock 轮询、**没有算术上界**(玩家一直不点,弹窗就和他一起等)。跑分期间:不弹窗但**必须走 _easter_finish 解锁**(只 return 会永久软锁死),装杯照常播。",
+   "trigger": "settle() 且 _easter_egg 为真",
+   "source": "20152-20180, 20374-20398",
+   "params": "倍率=2, _vibrate_double(35ms, gap=40, amp=255), _result_until=now+2.5"
+  },
+  {
+   "id": "bench-integration",
+   "name": "跑分期间的装杯三处特殊处理",
+   "kind": "platform-glue",
+   "behavior": "(1) 随机源钉死:save random.getstate() 后 seed(BENCH_SEED),并把 win_fx._rng 换成 Random(BENCH_SEED+1)(它决定装杯那几颗球的下落时长,直接影响装杯多久 —— 不钉的话连续三轮装杯占比 25.2%/30.6%/38.2%,追三轮噪声);跑完**原样还回去**(不还的话正常游戏球路被钉死)。(2) auto_close=True:装满后不等点击、到点自己退场(跑分是自动连续发射,等人点击会把整轮卡死)。(3) HUD 压暗层跳过(_hud_dim_last 归 0 并 _paint_hud_dim(0))—— 信息栏要承担跑分进度提示,不能被装杯压暗盖灰。另外跑分**照常播装杯**(用户定案),代价是采样窗口从 ~1.5s 拉长到 ~15~20s、平均帧率偏低,用户明确接受。",
+   "trigger": "_start_bench_test / _bench_running 为真时",
+   "source": "9104-9108, 15863-15881, 17000-17011, 13827-13833, 20271-20274",
+   "params": "BENCH_SEED=20260914, _wf._rng=Random(BENCH_SEED+1), _rng=Random(BENCH_SEED+2000+multiplier)"
+  },
+  {
+   "id": "prebake",
+   "name": "启动期分帧预热链",
+   "kind": "silent-invariant",
+   "behavior": "启动后自链式 Clock.schedule_once 逐步烘:玻璃贴图 → 远侧环层 → 震动/守卫线程 → 文字纹理(一帧一个组合) → 字号阶梯(HUD 那批 48 项 先走 + 大字 4 项,一帧只碰一个,步距 0.02s) → 字形图集 → 球纹理(一帧一档,步距 0.05s) → 7 档 x 12 变体球堆(一次填完,查烘焙表 84 key 实测 1.9ms) → 定位 sdl2 字体队列 → gc.collect/collect(2)/freeze/collect(2) 并把冻结前后耗时打进面板 → _PREBAKE_DONE[0]=True。每一步都 _boot_log 打耗时。自链回调**必须能收 1 个位置参数**(零参签名真机启动 0.7s 必闪退)。",
+   "trigger": "App 启动 Clock.schedule_once(win_fx.prebake_step, 0.05)",
+   "source": "9764-10154, 13396, 22142",
+   "params": "步距 0.05s(字号码 0.02s), 玻璃贴图约 21ms 桌面, 球纹理真机 100~200ms/档, _FONT_WARM_HUD 上限 64 项(12 基准 x FIT_SCALES 6 档)"
+  },
+  {
+   "id": "brk-instrument",
+   "name": "装杯耗时埋点",
+   "kind": "dev-tool",
+   "behavior": "_brk_wrap(WinPileFX, '_redraw', '装杯') 给装杯重画计时;它**嵌套在『板面』里面**(tick_draw → win_fx.tick → _redraw),面板上这几个数不能相加,只按谁最大读。_redraw 内部再分『杯层』(建表/固定层)与『球层』两格。",
+   "trigger": "跑分/帧率面板采样期",
+   "source": "21832-21839, 9757-9760",
+   "params": "标签 '装杯'/'杯层'/'球层'/'板面'"
+  }
+ ],
+ "constants": [
+  {
+   "name": "CUP_W",
+   "value": "545.0",
+   "meaning": "玻璃杯矩形宽(520x660 逻辑画布内)"
+  },
+  {
+   "name": "CUP_H",
+   "value": "545*460/800 = 313.375",
+   "meaning": "杯高,与资产 800x460 同比"
+  },
+  {
+   "name": "CUP_L",
+   "value": "-12.5",
+   "meaning": "杯矩形左边(负=比游戏区左右各宽 12.5)"
+  },
+  {
+   "name": "CUP_BOTTOM",
+   "value": "578.0",
+   "meaning": "杯底缘锚定 y(只往上长)"
+  },
+  {
+   "name": "CUP_T",
+   "value": "578-313.375 = 264.625",
+   "meaning": "杯顶 y"
+  },
+  {
+   "name": "TEXT_CY_WIN",
+   "value": "150.0",
+   "meaning": "中奖大字让位后的逻辑 cy(恰等于 PEG_TOP)"
+  },
+  {
+   "name": "BIG_TEXT_LIFE",
+   "value": "1.8",
+   "meaning": "中奖大字生命(秒)"
+  },
+  {
+   "name": "BIG_TEXT_ALPHA_STEPS",
+   "value": "20",
+   "meaning": "大字淡出 alpha 量化档数(避免每帧重光栅化)"
+  },
+  {
+   "name": "WINDUP",
+   "value": "0.50",
+   "meaning": "结算后停顿,让槽位白闪/绿灯先被看见"
+  },
+  {
+   "name": "CUP_TRIGGER_DELAY",
+   "value": "0.15",
+   "meaning": "落容器事件(play_win)延后触发秒数"
+  },
+  {
+   "name": "REVEAL_DELAY",
+   "value": "0.4",
+   "meaning": "揭晓 = 最后一颗球第一次触地 + 此值"
+  },
+  {
+   "name": "HOLD_BASE",
+   "value": "0.6",
+   "meaning": "装满后最短停留;这之前点击无效"
+  },
+  {
+   "name": "RESULT_FADE",
+   "value": "0.25",
+   "meaning": "退场可见离开时长(恒定,不随档位)"
+  },
+  {
+   "name": "FX_MAX_SEC",
+   "value": "9.0",
+   "meaning": "pending/win 硬兜底时限(result 段无兜底)"
+  },
+  {
+   "name": "ENTER_DIM_AT / ENTER_DIM_DUR",
+   "value": "0.30 / 0.16",
+   "meaning": "压暗进场起始/时长(相对 settle)"
+  },
+  {
+   "name": "ENTER_CUP_AT / ENTER_CUP_DUR",
+   "value": "0.32 / 0.18",
+   "meaning": "杯子进场起始/时长,终点 0.50 == WINDUP"
+  },
+  {
+   "name": "ENTER_RISE / ENTER_SCALE",
+   "value": "56.0 / 0.92",
+   "meaning": "进场起手高出 56 逻辑px、缩放 0.92"
+  },
+  {
+   "name": "EXIT_LIFT / EXIT_SCALE",
+   "value": "52.0 / 0.90",
+   "meaning": "退场上浮/缩小"
+  },
+  {
+   "name": "EXIT_DIM_LEAD / EXIT_ALPHA_TAIL",
+   "value": "0.04 / 0.03",
+   "meaning": "压暗早撤 0.04s;道具在解锁前 0.03s 已全透明"
+  },
+  {
+   "name": "SPAWN_TOP / SPAWN_WINDOW / SPAWN_MIN / SPAWN_CAP",
+   "value": "0.08 / 1.6 / 0.016 / 0.16",
+   "meaning": "投放起始/总窗口上界/最小与最大间隔"
+  },
+  {
+   "name": "RAIN_ANCHOR / RAIN_SHIFT_MAX / RAIN_HEADROOM",
+   "value": "0.12 / 0.80 / 420.0",
+   "meaning": "首球露头锚点/整场前移上限/起点抬高量"
+  },
+  {
+   "name": "FALL_GRAVITY / FALL_MIN / FALL_MAX",
+   "value": "1900.0 / 0.55 / 1.30",
+   "meaning": "下落重力与时长夹取"
+  },
+  {
+   "name": "ENTER_FADE / SQUASH_W",
+   "value": "0.08 / 0.045",
+   "meaning": "越过可见顶边后渐入时长/撞击压扁窗口"
+  },
+  {
+   "name": "DIM_RGB",
+   "value": "(0.02, 0.03, 0.05)",
+   "meaning": "压暗色(板面与 HUD 五行共用)"
+  },
+  {
+   "name": "DIM_ALPHA / HUD_ALPHA",
+   "value": "0.68 / 0.68(=DIM_ALPHA)",
+   "meaning": "板面压暗强度 / HUD 五行压暗峰值(故意同值)"
+  },
+  {
+   "name": "BOUNCE_THROTTLE",
+   "value": "0.10",
+   "meaning": "落地音节流间隔(10 次/秒),只限速不截断"
+  },
+  {
+   "name": "BOUNCE_GAIN_BOOST / LO / HI",
+   "value": "1.8 / 0.35 / 1.00",
+   "meaning": "装杯落地音音量倍率与夹取区间"
+  },
+  {
+   "name": "BOUNCE_A1_BASE/AMP, A2_BASE/AMP",
+   "value": "0.42/0.30, 0.25/0.20",
+   "meaning": "第一跳/第二跳 gain 公式"
+  },
+  {
+   "name": "K2",
+   "value": "0.20",
+   "meaning": "斜投影纵剪(俯视约 12 度)"
+  },
+  {
+   "name": "PILE_SHADE_RANGE",
+   "value": "0.22",
+   "meaning": "球堆明暗绝对刻度幅度(杯口 1.0 → 杯底 0.78)"
+  },
+  {
+   "name": "PACK_PHI / TAPER",
+   "value": "0.907 / 1.43",
+   "meaning": "三角格盘面密度 / 圆肩底半径:堆高"
+  },
+  {
+   "name": "OVERFLOW_MAX",
+   "value": "0.0",
+   "meaning": "允许堆顶超杯口多少(0=不溢出)"
+  },
+  {
+   "name": "_WALL_BEZ",
+   "value": "((39.0,80.0),(65.0,262.0),(110.0,404.0))",
+   "meaning": "左壁贝塞尔(生成器同源)"
+  },
+  {
+   "name": "halfwidth(0) / halfwidth(RIM_H)",
+   "value": "290.0 / 361.0",
+   "meaning": "碗底可用半径 / 杯口半宽(mouth_half 用它)"
+  },
+  {
+   "name": "FLOOR_Y / CX / RIM_Y / RIM_H",
+   "value": "404.0 / 400.0 / 80.0 / 324",
+   "meaning": "地板平面 / 杯轴 / 壁顶 / 杯口高度"
+  },
+  {
+   "name": "DESIGN_W / DESIGN_H / CW / CH",
+   "value": "800.0 / 460.0 / 520 / 660",
+   "meaning": "design 画布 / 逻辑画布"
+  },
+  {
+   "name": "VISIBLE_TOP",
+   "value": "-460*CUP_T/CUP_H ≈ -388.44",
+   "meaning": "覆盖层可见顶边(球在其上不画)"
+  },
+  {
+   "name": "_SCATTER_MAX",
+   "value": "10",
+   "meaning": "自由摆放生效的档位上限(x2/x3/x5/x10)"
+  },
+  {
+   "name": "_PILE_CACHE_MAX / _PILE_VARIANTS / _PILE_ROT_STEP",
+   "value": "128 / 12 / 137.508",
+   "meaning": "投影缓存 FIFO 上限 / 变体数 / 旋转黄金角步进"
+  },
+  {
+   "name": "_r_dp_for",
+   "value": "27.0",
+   "meaning": "球半径(dp),所有档统一"
+  },
+  {
+   "name": "_PILE_BAKED_SCALE / _PILE_BAKED_R",
+   "value": "10 / {2:50.233,3:50.233,5:50.233,10:50.233,20:44.385,50:50.233,100:50.233}",
+   "meaning": "烘焙表定点倍数 / 各档最终球半径"
+  },
+  {
+   "name": "_CUP_BALL_TEX_PX",
+   "value": "256",
+   "meaning": "杯中球贴图边长"
+  },
+  {
+   "name": "_BALL_RIM_K / _BALL_BAND_W / _BALL_BAND_S / _BALL_BAND_SPAN",
+   "value": "0.74 / 0.66 / 0.76 / 0.92",
+   "meaning": "边缘暗环收窄 / 猫眼带宽 / 强度 / 长度倍率"
+  },
+  {
+   "name": "RIM_BAND_STRIPS / RIM_BAND_ALPHA_TOP",
+   "value": "12 / 0.55",
+   "meaning": "补画段数 / 段顶 alpha"
+  },
+  {
+   "name": "RIM_BACK_BANDS",
+   "value": "((0.0,166/920),(694/920,808/920))",
+   "meaning": "back 里需补画的两段(杯口环后半 / 杯底环后半)"
+  },
+  {
+   "name": "BET_COLORS",
+   "value": "{1:'#39c98a',10:'#4da8ff',50:'#e0533b',100:'#a335ee'}",
+   "meaning": "投注档→球色(1 绿/10 蓝/50 红/100 紫)"
+  },
+  {
+   "name": "DEFAULT_BET",
+   "value": "10",
+   "meaning": "未知投注档回退值(同时是球色回退)"
+  },
+  {
+   "name": "BENCH_SEED",
+   "value": "20260914",
+   "meaning": "跑分随机源种子"
+  },
+  {
+   "name": "FLOOR_Y - RIM_Y",
+   "value": "324",
+   "meaning": "杯高(h 坐标),h_cap=RIM_H*0.95=307.8"
+  }
+ ],
+ "gotchas": [
+  "绘制次序一个字不许动: 接地阴影 < 后层玻璃(back) < 压暗(dim) < 远侧环(over) < 杯口环补画 < 弹珠 < 前层玻璃(front)。把压暗挪到后层玻璃之前 ⇒ 杯内只压 12%、杯外压 46%,杯子周围反而最亮。",
+  "球层必须按 self._balls 原始顺序**单趟**建指令。拆成『落定球+飞行球』两趟后实测 x100 一局 4750 帧里 25.5% 的重叠帧层次错乱、落定那一帧约 46 颗球单帧掉一半像素。旧写法没出事只是因为『发牌序恰好=z 降序』这个巧合。",
+  "每颗球必须自带 PushMatrix/PopMatrix 并**包住**自己的 Rotate —— Kivy 的 Rotate 是上下文指令,作用于其后所有指令直到被 Pop。漏了会导致 20 颗球的旋转叠到后面那块前层玻璃上,整块玻璃被拧飞(玩家原话『落杯动画一塌糊涂』)。",
+  "不可见的球**不删指令**,只把 size 置 (0,0) —— 指令条数在本局内必须恒定,否则每帧增删更贵还会打乱画家序。",
+  "每次 mode 迁移必须显式 _tbl_drop() 调 canvas.clear()。少了它退出装杯后杯子和压暗会**永久留在画布上**(canvas.clear 是唯一能擦掉它们的机制)。",
+  "持久表的球列表判据必须比**对象身份**不比长度 —— 新一局 8 颗换 8 颗时长度一样,只比长度会拿上一局的球继续画(位置全错)。尺寸也要进判据(杯口环子纹理按建表时尺寸切/摆)。",
+  "揭晓判定必须放在**所有 mode 迁移之后**且不能只认 win 分支。关在 win 里会让事件永久丢失(实测 86% 的局挂到下一局;『中奖后不再发射』时中奖音永久丢失)。",
+  "_last_touch(第一次触地,揭晓基准) 与 _last_settle(回弹停住,退场起点)**必须分开**。合成一个 ⇒ 球还在弹杯子就开始淡出(玩家『落进容器后消失得太快,没有回味』)。",
+  "退场基准必须用墙钟 _settled_at 而不是相对秒数 _last_settle —— 只有前者能和 time.time() 比。_layers 里 result 分支也必须按 mode 分支(_settled_at 在 play_win 里置 0,不看 mode 会算出天文数字 clamp 成 1,整场按退场终态渲染直到 T 才弹回)。",
+  "点击之前 result 段的 dy 必须是 0。否则整组停在『上浮过的』退场姿势上,不是装满的姿势。",
+  "Result 段**不许有任何时间兜底**:出口只有玩家点击(Window 级触摸观察者)。定时退场会在玩家切后台一分钟后回来那一帧把杯子和整屏压暗当场擦掉 —— 玩家 2026-09-12 定稿『不点就一直在』。",
+  "tick 末尾的『装满静止就跳过 _redraw』优化里,`_closing_at` 必须**单独判**:_result_busy 只看球有没有在动,退场那 0.25s 每帧都在淡出+上浮,漏判实测点击后 0.5 秒只重绘 1 次,淡出被掐成『啪一下消失』。",
+  "HUD 压暗取值必须来自板面本帧真正画上去的 _a_dim_now,**不许在 HUD 侧重新 _layers(time.time())** —— 两次采样差 10ms 就看得出来;退场结束那一帧 HUD 会多暗一整帧。且 _sync_hud_dim 必须在 tick_draw() **之后**调。",
+  "两块 HUD 压暗矩形**不能重叠**:0.68 叠 0.68 会变成 0.90,缝从『更亮』翻成『更暗』,只把问题翻个面。视口必须读 self.parent(AnchorLayout),按 self.x/width 反推在横屏大窗上会漏盖右边 122px 和顶边 56px。",
+  "球堆明暗必须用**离地高度 h 的绝对刻度**,不能用这一堆自己的 z 跨度做 min-max(旧写法让每堆亮度跨度恒为 1.61:1,两颗球的堆上深度只差 23.8px 却差 38% 亮度,读起来像两种材质)。杯底只压到 0.78 不压到 0.62(55% 的中奖画面是 2 颗球,压到 0.62 是净亏)。",
+  "`_enumerate` 的格子间距系数 k_p **不能从 1.02 再往下压到 1.00**:k_p=1.02 时跨层 3D 距离 2.0138r 只剩 0.7px 余量,1.00 时正好 2.000r,抖动一上来 _assert_pile 直接抛 unresolved overlap。",
+  "wall 模式的抖动系数**上限 0.09,不能到 0.10**:实测 0.10(±10px)会让 x100 触发缩球兜底(r 50.23→47.22),破坏玩家定稿的『球一样大』。",
+  "free 摆放(_scatter_floor)返回的每个点必须逐颗满足 |(x,z)|<=a 且两两球心距 >=2r,否则 _assert_pile 抛。它的半径要用**杯壁**允许的(floor_radius-r-jit)不是 dome 的 a —— 用土丘半径会把自由摆放白白锁死在中心。",
+  "改任何球堆参数(_PILE_SITES/_PILE_QUOTA/_PILE_ROT_STEP/_r_dp_for/k_p/jit/_SCATTER_MAX...)之后**必须重跑 tools/bake_pile_data.py**,否则烘焙表与行为脱钩(fx_probe 有『表 vs 现算逐位对拍』门禁守着)。",
+  "运行期**必须保留程序化生成的回退**(_beads_from_baked 返回 None → build_pile)。表损坏绝不能表现为『那一局没球』(演出空转 + 9 秒兜底)。",
+  "烘焙表里 `layer` 字段恒为 0,按它分层会静默失效 —— _support_map 反推 h 时用的是 FLOOR_Y-sy-K2*z。",
+  "『谁必须先落』的判据必须是**水平**距离 <2r,不是 3D 距离。用 3D 会漏掉约 2/3 的阻挡关系(实测 x100 一局 PEN 708,是『什么都不做』的 34 倍)。也不能用『接触/距离≈2r』—— 球堆有 ±9px 抖动,抖开后有球找不到任何支撑(实测 x100 v0 有 22 颗无支撑而底层只有 18 颗)。",
+  "build_pile 缩球兜底会**原地改 spec.r** —— 所以每局必须新建 PileSpec,绝不复用实例(否则 r 一局比一局小)。",
+  "震动必须挂在 `sfx.play(...)` 的**返回值**上,不自己再判一次时间:节流只能有一处真源,两边各判必然漂移(玩家听到响但没手上没感觉)。还要注意 play 的返回值语义是『请求已受理』不是『后端真播成了』—— 改成后者会让流一忙就整段没震。",
+  "落地音**不许**按颗数截断(曾有个 BOUNCE_BUDGET=24):删之前实测 x20 后半段静音 1.4s、x50 静音 1.8s、x100 静音 2.3s,弹珠还在落声音却没了。装杯音量只在这里乘 BOUNCE_GAIN_BOOST,别去动 _sfx_bounce 的合成增益(主游戏共用)或 SFX_MASTER。",
+  "装杯音不许换回 cup0..3 那套『玻璃音』:用户听完的反馈是『电子音而不是小球撞击』,已回退。撞击感来自攻击瞬间的宽带噪声,不是分音。",
+  "整场雨前移 shift 必须按**本局实测**的 min(t0+f_enter) 算,不能钉死:实测在 0.29~0.86 之间波动,钉死会让一部分局把球『还没开局就放进场』(凭空出现在半空)。安全性靠 shift<min(t0+f_enter) 恒成立。",
+  "_advance_balls 里落定判据是**绝对时刻 t**(t>=b['end']),不是 tt(已减过 t0,永远比不到) —— 用错球永远落不定,会一直按未落定插值停在空中。",
+  "落定那一帧的 _result_busy 判据要包含『有球刚停稳』(_unst != _was):停稳那帧它从 tt 插值位置跳到终值,少画一次就会留在旧位置。",
+  "_pump_reveal 里 `not self._balls` 那条**不能删** —— 它是排空用的(result→idle 那一帧先清空 _balls),保证走出 result 时欠的账必被放掉,而不是靠『hold_for 够长』这种算术侥幸。_abort 也必须把 _done_fired 置 True。",
+  "_reveal_deadline 必须先归零再 schedule _start_cup,**且**基准必须和 tick 判揭晓用同一个真源(win_fx.reveal_at())。历史上这里硬编码过 0.45,尾巴改 0.60 时静默脱钩 ⇒ 兜底提前触发 ⇒ 数字和语音提前剧透。别再写死任何和。",
+  "settle() 里同时 **_reveal_done=False** 与 `_win_seq+=1` 的顺序不能反;闸**只允许一处**(settle 的 _on_settled)。在 _reveal_win 里再加一道闸 = 两处判同一个东西,改一处另一处静默脱钩(hold_for 上已踩过)。",
+  "彩蛋路径在跑分期间不弹窗时**必须走 _easter_finish 解锁**,只 return 会让 _easter_hold 永不放,玩家被软锁死。",
+  "expect_sec 那边:settle() 调它时 play_win 还没被 CUP_TRIGGER_DELAY 调度,所以线上走的是**估算分支**,不是本局真实球数据 —— 别在这里加『必须读真实球』的新假设。",
+  "prebake_step 的自链式 Clock 回调**必须能收 1 个位置参数**(零参签名在真机启动 0.7s 必闪退,桌面 selftest/smoke 测不出来)。蒸发式替换那一段代码时极容易把 `Clock.schedule_once(self.prebake_step, 0.02)` 整句吃掉 ⇒ 预热链走不下去、_PREBAKE_DONE 永不置真,表现是『启动预热 5.8 秒变 90 秒』而画面上什么都看不出来。",
+  "玻璃 PNG 的非透明内容只到 design x 24.00..775.50,而杯矩形比游戏区左右各宽 12.5 —— 给玻璃加外发光/把杯口画宽/裁掉 PNG 透明边,杯壁上就会凭空出现一条竖直的硬压暗边。",
+  "`over` 层必须**原样画**(带贴图自带 alpha),不许再乘整体 alpha:它是一道更白的镜面高光而不是『更亮的 back』,按 α=1 整幅画会 −9% 反向过冲。有 over 时只让它接管杯口环那段,杯底那段仍走补画(over 的杯底段 alpha 只有 46,整条换过去杯底远半圈会暗约 11%)。",
+  "本段所有模块级名字都必须带 CUP_/_CUP 前缀或独一无二的词 —— 生成器是纯字符串拼接、不做去重,同名者会静默覆盖前面那个(实踩: 叫 _BALL_TEX 会被 ui 段的 `_BALL_TEX = None` 覆盖 ⇒ 首次中奖 AttributeError)。",
+  "跑分把 win_fx._rng 换成 Random(BENCH_SEED+1) 之后**必须还回去**,不还的话正常游戏的球路会被钉死、每局一模一样(比『跑分不可比』严重得多的事故)。",
+  "改 hold_for 的分档要注意它现在是个**参数保留但不再使用**的恒定值(2026-09-12 起统一 0.6s),HOLD_TIERS/HOLD_STEP 已删 —— 别因为『想给大奖多一点』再加回来,那会和点击逻辑打架。签名不改是因为 5 个消费者 + 6 条探针判据都写的是 hold_for(n)。",
+  "`_draw_bead`(老的逐帧画球实现)已不被 _redraw 调用,但它与 _tbl_apply_balls『逐字一致』—— 两份逻辑必须同步改,只改一处会静默脱钩。"
+ ],
+ "uncovered": [
+  "fx_probe 探针的具体判据(独立文件,不在 main.py 内);它钉住了绘制次序/Push-Pop 配对/HUD 压暗矩形几何/揭晓晚于末声等行为,重写时必须一并重写这些门禁。",
+  "`_layers()` 退场起点的数值不连续未被任何注释承认(见 notes),需实测确认是否有意。",
+  "_PILE_BAKED 84 个 key 的逐字坐标未逐项抄录(只确认结构与 _PILE_BAKED_R);重写若不沿用烘焙表则整表作废。",
+  "`_PILE_SITES` / `_PILE_QUOTA` 的 12 组是联合搜索结果,每组与哪个变体号配对、哪几组装得下 x100 未逐个验证(注释说 24 个合法序列里只有 12 个装得下)。",
+  "prebake 里的字形/文字纹理预热链(_build_texwarm/_WARM_DID/_FONT_WARM_ALL/_PIN_ORDER/sdl2 字体队列定位)与装杯只有『别在中奖那帧现做』的间接关系,本轮只盘到接口层面。",
+  "HUD 五行压暗的实现在 ui 段(RootWidget._build_hud_dim/_paint_hud_dim/_relayout_hud_dim),_row_dim 这个注释里提到的名字在代码中找不到(可能已改名或删除)。",
+  "`_vibrate` 的工作队列/工作线程实现(_VIB_Q/_vib_worker/_vib_warm/_vib_get)只读了签名与语义,未盘其失震兜底细节。",
+  "`_glass_over` 依赖的 assets/glass_tumbler_over.png 与生成器 generate_glass_tumbler.py(179..190) 不在本文件内,只按注释转述。",
+  "`_brk_wrap` 与帧率面板面板文案(装杯/杯层/球层)的表现未盘。",
+  "`--smoke` 的装杯相关断言(落容器延后、跑分照常播、彩蛋不弹窗)只读了部分。"
+ ],
+ "notes": "### _layers() 四个量在各阶段的取值(已按代码逐点验算)\n\n`_eo(u)=1-(1-clamp(u))^3`(三次缓出);pending 的 ts = now - (_t0 - WINDUP) = 距 settle 的秒数。\n\n| 阶段 | 条件 | a_dim(压暗) | a_cup(道具) | k(缩放) | dy(位移,正=上) |\n|---|---|---|---|---|---|\n| idle | mode=='idle' | 不画 | 不画 | — | — |\n| pending 起手 | ts ≤ 0.30 | 0.0 | 0.0 | 0.92 | 56.0 |\n| pending 中 | ts=0.38 | 0.875 | 0.704 | 0.976 | 16.6 |\n| pending 近末 | ts=0.46 | 1.0 | 0.989 | 0.999 | 0.62 |\n| win(落珠中) | 0 ≤ t < _last_settle | 1.0 | 1.0 | 1.0 | 0.0 |\n| result 静止(等点击) | t ≥ _last_settle,未点击 | 1.0 | 1.0 | 1.0 | 0.0 |\n| result 退场 td=0(点击那一帧) | td=now-_closing_at | **0.593** | 1.0 | 1.0 | 0.0 |\n| result 退场 td=0.11 | | 0.064 | 0.5 | 0.931 | 35.7 |\n| result 退场 td=0.22 | | 0.0 | 0.0 | 0.901 | 51.3 |\n| result 退场 td ≥ 0.25 | 随后转 idle | 0.0 | 0.0 | 0.90 | 52.0 |\n\n⚠️ **td=0 那一格的 0.593 是一个未被注释承认的不连续**:`u_dim=_eo((td+EXIT_DIM_LEAD)/RESULT_FADE)`,td=0 时已是 `_eo(0.16)=0.4073` ⇒ 压暗 alpha 在收到点击的那一帧从 1.0 **直接跳到 0.593**。这是 EXIT_DIM_LEAD=0.04(『压暗层比道具早撤』)在『点击』这个硬起点上被换算成的瞬时位移,不是渐变的开始。重写时要么接受它,要么把基准改成 `_closing_at - EXIT_DIM_LEAD`。\n\n### 时间轴的绝对锚点\n`T_land`(落袋)→ 0.15s 后 play_win(mode=pending,_t0=T_land+0.65,进场曲线仍以 T_land+0.15 为 ts=0)→ t=0 起 win 态、首球 0.12 露头 → 揭晓 = 最后一颗第一次触地 + 0.40 → result(最后一颗回弹停住)→ 点击(≥0.6s 后受理)+ 0.25s 退场 → idle。pending/win 有 `_t0 + 9.0s` 硬兜底;result 段**故意没有**任何时间兜底。\n\n### 球堆是怎么算出来的(一句话链)\n`count=multiplier` → 查烘焙表 `(count, _seq%12)` → 命中就用 84 个 key 之一的球心坐标;缺项则 `PileSpec(count, r_dp=27, rot_deg=v*137.508°, sites=_PILE_SITES[v], scatter=v, quota=_PILE_QUOTA[v])` → `build_pile`(count≥35 走『一坛子』逐层贴壁填到 h_cap=307.8;否则体积守恒初值 → 装不满就长高 ×1.08×24 → 仍不够缩球 ×0.94×4)→ `_polish` 30 轮消重叠并钳回壁内 → `_assert_pile` → `project_pile`(sy=FLOOR_Y-h-0.20z,shade=1-0.22*(RIM_H-h)/RIM_H,按 -z 排画家序)→ 挂 `_support_map` 偏序 → 每局 `_topo_deal` 出随机发牌序、`_make_balls` 为每球抽下落/两次弹跳/自转参数,再整场前移 rain_shift。\n\n### 与 mode 解耦\n揭晓这个一次性事件被刻意做成**不属于任何 mode 分支**:`_pump_reveal(now)` 在 tick 的所有 mode 迁移**之后**每帧调用,用 `_done_fired` 单向闩保证恰好放一次,并有 `not self._balls` 排空分支兜住 result→idle 那一帧。这样揭晓时刻(触地+0.4)与 win→result 切换点(触地+0.185~0.323)谁先谁后都不影响结果 —— 之前把它关在 win 分支里丢过 86% 局的中奖音。\n\n### 跑分与正常游戏的唯一差别(装杯相关)\n正常:`_rng` 无种子独立实例、result 段等点击。跑分:`_rng` 被换成 Random(BENCH_SEED+1)、auto_close=True 到点自走、HUD 压暗层跳过、play_win 内部再把 `_rng` 换成 Random(BENCH_SEED+2000+multiplier)。装杯本身**照常播**(用户定案),代价是采样窗口从 ~1.5s 拉长到 ~15~20s。\n\n### kind 分类依据\n- player-visible = 玩家肉眼/耳朵/手能感知(时序、位移曲线、配色、音量、震动、杯子几何)。\n- silent-invariant = 删了画面不报错但行为静默变坏(绘制次序、指令表作废、画家序单趟、Push/Pop 配对、缓存 FIFO、烘焙表回退、揭晓闩、_last_touch/_last_settle 分离、HUD 同帧取值、预热链)。\n- platform-glue = 平台/资产适配(三层玻璃贴图的资产回退、Window 级触摸观察者、Android-only 震动、跑分三处特判)。\n- dev-tool = 只服务开发/跑分观测(装杯计时埋点)。"
+}

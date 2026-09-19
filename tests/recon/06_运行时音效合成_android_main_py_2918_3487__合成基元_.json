@@ -1,0 +1,464 @@
+{
+ "constants": [
+  {
+   "meaning": "合成采样率。全部 41 个音效按此烘焙成 16bit 单声道 PCM(每样本 2 字节)。缓存指纹与 --dumpwav 头都用它。",
+   "name": "SR",
+   "value": "22050"
+  },
+  {
+   "meaning": "并发声道数(每个 SoundPool/WaveOut 池的上限)。注释详载 8→16→8 的往复: 16 的唯一理由(SoundPool 抢流卡主线程)在 v0.6.65 把 play 挪到发声线程后已断, 16 无任何已证实收益, 只留更多 AudioTrack 开销 ⇒ 退回 8。",
+   "name": "SFX_VOICES",
+   "value": "8"
+  },
+  {
+   "meaning": "合成固定种子。iter_bank 开头 _ARNG.seed(SFX_SEED), 保证每次启动音色逐样本一致; 也是磁盘缓存指纹的一部分。",
+   "name": "SFX_SEED",
+   "value": "20260727"
+  },
+  {
+   "meaning": "结果音(win*/lose)前置静音秒数 —— 让入袋 pocket 的\"咚\"先落地, 并制造揭晓前的定格。win 系列缓冲区长度 = 表内 dur + 0.18。",
+   "name": "SFX_RESULT_LEAD",
+   "value": "0.18"
+  },
+  {
+   "meaning": "总音量。两级量化: lvl = round(clamp(SFX_MASTER*gain, 0, 1) * 10); lvl<=0 视为不发声直接返回 False; pcm 后端按 lvl/10 缓存缩放后的 PCM(named 后端把 lvl/10 当音量给后端)。",
+   "name": "SFX_MASTER",
+   "value": "1.0"
+  },
+  {
+   "meaning": "成功发射音增益基准与满蓄力上限(按 power_u 线性插值)。0.75~1.0 被玩家判为\"像大炮\", 顶不许摸到 1.0。",
+   "name": "SFX_LAUNCH_GAIN / SFX_LAUNCH_GAIN_MAX",
+   "value": "0.60 / 0.80"
+  },
+  {
+   "meaning": "哑火发射音增益: 按 frozen_power/MISFIRE_POWER 插值(越接近阈值越响)。",
+   "name": "SFX_MISFIRE_GAIN / SFX_MISFIRE_GAIN_MAX",
+   "value": "0.35 / 0.50"
+  },
+  {
+   "meaning": "满蓄力后\"还顶着\"提示音的重复间隔与音量(轻版, 只是凭证不是事件)。",
+   "name": "CHARGE_HOLD_SEC / CHARGE_HOLD_GAIN",
+   "value": "0.60 / 0.40"
+  },
+  {
+   "meaning": "碰撞音下限(法向速率 px/s), 低于此值视为轻擦不发声。EV_ARC 取 1e9 = 弧面接触永不越过阈值(弧面是静音事件, 改用 _play_events 里的 rail 0.18)。",
+   "name": "SFX_MIN_SP",
+   "value": "{EV_PEG: 45.0, EV_CEIL: 60.0, EV_WALL: 70.0, EV_DIV: 45.0, EV_ARC: 1e9}"
+  },
+  {
+   "meaning": "撞击音满音量参考速率。impact 里 t=clamp(sp/REF,0,1), 音量=0.30/0.35+0.70/0.65*t。注: EV_ARC 不在此表, 走不到(下限已 1e9)。",
+   "name": "SFX_REF_SP",
+   "value": "{EV_PEG: 900.0, EV_CEIL: 1300.0, EV_WALL: 700.0, EV_DIV: 700.0}"
+  },
+  {
+   "meaning": "顶点转向音的音量映射端点: t=clamp((58-y)/(58-22),0,1), 音量=0.62+0.38*t, 档位 top1 if t>0.5 else top0。y 越小=蓄力越足=撞得越实。",
+   "name": "SFX_APEX_Y_LO / SFX_APEX_Y_HI",
+   "value": "58.0 / 22.0"
+  },
+  {
+   "meaning": "顶墙/天花板碰撞事件低于此高度不发闷咚: 同帧的 top 音已代表这一下, 不叠。",
+   "name": "SFX_TOP_Y",
+   "value": "30.0"
+  },
+  {
+   "meaning": "飞行音的实测中位速度包络(每 0.1s 一点, 共 16 点)与总长; 谷在 0.97s 的顶部滞空。配方改的是音色, 锚点(0.63s 碰弧面 / 0.97s 谷 / 1.33s 首钉)一个不许动。",
+   "name": "FLIGHT_ENV / FLIGHT_DUR",
+   "value": "16 点表 [1.00,0.91,0.82,0.72,0.63,0.54,0.45,0.30,0.23,0.18,0.18,0.21,0.27,0.32,0.34,0.25] / 1.50"
+  },
+  {
+   "meaning": "颗粒(滚动感)调制淡出时刻。⚠️ 代码值是 0.65, 而同函数 docstring 与 CLAUDE.md 都写 0.58 —— 注释与代码不一致。flight 在安卓端根本不加载, 影响面小。",
+   "name": "FLIGHT_GRAIN_END",
+   "value": "0.65"
+  },
+  {
+   "meaning": "中奖琶音 7 档参数表 (音符序列, 音间隔s, 总长s, 混响mix, 归一化峰值, 低音支撑Hz)。tier 由倍率 m 定: m<=2→0, <=3→1, <=5→2, <20→3, <50→4, <100→5, else 6。",
+   "name": "WIN_TIERS",
+   "value": "0:[C5 E5 G5],0.085,0.72,rv0.14,pk0.50 / 1:[+C6],0.080,0.85,0.18,0.55 / 2:[+E6],0.075,1.00,0.24,0.60 / 3:[+G6],0.070,1.20,0.28,0.65,bass130.8 / 4:[+C7],0.068,1.40,0.32,0.70,bass82.0 / 5:[+E6],0.064,1.60,0.36,0.78,bass55.0 / 6:[+G6 C7],0.062,1.80,0.42,0.85,bass41.2"
+  },
+  {
+   "meaning": "音名→频率表, 供 WIN_TIERS 与 _sfx_lose 查表(C4=261.63 … C7=2093.00)。",
+   "name": "NOTE",
+   "value": "17 个音名, 261.63~2093.00Hz"
+  },
+  {
+   "meaning": "_pack 的归一化峰值与首尾淡入/淡出秒数。淡入 0.6ms 极短以保住打击瞬态, 淡出 5ms 防尾部\"哒\"。",
+   "name": "_pack 参数 fi / fo",
+   "value": "fi=0.0006, fo=0.005"
+  },
+  {
+   "meaning": "极简梳状混响的 4 个延迟线(秒); 反馈系数 fb = 10^(-3*d/(SR*rt)); 每条线权重 0.25, 最后 buf += mix*wet。mix<=0 直接返回。",
+   "name": "_reverb 延迟线",
+   "value": "0.0231 / 0.0297 / 0.0371 / 0.0411"
+  },
+  {
+   "meaning": "钟/马林巴音色: (倍数, 幅度, 衰减时间常数) = (1.00,1.00amp,tau),(2.00,0.42amp*bright,0.55tau),(3.00,0.17amp*bright,0.34tau),(4.02,0.08amp*bright,0.22tau) + 3ms 噪声 0.09amp tau0.0012 lp0.85(琴槌敲击感)。高次衰减更快 ⇒ 温暖不刺耳。",
+   "name": "_add_bell 分音",
+   "value": "1.00/2.00/3.00/4.02, amp 1.00/0.42/0.17/0.08"
+  },
+  {
+   "meaning": "分音合成的提前收尾阈值: 包络衰减到 -80dB 以下 break, 省 CPU 且不改听感。",
+   "name": "_add_partials 收尾阈",
+   "value": "e < 1e-4"
+  },
+  {
+   "meaning": "合成全库(41 个音效)素材总长。bake_bank docstring 自称\"约 11.5s 素材, 耗时 ~350ms(后台线程)\"; 按各配方时长常量逐个相加实为 ≈16.0s ⇒ 注释已过时。安卓冷启动现场合成要\"好几秒\"(纯 Python 浮点循环)。",
+   "name": "bake_bank 材料时长",
+   "value": "≈16.0s @22050Hz"
+  },
+  {
+   "meaning": "暖/热启动音效加载失败的补载节奏: 每 0.6s 一轮, 最多 12 轮(≈7s) —— 之后认命。失败的 (name, path) 收在 self._failed 里后台线程重试; 每成功一个 named 就多登记一个, 闸门期望数会后涨。",
+   "name": "_retry_wait / _retry_rounds",
+   "value": "0.6s / 12 轮"
+  },
+  {
+   "meaning": "等\"后端真的能播\"的硬超时(绝不软锁是红线), 闸门优先等待窗口, 以及起手探测间隔(之后按实测解码速率自适应)。",
+   "name": "SFX_READY_TIMEOUT / SFX_GATE_FIRST_SEC / SFX_READY_POLL",
+   "value": "6.0 / 1.5 / 0.15"
+  },
+  {
+   "meaning": "缓存指纹 = SFX_SEED.SR.本文件 mtime.本文件 size; stamp 文件逐条记\"名字:字节数\", 逐个核对大小(只查存在性会把截断的 WAV 当有效缓存)。改了配方 ⇒ 文件变 ⇒ 指纹变 ⇒ 整目录作废。",
+   "name": "_sfx_code_tag 指纹",
+   "value": "\"%d.%d.%d.%d\" % (SFX_SEED, SR, mtime, size)"
+  },
+  {
+   "meaning": "发声\"慢调用\"判据(毫秒), 20ms 已远超一帧余量(帧间隔 12.5ms); 用来区分\"每次都慢\"(固定开销/HAL)与\"少数几次很慢\"(声道抢用)。_SND_STAT = [累计秒, 单次最慢秒, 最慢的名字, 超阈值次数]。",
+   "name": "SND_SLOW_MS",
+   "value": "20.0"
+  },
+  {
+   "meaning": "装杯逐颗落定音的节流(10 次/秒)、音量倍率、乘完后夹到的区间。震动挂在 sfx.play() 返回值上 ⇒ 音效关就不震, 只有一个反馈真源。",
+   "name": "BOUNCE_THROTTLE / BOOST / LO / HI",
+   "value": "0.10 / 1.8 / 0.35 / 1.00"
+  },
+  {
+   "meaning": "节流按族计时: peg0..5 / wall0..1 / div0..1 / top0..1 各共用一个闸门。按变体名各自计时 = 把聚合速率乘以变体数(peg 实测 6 倍 ⇒ 上限 75 次/秒), 每一次都是一次 JNI 往返, 足以顶过帧预算。",
+   "name": "_VARIANT_FAMILIES / _throttle_key",
+   "value": "(\"peg\",\"wall\",\"div\",\"top\")"
+  }
+ ],
+ "features": [
+  {
+   "behavior": "撞钉音。取 0.085s 缓冲, 三个非谐分音 (1.00,1.00,τ0.020)/(2.01,0.45,τ0.012)/(3.42,0.20,τ0.007) 叠 4ms 噪声瞬态(amp0.28, τ0.0015, lp0.60), 归一化峰值 0.72。六个音高变体轮播 f0=1040/1180/1330/1500/1680/1880Hz。",
+   "id": "sfx-peg",
+   "kind": "player-visible",
+   "name": "撞钉 6 变体 peg0..5",
+   "params": "dur=0.085s; peak=0.72; f0∈{1040,1180,1330,1500,1680,1880}; 播放增益 0.30+0.70*t(t=法向速率/900 夹0..1); 节流 0.08(族键 peg); idx=int(clamp(int(t*5.99)+_ARNG.randint(-1,1),0,5)",
+   "source": "main.py:3048-3055 (_sfx_tink); 3328-3329; 7047-7050 (impact)",
+   "trigger": "EV_PEG 碰撞事件且法向速率 ≥ SFX_MIN_SP[EV_PEG]=45; 帧循环里 _play_events 逐位消费"
+  },
+  {
+   "behavior": "撞墙音(塑料/木质闷咚, 低频为主)。0.13s, 分音 (1.00,1.00,τ0.045)/(1.87,0.30,τ0.018)/(3.10,0.12,τ0.008), 8ms 噪声 lp0.18(很闷), 峰值 0.59。两个音高 f0=185/225Hz; t>0.5 选 wall1(更响更沉)。",
+   "id": "sfx-wall",
+   "kind": "player-visible",
+   "name": "撞墙 2 变体 wall0..1",
+   "params": "dur=0.13s; peak=0.59; f0∈{185,225}; 增益 0.35+0.65*t(t=sp/700); 节流 0.055",
+   "source": "main.py:3057-3064; 3330-3331; 7053-7054",
+   "trigger": "EV_WALL 且 sp ≥ 70。注意: 若同帧 b.y < SFX_TOP_Y=30, 该帧的 EV_WALL/EV_CEIL 被整条跳过(交给 top 音, 不叠)"
+  },
+  {
+   "behavior": "撞隔板音(中频\"嗒\")。0.105s, 分音 (1.00,1.00,τ0.026)/(2.31,0.40,τ0.013)/(3.91,0.16,τ0.007), 5ms 噪声 lp0.35, 峰值 0.65。f0=430/505Hz, t>0.5 选 div1。",
+   "id": "sfx-div",
+   "kind": "player-visible",
+   "name": "撞隔板 2 变体 div0..1",
+   "params": "dur=0.105s; peak=0.65; f0∈{430,505}; 增益 0.35+0.65*t(t=sp/700); 节流 0.055",
+   "source": "main.py:3066-3073; 3332-3333; 7055-7056",
+   "trigger": "EV_DIV 且 sp ≥ 45; 同样受 b.y < 30 的丢弃规则约束"
+  },
+  {
+   "behavior": "天花板金属弧/弧面接触音。0.34s, 基频 760Hz 的钟形非谐分音 (1.00,1.00,τ0.110)/(2.76,0.55,τ0.070)/(5.40,0.30,τ0.040)/(8.93,0.15,τ0.022) + 6ms 噪声 lp0.70 + 混响(0.18, 0.35), 峰值 0.65。",
+   "id": "sfx-rail",
+   "kind": "player-visible",
+   "name": "顶部金属弧 rail(两个用途, 同名同波形)",
+   "params": "dur=0.34s; peak=0.65; f0=760; reverb mix=0.18 rt=0.35",
+   "source": "main.py:3075-3084; 3337; 7051-7052 (EV_CEIL); 20896-20898 (EV_ARC)",
+   "trigger": "两个互不相干的入口: ①EV_CEIL 撞天花板, 增益 0.45+0.55*t (t=sp/1300), 节流 0.22; ②EV_ARC 碰导流弧(静音事件族, SFX_MIN_SP=1e9 故不走 impact), 固定增益 0.18, 节流 0.05 —— 转向瞬间的轻\"擦\"声"
+  },
+  {
+   "behavior": "发射音(不含风声, 风声交给 flight)。0.28s: 0ms 释放咔哒噪声(0.010s/0.55/τ0.005/lp0.85) + 5ms 起 640→150Hz 下滑 chirp(0.11s, amp0.55, τ0.085, curve1.4) + 弹簧余振 152Hz 分音 (1.00,0.80,τ0.16)/(2.40,0.25,τ0.06); 峰值 0.75。",
+   "id": "sfx-launch",
+   "kind": "player-visible",
+   "name": "发射/哑火音 launch",
+   "params": "dur=0.28s; peak=0.75; chirp 640→150Hz; 成功增益 0.60+0.20*power_u; 哑火增益 0.35+0.15*clamp(power/MISFIRE_POWER,0,1)",
+   "source": "main.py:3086-3093; 3338; 20101-20102(哑火); 20144-20145(成功)",
+   "trigger": "点击蓄力发射: 成功走 launch 增益按 power_u; 力度 < MISFIRE_POWER(0.15) 的哑火走同一音效但更轻的增益档"
+  },
+  {
+   "behavior": "一条 1.5s 连续飞行音: 窄带共振噪声(二阶谐振器 r=0.93, 带宽≈420Hz, 共振频率随球速 330+560*e Hz) + 低频颗粒调制(密度随球速 46+88*e Hz, 0.65s 前淡出) + 竖井低频管腔 chirp(150→96Hz), 包络用实测中位速度表 FLIGHT_ENV。",
+   "id": "sfx-flight",
+   "kind": "silent-invariant",
+   "name": "飞行音 flight(安卓端已停用但必须留在 iter_bank 顺序里)",
+   "params": "dur=1.50s; peak=0.57; fi=0.004 fo=0.110; 每样本恰好取 1 个 _ARNG 随机数",
+   "source": "main.py:3099-3142 (_sfx_flight); 3339; 跳过点 6804-6807(_bake_named)与 6902-6903(_load_cached)",
+   "trigger": "⚠️ 全库唯一\"合成但既不打进 named 也不进缓存\"的音效: 冷烘焙循环 `if name == \"flight\": continue`, 缓存加载同样跳过 ⇒ 安卓端永不落盘、永不加载、永不发声。**但它是被 skip 而不是被删** —— 因为 iter_bank 顺序即音色, 它每样本消耗 1 个 _ARNG(共 33075 个), 直接删掉会平移后面所有音效的噪声实例。"
+  },
+  {
+   "behavior": "球冲到顶点转向(vy 由负转正)时顶部一声。hard=0: 0.13s, f0=520, 分音 (1.00,1.00,τ0.036)/(2.13,0.55,τ0.026)/(3.79,0.26,τ0.013)/(6.11,0.11,τ0.007), 7ms 噪声 lp0.72, 混响(0.10,0.22), 峰值 0.52。hard=1(近满蓄力): 0.17s, f0=610, τ 0.048, 峰值 0.78。",
+   "id": "sfx-top",
+   "kind": "player-visible",
+   "name": "顶点转向音 top0/top1",
+   "params": "dur 0.13/0.17s; peak 0.52/0.78; f0 520/610Hz; 增益 0.62+0.38*t, t=(58-y)/(58-22); top1 if t>0.5",
+   "source": "main.py:3144-3155; 3351-3352; 7059-7063 (Sfx.top); 21256-21258 (调用点)",
+   "trigger": "每发一次, 由 _topped 标志保证只播一次; 恒在 0.95~1.00s(竖直运动与 vx 无关, 实测零方差)。不走 impact 是因为 apex 处法向速率≈0, 按速率定音量必然听不见"
+  },
+  {
+   "behavior": "蓄力棘轮音。0.05s: 3ms 噪声(0.45/τ0.0012/lp0.70) + 分音 f0=380+lev*98, (1.00,1.00,τ0.010)/(2.70,0.52,τ0.005); 峰值 0.6+lev*0.032(逐档更响更亮)。",
+   "id": "sfx-ratchet",
+   "kind": "player-visible",
+   "name": "蓄力棘轮 ratchet0..5",
+   "params": "dur=0.05s; peak=0.6+lev*0.032 (0.600~0.760); f0=380+lev*98 (380~870Hz); lev=int(clamp(power,0,1)*5.99)",
+   "source": "main.py:3157-3165; 3334-3335; 20911-20915 (_play_charge_sound)",
+   "trigger": "蓄力中, 首次与之后每隔 0.25-0.18*power 秒一声(越蓄越密)。初版 340Hz/峰值0.22/20ms 在手机喇叭上掉到可闻阈下(\"蓄满了才听见\"), 现已抬高"
+  },
+  {
+   "behavior": "0.19s: 0ms 178Hz 弹簧压实闷响 (1.00,1.00,τ0.050)/(2.05,0.30,τ0.018) + 9ms 噪声 lp0.30 + 14ms 起 1260Hz 高音扣锁 (1.00,0.45,τ0.020)/(2.02,0.18,τ0.010); 峰值 0.6。",
+   "id": "sfx-charge-full",
+   "kind": "player-visible",
+   "name": "满蓄力提示 charge_full",
+   "params": "dur=0.19s; peak=0.6; 高音扣锁 1260Hz",
+   "source": "main.py:3167-3173; 3336; 20900-20910",
+   "trigger": "power >= 1.0 那一刻第一次(默认增益 1.0), 之后每 CHARGE_HOLD_SEC=0.60s 重复一次、增益降到 0.40(_charge_topped 标记控制首/续)"
+  },
+  {
+   "behavior": "0.24s: 120Hz 深长闷响 (1.00,1.00,τ0.085)/(2.03,0.25,τ0.028) + 10ms 闷噪声(0.30,τ0.008,lp0.15, \"沉进去\"不是\"撞\") + 6ms 起 1480Hz 金属锁扣\"咔哒\"(复用 tink 的非谐倍数 1.00/2.01/3.42) + 3ms 清脆瞬态; 峰值 0.74。",
+   "id": "sfx-pocket",
+   "kind": "player-visible",
+   "name": "入袋确认 pocket",
+   "params": "dur=0.24s; peak=0.74; 锁扣 1480Hz",
+   "source": "main.py:3175-3186; 3341; 20917-20919 (Sfx._play_pocket_sound); 20202(调用点)",
+   "trigger": "落袋结算那一拍(杯子还没出来), 所以与赢音拆开。m<=0 时紧接着再播 lose 0.9"
+  },
+  {
+   "behavior": "0.11s: 180Hz 分音 (1.00,1.00,τ0.026)/(2.05,0.30,τ0.011) + 3200Hz 单分音\"叮\"(amp0.10, 钢珠指纹) + 5ms 亮噪声瞬态(lp0.45); 峰值 0.50。",
+   "id": "sfx-bounce",
+   "kind": "player-visible",
+   "name": "落地弹跳/装杯落定 bounce",
+   "params": "dur=0.11s; peak=0.50",
+   "source": "main.py:3188-3194; 3342; 21361(落地), 21334(哑火回位 0.55), 9413-9417(装杯)",
+   "trigger": "三个入口: ①着地状态里 vy>60 时播, 增益 clamp(vy/500,0.3,1.0), 节流 0.05(每一跳一声, 逐跳渐弱靠 vy); ②哑火后球被推回柱塞, 固定 0.55; ③中奖玻璃杯逐颗落定, 增益 clamp(gain*1.8, 0.35, 1.00), 节流 0.10, **返回值驱动震动**"
+  },
+  {
+   "behavior": "0.16s: 520→140Hz 下行滑音(f = 520-380*t^1.5, 渐强 t^1.5, 含 0.15 的 2.03 次谐波) + 一层很轻气声(lp0.5, 0.12*t²); 归一化峰值 0.40, fi=0.003 fo=0.015。",
+   "id": "sfx-riser",
+   "kind": "player-visible",
+   "name": "入袋前铺垫 riser",
+   "params": "dur=0.16s; peak=0.40; 520→140Hz; 固定播放增益 0.9",
+   "source": "main.py:3196-3213; 3340; 21253-21255",
+   "trigger": "球越过后进入无钉区(b.y > RISER_Y=495, 即 PEG_TOP+(PEG_ROWS-1)*PEG_SY+BALL_R+PEG_R)且本发未播过(_risen 标志)。用下行滑音而非上滑 —— 上滑是\"起飞\"语法, 尾音落到 140Hz 正好接进落地 thud"
+  },
+  {
+   "behavior": "7 档中奖琶音, 音数/音间隔/总长/混响/峰值/低音支撑逐档递增: tier0 3音(C5 E5 G5) 0.72s pk0.50 → tier6 10音(加 C7 E6) 1.80s pk0.85。分音用 _add_bell: 幅度 0.90-0.05k, 末音 τ=0.62 其余 0.38。tier>=3 加低音支撑 (130.8/82.0/55.0/41.2Hz, (1.00,0.90,τ0.30)/(2.00,0.25,τ0.13)); tier>=4 在 lead+0.50 加 C6/E6/G6 大三和弦、lead+0.62 起 6 颗尾部碎星(1900+185k Hz, 间隔 0.075s), 混响 rt 0.70(tier<4 时 0.45)。全部前置 SFX_RESULT_LEAD=0.18s 静音。",
+   "id": "sfx-win",
+   "kind": "silent-invariant",
+   "name": "中奖琶音 win0..6",
+   "params": "WIN_TIERS 见常量表; 播放增益默认 1.0(不传 gain); 缓冲区长 = 表内 dur + 0.18",
+   "source": "main.py:3215-3246; 3343-3344; 20923-20936 (_play_win_voice); 20455(彩蛋分支)",
+   "trigger": "由中奖玻璃杯**全部落定那一刻**的回调 _play_win_voice 触发(不是球刚进槽)。⚠️ 安卓上只有 sound_mode != \"on\" 才走琶音分支, 而 sound_mode 只有 on/off 两态、off 又会 set_enabled(False) ⇒ win0..6 在正常玩法里**实际听不到**(语音模式播 voice_win{payout} 顶替); 仅彩蛋分支 (20452-20455) 在非语音档播 win1 0.6"
+  },
+  {
+   "behavior": "0.34s+0.18s 前置静音: F4(349.23) 于 lead+0.00 (amp0.70, τ0.18, bright0.5) → C4(261.63) 于 lead+0.11 (amp0.70, τ0.24, bright0.5); 混响(0.10, 0.26); 峰值 0.44。",
+   "id": "sfx-lose",
+   "kind": "player-visible",
+   "name": "未中 lose",
+   "params": "dur=0.34+0.18s; peak=0.44; F4→C4; 播放增益 0.9",
+   "source": "main.py:3248-3255; 3345; 20920-20921",
+   "trigger": "结算时倍率 m<=0, 紧跟 pocket 之后(柔和下行两音, 轻描淡写地过去, 不反复强调失败)"
+  },
+  {
+   "behavior": "0.035s: 2.5ms 软噪声(0.50/τ0.0012/lp0.75) + 940Hz 分音 (1.00,0.50,τ0.006)/(2.60,0.20,τ0.003); 峰值 0.52。",
+   "id": "sfx-click",
+   "kind": "player-visible",
+   "name": "UI 按键 click",
+   "params": "dur=0.035s; peak=0.52; 节流 0.08",
+   "source": "main.py:3257-3262; 3346; 19798(set_bet); 20022(set_rtp)",
+   "trigger": "点注额/期望返还档位按钮。**只查 click 开关, 不看 sound_mode** —— 静音期不响由 Sfx.play 的 enabled 闸门兜住"
+  },
+  {
+   "behavior": "0.28s: 155Hz 基频 + 0.34 的三次谐波 + 0.16 的五次谐波, 19Hz 颤音(0.55+0.45*sin), 6ms 起振、0.16s 指数衰减; 峰值 0.44。",
+   "id": "sfx-error",
+   "kind": "player-visible",
+   "name": "珠子不足 error",
+   "params": "dur=0.28s; peak=0.44; f0=155Hz; trem=19Hz; 节流 0.4",
+   "source": "main.py:3264-3273; 3347; 20065-20070",
+   "trigger": "start_charge 时 balance < bet 且**非语音档**(sound_mode != \"on\")。语音档改播 voice_nomoney(节流 3.0, 语音全长 2.9s)"
+  },
+  {
+   "behavior": "0.035s: 2280Hz 分音 (1.00,1.00,τ0.007)/(2.02,0.40,τ0.004) + 2ms 极短噪声(lp0.90); 峰值 0.47。",
+   "id": "sfx-coin",
+   "kind": "player-visible",
+   "name": "计分滚动 coin",
+   "params": "dur=0.035s; peak=0.47; 播放增益 0.8; 节流 0.055",
+   "source": "main.py:3275-3280; 3348; 21393-21396",
+   "trigger": "余额老虎机式滚分窗口内**每帧**尝试播一声(_coin_start <= now < _coin_until); 窗口 0.5s, 大奖(m>=10)滚 1.2s。小数靠节流压成 10 次/秒的\"叮叮叮\""
+  },
+  {
+   "behavior": "0.16s: 255Hz 分音 (1.00,1.00,τ0.022)/(2.30,0.30,τ0.010) + 50ms 滚噪声(0.14/τ0.030/lp0.25) + 75ms 起 300Hz 单分音(0.50, τ0.016); 峰值 0.49。",
+   "id": "sfx-ready",
+   "kind": "player-visible",
+   "name": "新球就位 ready",
+   "params": "dur=0.16s; peak=0.49; 播放增益 0.8",
+   "source": "main.py:3282-3288; 3349; 20371-20372 (park_ball)",
+   "trigger": "park_ball 把球放回柱塞、state 回 ready 时(silent=True 的调用点不播: 启动恢复档位等)"
+  },
+  {
+   "behavior": "0.55s: 7 颗硬币, 落点 t=0.02+k*0.06+U(-0.012,0.012), 每颗 f=1900+U(-260,520) Hz 分音 (1.00,0.80,τ0.010)/(2.03,0.30,τ0.005) + 2ms 噪声(lp0.90); 混响(0.14, 0.25); 峰值 0.59。**配方里唯一的运行时随机落点**(用 _ARNG)。",
+   "id": "sfx-cash",
+   "kind": "player-visible",
+   "name": "重置珠子 cash",
+   "params": "dur=0.55s; peak=0.59; 7 颗, 间隔 0.06s",
+   "source": "main.py:3290-3299; 3350; 20047",
+   "trigger": "重置珠子数量(弹珠回到 START_BEADS=1000)时播; 后接 voice_reset_progress(仅语音档, 节流 1.5)"
+  },
+  {
+   "behavior": "0.05s: f0 分音 (1.00,1.00,τ0.012)/(2.42,0.35,τ0.007) + 2ms 噪声(0.22/τ0.001/lp0.85); 峰值 0.50。三个音高 1960/2320/2760Hz 轮播, 倾泻时听感是\"叮叮叮\"上行计数而非同一声复读。",
+   "id": "sfx-bead",
+   "kind": "silent-invariant",
+   "name": "中奖金雨 bead0..2(已烘焙但无调用点)",
+   "params": "dur=0.05s; peak=0.50; f0∈{1960,2320,2760}",
+   "source": "main.py:3301-3308; 3353-3354",
+   "trigger": "⚠️ 全库唯一**没有任何 play() 调用点**的音效(拉网式 grep 只有定义与 yield): 会被烘焙、会被加载进池、占满编数与启动耗时, 但永不发声。追补音色时注意它不是现役音源"
+  },
+  {
+   "behavior": "已回退方案的墓志铭(3310-3321): 试过给中奖装杯做 4 个音高变体的\"玻璃音\"(1960/2180/2290/2540Hz, 非谐 2.42/2.76/2.19/2.55 倍, τ0.14~0.17 + 2.5ms 接触噪声, 峰值 0.45), 动机是 bounce 96% 能量在 300Hz 以下、过手机喇叭低切掉 15dB。",
+   "id": "sfx-cup-reverted",
+   "kind": "silent-invariant",
+   "name": "装杯音 cup0..3/cupland —— 不存在, 只有注释",
+   "params": "峰值 0.45; 1960/2180/2290/2540Hz",
+   "source": "main.py:3310-3321(纯注释); 反向证据: 全文件 grep \"cup\" 只命中这一行",
+   "trigger": "不触发。玩家判决: \"这个新的是电子音, 而不是小球撞击的声音\"。教训: 撞击感来自**攻击瞬间的宽带噪声**, 不是分音 —— 只要主导成分是几个正弦分音+长衰减, 无论基频/非谐都听着像电子音; 要照 _sfx_tink 的\"噪声打头 + 分音收尾\"改。另记: 装杯段的问题主要不在音色(整段只 1 个波形、3 个音量值, 二跳恒 lvl3, 节流后 x100 有 64% 间隔精确卡在 0.100s)"
+  },
+  {
+   "behavior": "41 个音效的唯一生成序列, 顺序固定: peg0..5 → wall0..1 → div0..1 → ratchet0..5 → charge_full → rail → launch → flight → riser → pocket → bounce → win0..6 → lose → click → error → coin → ready → cash → top0/top1 → bead0..2。开头 `_ARNG.seed(SFX_SEED)`。",
+   "id": "iter-bank",
+   "kind": "silent-invariant",
+   "name": "iter_bank 顺序即音色",
+   "params": "41 项; 每项 (名字, PCM字节); 生成序列共消耗 _ARNG 一条流",
+   "source": "main.py:3323-3354",
+   "trigger": "bake_bank() (3356-3358) = dict(iter_bank()); _bake_pcm 与 _bake_named 都吃它。**所有配方共用 _ARNG 一条随机流**(噪声、riser 气声、cash 落点、flight 每样本 1 个) ⇒ 换顺序 = 同一发球听到的噪声实例变了。故: 新增音效一律**追加末尾**, 且**必须保留 flight 在队列中**(删掉它会平移后面所有音效的噪声)"
+  },
+  {
+   "behavior": "bake_bank 一次全烘, 返回 {名字: 裸 PCM}; 每样本浮点合成、_pack 归一化到各自峰值并做首尾淡入淡出。",
+   "id": "bake-bank",
+   "kind": "platform-glue",
+   "name": "bake_bank / 合成耗时与缓存",
+   "params": "docstring: 约 11.5s 素材 / ~350ms; 实算素材 ≈16.0s; 安卓冷路径\"好几秒\"",
+   "source": "main.py:3356-3358; 6125-6139 (_bake); 6759-6782 (_bake_pcm); 6784-6825 (_bake_named)",
+   "trigger": "后台线程合成, **失败也置 baked=True**(否则加载页永不消失=软锁); 冷路径逐烘逐 prime(边烘边用, ratchet 排在前 15% 才赶得上开局第一次蓄力); 热路径命中 stamp 直接加载 WAV"
+  },
+  {
+   "behavior": "音效库体检(无声卡可跑): 逐条读 PCM 算 peak/rms/dc, 判 削波(pk>0.999)、太轻/静音(pk<0.10 或 rms<0.005)、直流偏移(|dc|>0.02)、首尾爆音(|a[0]|>500 或 |a[-1]|>500); 返回 (音效数, 异常列表), selftest 要求 cnt>=20 且无异常。",
+   "id": "sfx-check",
+   "kind": "dev-tool",
+   "name": "音效库体检 sfx_check",
+   "params": "pk>0.999 削波; pk<0.10 或 rms<0.005 太轻; |dc|>0.02 直流; |首/尾样本|>500 爆音",
+   "source": "main.py:7626-7652; 7617-7621 (selftest 第 4 项)",
+   "trigger": "python android/main.py --selftest(或 PC plinko.py --selftest)"
+  },
+  {
+   "behavior": "三级降级输出: winmm _WaveOut(8 声道, 唯一能做多声道叠加的 stdlib 路径, 直接播 PCM) → _WinsoundOut(单声道) → 静音。慢路径规避: waveOutOpen 8.8ms/次 ⇒ 后台 warm() 预开全部声道; waveOutReset 抢占 10ms/次 ⇒ 声道全忙时**直接丢弃**(drops+1), 不抢占。",
+   "id": "backend-pcm",
+   "kind": "platform-glue",
+   "name": "pcm 后端(winmm 多声道)",
+   "params": "voices=SFX_VOICES=8; _WHDR_DONE=1; _WAVE_MAPPER=0xFFFFFFFF; waveOutGetNumDevs()<=0 直接放弃",
+   "source": "main.py:3360-3477 (_WAVEFORMATEX/_WAVEHDR/_WaveOut); 3479-3484 (_scale_pcm); 3041-3045 (pcm_to_wav)",
+   "trigger": "PC/桌面。play_pcm 需要在 header 与 buffer 上保活到播完(self._hdr/self._buf), 否则播到一半内存被回收"
+  },
+  {
+   "behavior": "play(name, gain, throttle): 五道闸门(enabled → 互斥/已加载 → lvl>0 → throttle → 后端)。pcm 后端把 lvl/10 缩放后的 PCM 缓存进 _scaled(lvl=10 直接复用原始 PCM); named 后端把 lvl/10 当音量给后端。返回 True/False 语义被**震动**消费。",
+   "id": "play-quant",
+   "kind": "platform-glue",
+   "name": "Sfx.play 增益量化与节流",
+   "params": "lvl = int(round(clamp(SFX_MASTER*gain, 0, 1) * 10)); 10 档; lvl<=0 静默 return False",
+   "source": "main.py:6965-7033 (play); 6943-6950 (play_prepare); 5993-6006 (_throttle_key); 7097-7110 (set_enabled)",
+   "trigger": "每次发声。节流按**族**共用一个计时器(见 _VARIANT_FAMILIES); UI 语音族(voice_rtp_/voice_bet_/voice_mode_)有独立互斥: 上一句还在念时**掐掉旧的念新的**(v0.8.65, 旧行为是把新的丢掉, 玩家报\"选了 320% 却念 200%\")"
+  },
+  {
+   "behavior": "命名音效先落盘 WAV 到 plinko_sfx/, 冷路径逐烘逐 prime, 热路径按 stamp(名字:字节数)逐个核对大小后 prime; 加载失败的进 _failed 后台重试 12 轮 × 0.6s。语音每次启动重新 prime(不落缓存、不进指纹), 用另一个池(SFX_POOL_SPLIT)绕开 AOSP SoundPool 每池恒 2 条解码线程。",
+   "id": "backend-named",
+   "kind": "platform-glue",
+   "name": "named 后端(SoundPool)与磁盘缓存",
+   "params": "缓存目录 plinko_sfx; 指纹 = SFX_SEED.SR.mtime.size; 冷路径末尾 time.sleep(0.5) 再 _retry_failed",
+   "source": "main.py:3495-3534 (_sfx_cache_dir/_sfx_code_tag/_wav_write 原子写/_wav_wipe); 6888-6941 (_load_cached); 6827-6864 (_retry_failed)",
+   "trigger": "安卓优先 SoundPool; 缓存命中=1.9%? 不: 命中即热启动(不现场合成)。⚠️ 缓存里一条 WAV 被截断会被大小核对抓到 ⇒ 整目录作废重合成, 这是刻意的自愈路径(曾有\"一个失败就全删\"的不对称逻辑, 已改为原地重试一次)"
+  },
+  {
+   "behavior": "把后端调用搬出发声工作线程(队列 maxsize=64, 满则丢这一声, 绝不阻塞主线程); 真机实测 SoundPool.play() 单次最慢 143.6ms、50 次累计 2674ms、平均 53.5ms, 而帧间隔才 12.5ms ⇒ 主线程每响一声就被卡几十毫秒(1%Low 只有 7.8)。",
+   "id": "sfx-worker",
+   "kind": "silent-invariant",
+   "name": "发声工作线程(队列满即丢声)",
+   "params": "队列 maxsize=64; needs_worker 后端才起; 线程安全靠 SoundPool 自身 + 早就在后台线程调 JNI 的先例",
+   "source": "main.py:6060-6075; 6077-6095 (_backend_call); 6097-6123 (_drain); 7035-7040 (_enqueue)",
+   "trigger": "只有声明 needs_worker 的后端(安卓 SoundPool)才起线程。⚠️ 异步投递**一律返回 True**(与同步路径\"后端受理了\"同义) —— 返回值牵着装杯震动, 不能因为\"还不知道成败\"返回 False, 否则震动整段消失"
+  },
+  {
+   "behavior": "_pack: 归一化到各配方指定的 peak, 首 0.6ms 线性淡入、尾 5ms 线性淡出, 夹到 ±1.0 后转 16bit; 全零缓冲返回等长静音字节。_reverb: 4 条梳状延迟线(23.1/29.7/37.1/41.1ms)按 rt 算反馈、每条权重 0.25, buf += mix*wet。_noise: 单极点低通白噪声, 用 1/sqrt(lp) 补偿低通能量损失。",
+   "id": "pack-fade",
+   "kind": "silent-invariant",
+   "name": "_pack 归一化 + 首尾淡入淡出",
+   "params": "fi=0.0006s(保打击瞬态) fo=0.005s(防尾部\"哒\"); 峰值逐条各异 0.40~0.85",
+   "source": "main.py:3012-3039 (_pack); 2991-3010 (_reverb); 2923-2931 (_noise)",
+   "trigger": "每个音效的最后一道工序。去掉淡入会把打击瞬态削掉(听感变钝), 去掉淡出会在尾部产生\"哒\"的断音 —— 体检里的\"首尾爆音\"门禁就是防这个"
+  },
+  {
+   "behavior": "合成基元: _buf(dur) 零缓冲; _noise(n, lp) 低通白噪声; _add_partials(buf,t0,f0,parts,gain) 叠指数衰减正弦(parts=[频率倍数,幅度,衰减时间常数]); _add_chirp 扫频 f1→f2(curve>1 前段变化快); _add_noise 噪声瞬态; _add_bell 钟/马林巴音色(4 谐波 + 3ms 琴槌噪声); _reverb 极简梳状混响。",
+   "id": "primitives",
+   "kind": "silent-invariant",
+   "name": "合成基元库 (_buf/_noise/_add_partials/_add_chirp/_add_noise/_add_bell/_reverb/_pack/pcm_to_wav)",
+   "params": "_add_partials 衰减到 e<1e-4 提前 break; _noise comp=1/sqrt(max(0.02,lp))",
+   "source": "main.py:2919-3045",
+   "trigger": "被全部 41 个配方调用。pcm_to_wav 另供 winsound.SND_MEMORY 与 --dumpwav"
+  },
+  {
+   "behavior": "只提炼行为关键: ①只被重放冷启动实验阶梯调用, 且**48k 档已退休**(从 ARM_LADDER 元组里摘掉, 注释留档可复活); ②pools 档在 ARM_LADDER 第 3 项、仍可被选到; ③用途只是\"换个采样率/换个池数再量一次单价\", 音质与正确性都不进任何判据; ④_arm48_bench 用临时池(样本不能进主池, 否则闸门期望数与 _ids 脱钩), 用完立刻 release。",
+   "id": "head-helpers",
+   "kind": "dev-tool",
+   "name": "head 段实验残留 vs 活代码的判定",
+   "params": "_arm48_bench(n=10, rounds=5); _arm_pools_bench plan 2→4→2→4 交替; _warm_all timeout 6.0s",
+   "source": "main.py:60-88 (ARM_LADDER/SFX_GATE); 91-107 (_wav_pcm_read); 110-136 (_resample16); 138-145 (_wav_write_sr); 148-151 (_med); 154-178 (_warm_all); 181-259 (_arm48_bench); 260-... (_arm_pools_bench); 调用点 6452-6481; 阶梯推进 15615-15632",
+   "trigger": "**判定: 不是死代码, 但也绝不在出货路径上。** `_warm_all`/`_med` 只服务 _arm48_bench ⇒ 随 48k 档一起退休(可达性=零); `_arm_pools_bench` 只在隐藏菜单「重放冷启动」把档位推到 ARM_LADDER 第 3 项时跑一次; 两者都由 `_arm_extra` 这个字符串开关驱动(⚠️ 档位必须写在**后端对象**上, v0.8.60 曾写在 RootWidget 而读在后端 ⇒ 四档跑出一模一样的数)。重写时可整段丢弃, 但要知道: 它承载的是\"采样率不是杠杆/多开池不是杠杆(750ms 是平台地板)\"这两条已得结论"
+  },
+  {
+   "behavior": "SFX_MIN_SP/REF_SP 是\"碰撞多响\"的映射源, 弧面(EV_ARC)被显式排除(下限 1e9)改走固定 0.18 的 rail; 顶部用 apex 高度而非速率定音量(apex 处速率≈0)。SFX_TOP_Y=30 以下是 top 音的领地, 同帧的 EV_WALL/EV_CEIL 整条丢弃不叠。",
+   "id": "impact-map",
+   "kind": "silent-invariant",
+   "name": "撞击事件 → 音效的映射与\"不叠\"规则",
+   "params": "峰值 0.30~1.0 的连续映射; rail 双用途(0.45+0.55t / 固定 0.18)",
+   "source": "main.py:2901-2912; 20885-20898; 7042-7063",
+   "trigger": "每渲染帧汇总 ev/amp 后逐位消费。⚠️ top 的触发条件写成 `b.vy >= 0.0` 且受 _topped 只播一次守——重写时别改成\"真撞顶墙才响\": 实测只有满蓄力才真撞上(撞点速率仅 77px/s, 按速率定音量必然听不见)"
+  }
+ ],
+ "gotchas": [
+  "iter_bank 的顺序就是音色: 所有配方共用 _ARNG 一条随机流(噪声实例、riser 气声、cash 的 7 个落点/音高、flight 每样本 1 个), 换顺序或中间插一个用 _ARNG 的音效 = 后面所有音效的噪声实例全变。新增一律追加末尾, 且**不许删 flight** —— 它是被 `continue` 跳过而不是被删(每样本仍消耗 1 个随机数)。",
+  "bake_bank 的一个音效失败不能中断整库: _bake 用 try/except 包住合成并**在 except 之后**置 baked=True, 否则加载页永不消失(软锁)。这是项目红线。",
+  "_ARNG 同时被运行时 impact() 用来选 peg 变体索引(7048), 而它又是合成用的流、且 iter_bank 开头才重新 seed ⇒ 它是一条\"合成期的流\"和\"运行期的流\"共用的随机源。重写时如果让烘焙与游戏并发跑, 两边的抽取会互相插队。",
+  "增益量化只有 10 档且 lvl<=0 直接 return False: 传 0.0 的 gain 等于不发声, 而不是\"最轻的一声\"。",
+  "节流必须按**族**计时(_throttle_key), 不能按变体名。按变体计时等于把聚合速率乘以变体数: peg 有 6 个变体, throttle=0.08 会变成上限 75 次/秒, 每次一个 JNI 往返, 足以把帧时间顶过 16.67ms 预算(表现=\"弹珠在飞的时候一卡一卡\")。",
+  "SFX_MIN_SP 里 EV_ARC 写成 1e9 是刻意的: 弧面接触走不到 impact, 它由 _play_events 单独发 rail 0.18。若哪天把 1e9 改成正常值, 弧面会突然发出撞钉/撞墙级的响声。",
+  "_play_events 里 `if bit in (EV_WALL, EV_CEIL) and b.y < SFX_TOP_Y: continue` —— 这条丢弃规则与 top 音的触发是一对, 少一个就会\"顶点转向\"那一下叠两个音。",
+  "顶点音不走 impact 而用 apex 高度定音量: apex 处法向速率≈0, 按速率定音量必然听不见。改成\"真撞顶墙才响\"会静音几乎每一发。",
+  "flight 在安卓端是**跳过不加载**(6804-6807 / 6902-6903), 因此满编数在安卓是 40、在 PC(pcm 路径的 self.bank)是 41 —— 面板的\"满编/已加载\"口径依赖这条差异, 别在重写时把两处对齐成同一个数。",
+  "bead0/1/2 全库唯一没有 play() 调用点(会烘焙、会加载、占满编与启动耗时, 但永不发声)。cup0..3/cupland 已彻底回退, 只剩注释。巡音色清单时别把这两组当现役。",
+  "win0..6 在安卓正常玩法里实际听不到: _play_win_voice 在 sound_mode==\"on\"(语音档)时播 voice_win{payout} 就 return, 而唯一另一档 \"off\" 会 set_enabled(False)。只有彩蛋分支在非语音档播 win1。重写时要么保留这条\"语音顶替琶音\"的约定, 要么明确改设计。",
+  "Sfx.play 在 named 后端的异步投递路径**必须返回 True**, 因为装杯震动挂在它的返回值上(9413)。改成\"等后端确认再返回\"会让装杯的震动整段消失。同理\"音效已关就不震\"是有意为之(play 在 enabled=False 时返回 False), 不要在两处各判一次。",
+  "voice_ 系列(UI 语音/结果语音)与合成音效是两套数据源: 走目录全量加载、每次启动重新 prime、不进缓存指纹、不参与 iter_bank 的顺序体系。合成音的\"满编\"公式是 合成音数 + 语音条数, 两个数都必须在**并入/prime 之前/之后**取对位置。",
+  "改变音效配方不需要手工 bump 版本号: 缓存指纹 = SFX_SEED.SR.本文件 mtime.本文件 size。但反过来说 —— **只要改了 main.py(哪怕跟音效无关), 指纹就变, 整目录 WAV 作废重烘**。重写时如果保留这套机制, 要知道它是拿\"文件\"当版本号的。",
+  "缓存里一条 WAV 被截断必须能被判为无效(逐个核对 stamp 里的字节数), 只查存在性会把截断文件当有效缓存永久加载失败 —— 这是最难发现的静默故障之一。而单个 load 偶发失败**不能**触发整目录作废(会把一次热启动放大成 3.7 秒冷合成)。",
+  "_pack 的首尾淡入淡出不是可选项: 淡入(0.6ms)剥掉会把打击瞬态削钝, 淡出(5ms)剥掉会在尾部产生\"哒\"的断音。体检里的首尾爆音门禁 |首/尾样本|>500 就是守这个。",
+  "SFX_VOICES 的 8/16 拉锯: 提到 16 的唯一理由(SoundPool 抢流卡主线程)在 play 搬到发声线程后已断, 只留\"更多 AudioTrack 同时活着\"的开销 ⇒ 已退回 8。别再往上加, 也别再拿\"满了会被掐断\"当理由 —— 现在满了的行为是队列丢一声。",
+  "顶部/天花板/弧面/apex 是四个不同的事件源(EV_CEIL / EV_WALL / EV_ARC / vy>=0 的 apex), 音效上分别对应 rail(0.45+0.55t) / wall / rail(0.18) / top0|top1。把它们合并成一个\"撞顶音\"会丢掉\"转向 vs 真撞墙\"的区分。",
+  "FLIGHT_GRAIN_END 的代码值是 0.65, 而同函数 docstring 与项目 CLAUDE.md 都写 0.58 —— 注释与代码已经漂了。flight 在安卓端不加载所以无实害, 但搬这段代码时别照注释抄量。",
+  "bake_bank docstring 自称\"约 11.5s 素材, 耗时 ~350ms\", 而按 41 个配方的时长常量逐个相加是 ≈16.0s ⇒ 该注释已过时(加了 win6/bead 之后没更新)。重写时以实测为准, 别拿 11.5s 当预算。",
+  "SFX_RESULT_LEAD=0.18 是 win*/lose 缓冲区**内部**的前置静音(缓冲区长度 = 表内 dur + 0.18), 不是播放时的延迟。去掉它会让入袋的\"咚\"被中奖琶音盖掉、并抹掉揭晓前的定格。"
+ ],
+ "notes": "范围: E:\\\\AI_Tools\\\\other\\\\DanZhu\\\\android\\\\main.py 的 2918~3487 行(合成层), 加上为了回答\\\"什么时候响\\\"而必须读的播放层(5991~7109)与全部 play() 调用点(19798~21396)、以及 head 段 60~350 行的实验基元。行号均为真行号。\n\n规模: iter_bank 实际产出 **41 个音效**(peg6+wall2+div2+ratchet6+charge_full1+rail1+launch1+flight1+riser1+pocket1+bounce1+win7+lose1+click1+error1+coin1+ready1+cash1+top2+bead3 = 41)。项目 CLAUDE.md 里写的\\\"46 个\\\"与 cup0..3/cupland 已被回退(只剩 3310-3321 的注释), 重写时以 41 为准。\n\n四条与\\\"配方\\\"无关但决定听感的不变量, 建议原样保留: ①iter_bank 的生成顺序(共用 _ARNG, 顺序即音色, 只能追加末尾); ②每条音效各自的 _pack 归一化峰值(0.40~0.85, 决定库内响度平衡); ③按族节流(否则 peg 变体把速率乘以 6); ④增益 10 档量化 + lvl<=0 即静音。\n\nhead 段判定结论: _wav_pcm_read/_resample16/_wav_write_sr/_med/_warm_all/_arm48_bench 属**已退休档位的残留**(48k 对拍档从 ARM_LADDER 摘除, 代码保留可复活, 可达性=零); _arm_pools_bench 是**可达的实验路径**(ARM_LADDER 第 3 项, 只有隐藏菜单「重放冷启动」逐次换档时跑到)。两者都只在 `_arm_extra` 非空时执行, 且把结论行写进启动日志/重放详情弹窗, **不参与任何玩家可见行为**。它们承载的两条已得结论值得抄进新代码的注释: 采样率不是杠杆(22050 中位 56.3ms vs 48000 55.7ms, 字节比 2.16x); 多开池不是杠杆(2 池 930/984ms vs 4 池 741/747ms, 只快 21%, 750ms 是平台地板)。",
+ "subsystem": "运行时音效合成(android/main.py 2918~3487: 合成基元 + _sfx_* 配方 + iter_bank/bake_bank)及其触发/播放契约",
+ "uncovered": [
+  "SFX_POOL_SPLIT 的第二池(只装 voice_ 前缀)的完整行为与 gates/SoundGate 的 Java 侧实现 —— 只从调用点读了契约, 没读 _SoundPoolOut 全类。",
+  "voice_*.wav 具体 101 条清单与逐条触发(voice_bet_N/voice_rtp_N/voice_winN/voice_round_set_N/voice_reset_progress/voice_nomoney/voice_easter_N/voice_lose 等), 只盘到\"哪些分支会播\"和节流值。",
+  "中奖玻璃杯装杯段的逐颗 bounce 增益来源(_bounce 的 gain 参数由 WinPileFX 的哪一步算出)、以及 BOUNCE_GAIN_BOOST 之外的分层。",
+  "_sfx_flight 的谐振器/颗粒听感是否与 PC plinko.py 里现役的同名实现逐字一致(本盘点只覆盖 android/main.py)。",
+  "PC 侧 plinko.py 的 winmm _WinsoundOut 降级路径与 --dumpwav/--sfxtest 的完整行为(Kivy 之外)。",
+  "--selftest 里\"碰撞事件覆盖率(音效触发源)\"那一段的判据细节(只读了第 4 项音效库体检)。",
+  "启动日志/启动信息弹窗里那些音效统计字段(bake_ms/ready_ms/_no_audio_ms/_total_ms/n_missed/_SND_STAT)的口径与 UI 呈现 —— 属另一子系统。",
+  "运行时并发对 _ARNG 的影响是否真能发生(冷烘焙期间玩家能否发球) —— 现场受 _LoadVeil/_audio_ready 的遮罩时序约束, 未实测。"
+ ]
+}

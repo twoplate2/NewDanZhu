@@ -1,0 +1,566 @@
+{
+ "subsystem": "隐藏开发工程: 跑分 / CPU高压 / 诊断面板 / 启动加载 (android/main.py)",
+ "features": [
+  {
+   "id": "entry-longpress",
+   "name": "隐藏入口: 长按标题 3 秒",
+   "kind": "player-visible",
+   "behavior": "Window 触摸观察者命中 title_lbl 且 _bench_running 为假则记 _bench_start; 每帧 _check_title_hold 判 >=3.0 秒未触发过则弹菜单。抬手无条件清计时。无 __debug__/build flag 包着, 出货 APK 里终端用户就能进。",
+   "trigger": "标题上按住 3 秒",
+   "source": "main.py:14218-14256, 14344-14361",
+   "params": "3.0 秒硬编码; 与长按「期望返还比例」RTP_UNLOCK_HOLD=3.0 共用 _check_title_hold, 计时各自独立"
+  },
+  {
+   "id": "bench-menu",
+   "name": "「弹珠发射模拟测试」菜单",
+   "kind": "player-visible",
+   "behavior": "0.92 宽弹窗: 标题+六行说明+3 行 2 列 6 按钮 [开始模拟测试|查看模拟历史]/[CPU高压测试|高压测试历史]/[游戏信息|帧率上限设定]。",
+   "trigger": "长按标题 3 秒",
+   "source": "main.py:15174-15275 _show_bench_menu",
+   "params": "宽 0.92 高 520dp; 按钮高 52dp; 同行同色 COL_FIRE/COL_SOC/COL_BTN"
+  },
+  {
+   "id": "bench-menu-desc",
+   "name": "菜单说明文案",
+   "kind": "player-visible",
+   "behavior": "「模拟测试约 67 秒（含装杯动画）」+ 三条编号说明(渲染帧率/单核浮点/高压散热)。",
+   "trigger": "菜单建立时",
+   "source": "main.py:4795-4838 _bench_menu_desc",
+   "params": "「约 67 秒」是手写粗估, 改 SOC_SAMPLE_* 要回来改"
+  },
+  {
+   "id": "flow-render-sample",
+   "name": "阶段1 屏幕渲染采样(约25秒/5发)",
+   "kind": "player-visible",
+   "behavior": "_start_bench_test 存快照+钉随机+存盘面+锁输入+改状态栏; 让出 0.1 秒 -> _await_prebake 轮询 -> _start_benchmark 清累加器/起频率采样/绑 on_flip/锁核/起 0.1 秒 tick。tick 在 ready 时钉 9 槽=BENCH_BOARD[i]、start_charge、0.1 秒后 power=0.8 launch; 满 5 发收尾。",
+   "trigger": "菜单「开始模拟测试」",
+   "source": "main.py:15849-15924, 15925-16017, 16125-16164",
+   "params": "BENCH_TARGET_LAUNCHES=5; tick 0.1s; 让出 0.1s; 预热等待上限 20.0s; 发射力度 0.8"
+  },
+  {
+   "id": "render-metrics",
+   "name": "渲染指标: 平均/中位/1%Low/10%Low/p99/p90 + 每发飞行用时",
+   "kind": "player-visible",
+   "behavior": "_finish_render_sample 解绑 on_flip、复原渲染线程亲和性, 差分算真平均(总帧/总耗时)、中位、1%/10%Low、p99/p90。飞行用时按 _SINCE_LAUNCH 回落切段、只累加「飞行」「落袋」两类帧(排除装杯), 取均值。",
+   "trigger": "5 发发满时",
+   "source": "main.py:16165-16254 _finish_render_sample",
+   "params": "判据是计数器回落而非 ==0; 装机杯演出能把每发时长从 ~0.5s 撑到 6s, 必须过滤"
+  },
+  {
+   "id": "bench-blackveil",
+   "name": "跑分黑屏+白字进度层",
+   "kind": "player-visible",
+   "behavior": "_show_bench_dim 置纯黑 (0.05,0.06,0.09,1.0) + 锁方向 + 切真全屏 + 常亮; _set_bench_msg 写白字; _hide_bench_dim 三样成对还原。两者必须在主线程建(工作线程建会卡死)。",
+   "trigger": "物理段/高压段开始前",
+   "source": "main.py:14259-14343",
+   "params": "黑屏矩形取 self.parent 视口(不能 -self.x, 平板会右露缝); 白字按 texture_size/2 居中; 文字没变就跳过"
+  },
+  {
+   "id": "bench-progress",
+   "name": "黑屏白字按秒进度",
+   "kind": "player-visible",
+   "behavior": "波1 显示「物理演算第x/45秒」(分子从 1 起、整秒一格、封顶); 波2 显示「CPU高压测试第x/360秒」(纯墙钟秒表、封顶)。渲染采样那 25 秒一个字都不显示。",
+   "trigger": "0.25 秒轮询 _prog_tick",
+   "source": "main.py:14362-14461",
+   "params": "波1 分母 44.5->ceil=45; 进度与循环条件必须同源(波1 CPU秒+等待, 波2 墙钟)"
+  },
+  {
+   "id": "bench-phys",
+   "name": "阶段2 物理吞吐跑分(波1)",
+   "kind": "player-visible",
+   "behavior": "工作线程调 benchmark_trajectories: 预热 1 轮(不计分) + 5 轮样本, 每轮「掐头 0.5 秒不计分 -> 计分 4.0 CPU 秒 -> 尾 0.0」; 轮间 sleep 5 秒(关门不采频率); 用 thread_time 当分母。",
+   "trigger": "球落地后(_wait_idle_then_bench 轮询 ready)",
+   "source": "main.py:1647-1817, 16545-16562",
+   "params": "warmup=1.5/sample=4.0/runs=5/gap=5.0; HEAD=0.5 TAIL=0.0; 固定种子 预热98765 样本12345"
+  },
+  {
+   "id": "bench-result-popup",
+   "name": "成绩弹窗",
+   "kind": "player-visible",
+   "behavior": "显示设备/安卓/版本、平均|中位帧率、1%Low|10%Low、p99|p90、平均每轮步数+平均差系数、逐轮分数、每次飞行平均步运算/持续秒数/期间可完成次数、电池温度从X到Y; 分隔线下方灰字诊断块; 底部 [帧率曲线|关闭]。auto_dismiss=False 只能点关闭。",
+   "trigger": "波1 跑完",
+   "source": "main.py:16747-17012 _bench_done, 13139-13261 _bench_score_text, 18668-18809",
+   "params": "弹窗 0.90x460; 正文 14sp; 历史 100 条上限"
+  },
+  {
+   "id": "bench-counters",
+   "name": "跑分对存档状态的触碰与还原",
+   "kind": "silent-invariant",
+   "behavior": "_bench_counters_begin 把余额直接设成 1000; plays/hits/round_plays 只快照不归零; _bench_counters_end 放回 plays/hits 并把余额再重置一次, 幂等。",
+   "trigger": "开始/结束跑分(含 finally)",
+   "source": "main.py:15795-15848",
+   "params": "START_BEADS=1000; 不走 reset_balance(那会解锁输入+播音+写状态栏)"
+  },
+  {
+   "id": "bench-rng-pin",
+   "name": "跑分=放录像(随机钉死与还原)",
+   "kind": "silent-invariant",
+   "behavior": "random.getstate 存档 -> seed(BENCH_SEED); WinPileFX._rng 换 Random(BENCH_SEED+1); 发射时 arc_dy 用 Random(BENCH_SEED+1000+球号) 派生; 结束 setstate 原样还原。",
+   "trigger": "开始/结束跑分",
+   "source": "main.py:15872-15881, 20120-20124, 17002-17011",
+   "params": "BENCH_SEED=20260914; 绝不能用「跑完再 seed()」(会把正常游戏球路也钉死)"
+  },
+  {
+   "id": "bench-board-pin",
+   "name": "跑分固定盘面(钉死+还原)",
+   "kind": "silent-invariant",
+   "behavior": "_bench_save_board 存每档盘面副本; tick 每发把 9 槽全填 BENCH_BOARD[i] 并写回 _boards[rtp_target]; park_ball 跑分期间不重掷; _bench_restore_board 还回并刷 9 槽。不还会留下「9 个槽全是 x100」。",
+   "trigger": "开始/结束跑分",
+   "source": "main.py:16657-16694, 20352",
+   "params": "存副本 list(v), 不能存引用(multipliers 与 _boards[rtp] 是同一个 list 对象); 还原必须在 _bench_running=False 之前"
+  },
+  {
+   "id": "bench-fps-press",
+   "name": "跑分期间把帧率按到 10fps",
+   "kind": "silent-invariant",
+   "behavior": "_bench_fps_lock_on(phys) 计数式加锁, 在 _apply_fps_cap 这个唯一生效点上把 cap 取 min(cap, 10); 关锁归零才恢复。_request_android_high_hz 里也按同一闸门压对系统的请求。",
+   "trigger": "波1/波2 开始与结束",
+   "source": "main.py:5813-5930, 5770-5771",
+   "params": "两波同档 10; 请求 10 不等于拿到 10, 所以必须另记实际渲染 fps"
+  },
+  {
+   "id": "bench-easter-guard",
+   "name": "跑分期间抑制弹窗类演出",
+   "kind": "silent-invariant",
+   "behavior": "_bench_running 为真时: 彩蛋弹窗走 _easter_finish 解锁而不是只 return(否则 _easter_hold 永不放 = 软锁); _land_hold 缩短; HUD 压暗层不盖; park_ball 不重掷。装杯动画照常播(玩家定案保留)。",
+   "trigger": "跑分期间落袋/彩蛋触发",
+   "source": "main.py:13825-13836, 20169, 20244, 20274, 20385",
+   "params": "任何只 return 不 _easter_finish 的写法都是软锁"
+  },
+  {
+   "id": "flow-hp",
+   "name": "CPU高压测试(波2, 360 秒不停)",
+   "kind": "player-visible",
+   "behavior": "锁输入/改状态栏 -> 等球落地 -> 建黑屏白字 -> 工作线程: 先起频率+电池两条采样线程(空窗口) -> 锁核/提权 -> 盖 _hp_wall0 -> 填 [1,359] 窗口 -> benchmark_sustained(墙钟 360 秒, 每窗 1 CPU 秒, 窗间不停)。与波1 互斥。",
+   "trigger": "菜单「CPU高压测试」",
+   "source": "main.py:14484-14513, 14514-14682, 1820-1885",
+   "params": "SOC_SUSTAIN_WALL_SEC=360.0(墙钟); SOC_SUSTAIN_WINDOW_CPU_SEC=1.0; HP_FREQ_TRIM_SEC=1.0"
+  },
+  {
+   "id": "hp-result",
+   "name": "高压结果弹窗(3~4 按钮)",
+   "kind": "player-visible",
+   "behavior": "正文: 设备/连续高压测试 360 秒(再版本)/跑分只跑这几个核/已提权/首→末步每秒(增或降)/最低+平均/平均差系数/每10秒连续采样成绩 36 点/跑分核频率/电池温度/电池功率(含「⚠ 测试期间在充电」)。底部 [成绩曲线][频率曲线][功率曲线][关闭](缺数据就不建按钮)。",
+   "trigger": "高压跑完(_hp_done)",
+   "source": "main.py:14981-15173, 14762-14934 _hp_result_text, 14935-14980",
+   "params": "弹窗 0.90x460; HP_SAMPLE_SEC=10.0 -> 36 段取段中点 5,15,...,355; 最多 4 个控件避免 360dp 溢出"
+  },
+  {
+   "id": "hp-power",
+   "name": "电池功率采集(电流×电压)",
+   "kind": "platform-glue",
+   "behavior": "电压与温度共用一次 ACTION_BATTERY_CHANGED(0.1度/mV/plugged); 电流按序探 CURRENT_NOW -> CURRENT_AVERAGE -> sysfs current_now, 第一条能用的锁定(缓存的是「哪条路能用」不是值); 5Hz 定长网格采, 单位只能采完按全程分布猜; 开头读不到的空段+再延 5 秒整段剔除。",
+   "trigger": "高压测试期间",
+   "source": "main.py:2135-2628, 14570-14680",
+   "params": "power_hz=5.0; HP_PWR_SKIP_SEC=5.0; 单位阈值 20000(mA vs uA); |I|>30A 丢弃; 连续 3 次 0 判「没有 fuel gauge」"
+  },
+  {
+   "id": "hp-thermal",
+   "name": "热限制等级与 thermal zone 探测",
+   "kind": "dev-tool",
+   "behavior": "getCurrentThermalStatus() 取 0~6 热限制等级(不需权限, 依赖 Thermal HAL, 读不到返回 None 绝不编 0); _thermal_probe 枚举 32 个 /sys/class/thermal/thermal_zoneN。两者写进历史 JSON 但已从界面撤掉。",
+   "trigger": "高压收尾",
+   "source": "main.py:2400-2482, 14676-14679",
+   "params": "_THERMAL_NAMES=无/轻微/中等/严重/危急/紧急/关机; temp 是毫摄氏度"
+  },
+  {
+   "id": "freq-pipeline",
+   "name": "CPU 频率采集与逐核/亲和性仪表",
+   "kind": "dev-tool",
+   "behavior": "波1 每 0.5 秒采一次(开门时), 波2 按绝对墙钟 1Hz 采; 同时累加逐核统计(请求值 scaling_cur_freq + 实际值 cpuinfo_cur_freq); 只统计跑分核。面板/日志报「平均」不信中位(频率是双峰)。",
+   "trigger": "波1/波2 跑分期间",
+   "source": "main.py:1402-1459, 1888-2116, 5577-5676",
+   "params": "采样线程必须在锁核之前启动(新线程继承创建者亲和性); 波2 窗口用绝对时刻表达"
+  },
+  {
+   "id": "bench-cpu-pin",
+   "name": "跑分线程锁核(性能簇)",
+   "kind": "dev-tool",
+   "behavior": "读每个核 cpuinfo_max_freq/scaling_max_freq 分组, 找最高簇(容差 2%), sched_setaffinity 收窄; 读回验证, 系统不接受就复原并如实记原因。只作用于跑分/高压/渲染测量三条线程。",
+   "trigger": "波1/波2 工作线程开始与结束",
+   "source": "main.py:1474-1561, 16594/16614, 14532/14561",
+   "params": "_BENCH_PIN_FAST_CORES=True; 容差 1.02(同类核)/0.98(同簇); 非安卓/读不到如实记因"
+  },
+  {
+   "id": "bench-prio",
+   "name": "跑分线程提调度优先级",
+   "kind": "dev-tool",
+   "behavior": "setThreadPriority(THREAD_PRIORITY_URGENT_DISPLAY) 后 getThreadPriority(0) 读回, 只有变负数才算生效, 否则记原因; 结束复原。",
+   "trigger": "波1/波2 开始与结束",
+   "source": "main.py:1563-1620, 16596/16613, 14534/14560",
+   "params": "_BENCH_RAISE_PRIO=True; 只改这一颗线程, 不碰主线程"
+  },
+  {
+   "id": "speed-alloc-probe",
+   "name": "纯算术探针 + 分配探针(分块取最大)",
+   "kind": "dev-tool",
+   "behavior": "每轮样本后跑两把定工作量探针: 只碰寄存器的加法循环 vs 小对象分配/读写; 切成 4 块各 12.5ms, 返回最快那块。两个一起掉=核心慢, 只有分配掉=内存被抢。归一化跑分 = 中位步/秒 ÷ 中位算术探针 ×1e6。",
+   "trigger": "波1 每轮样本后 / 波2 每窗后",
+   "source": "main.py:1922-2013, 16637-16649",
+   "params": "_PROBE_BLOCKS=4; cpu_seconds=0.05"
+  },
+  {
+   "id": "diag-collect",
+   "name": "帧诊断采集",
+   "kind": "dev-tool",
+   "behavior": "采样期逐帧记 (间隔, 场景, 进程实算, 主线程 thread_time, _frame 自算, 是否预热, 最大 4 笔子步骤, 距发射帧数, 上一帧 swap 毫秒, 字号分解) + 平行表记文字重建次数; GC 回调量每次 gc 耗时; 收尾折成 diag dict 存进历史 JSON。",
+   "trigger": "渲染采样期",
+   "source": "main.py:16052-16124 _on_flip, 16018-16032, 16273-16544",
+   "params": "新列只能加在元组末尾(下标被按号取); 场景标签=装杯/飞行/落袋/哑火/蓄力/待机"
+  },
+  {
+   "id": "jank-thresholds",
+   "name": "卡顿帧/慢帧判据(相对本机中位)",
+   "kind": "silent-invariant",
+   "behavior": "卡顿帧 = 帧间隔 > 中位/0.55(等价帧率 < 中位 55%); 慢帧 = 帧间隔 > 中位/0.75(中位 75%, 必然包含卡顿帧)。绝不用绝对帧率门槛。",
+   "trigger": "诊断收尾与面板渲染",
+   "source": "main.py:16273-16332, 4539-4543, 18668-18809",
+   "params": "JANK_RATE=0.55; SLOW_RATE=0.75; 门槛与帧数必须同源(都从 d['p50'] 派生)"
+  },
+  {
+   "id": "fps-curve",
+   "name": "帧率曲线弹窗 + 放大",
+   "kind": "player-visible",
+   "behavior": "FpsCurve 按帧间隔画线, 带「当时在演什么」阶段条; 点一下放大成可左右拖的长条图; 底部 [复制逐帧日志][保存日志][关闭]。打开时临时静音字体账本 3 秒。",
+   "trigger": "成绩弹窗「帧率曲线」/ 历史详情最后一条",
+   "source": "main.py:11643-11944 FpsCurve, 18354-18464, 18282-18353",
+   "params": "ZOOM_PER_FRAME_PX=2.0; 线宽默认 1.0(真 1px); _FS_MUTE_SEC=3 秒"
+  },
+  {
+   "id": "speed-curve",
+   "name": "高压三条曲线(成绩/频率/功率)",
+   "kind": "player-visible",
+   "behavior": "SpeedCurve 单轴: 上下留白+向外取整友好刻度+保底离底 5%; 功率两条粒度「每帧」(原样 1710 点)/「每5秒」(每 25 格取中位) 可切, 粒度写进配置并当场重算面板三数。",
+   "trigger": "高压结果/历史详情按钮",
+   "source": "main.py:12923-13126 SpeedCurve, 19057-19184, 19185-19231",
+   "params": "POWER_GRAINS=(每帧,每5秒); POWER_GRAIN_K={每帧:1, 每5秒:25}; 少于 2 个有效点不开窗"
+  },
+  {
+   "id": "bench-history",
+   "name": "模拟测试历史表(4 列)",
+   "kind": "player-visible",
+   "behavior": "列 = 时间(去年份)/平均|1%Low帧/平均分|平均差系数/详情按钮; 固定列宽准表格 80+66+92+50, 表头独立排版、全表统一字号; 空态两根弹簧居中、面板高度不变; 底部 [清空历史][关闭]。",
+   "trigger": "菜单「查看模拟历史」",
+   "source": "main.py:19420-19690, 19358-19419",
+   "params": "_HW=(80,66,92,50)dp; 头部分母是 3 不是 4; 记录文件 plinko_bench_history.json; 上限 100 条"
+  },
+  {
+   "id": "hp-history",
+   "name": "高压测试历史表(4 列)",
+   "kind": "player-visible",
+   "behavior": "列 = 时间/平均值/平均差系数/详情按钮; 与 bench 历史同款但宽 0.96、高固定 0.7*_vh、严禁调 _popup_fit_content(ScrollView minimum_height=0 会把列表压成 0 行); 脚注两行解释口径。",
+   "trigger": "菜单「高压测试历史」",
+   "source": "main.py:18810-19009",
+   "params": "_HW=(110,58,62,58)dp; 行高 26dp; 记录文件 plinko_hp_history.json"
+  },
+  {
+   "id": "history-clear",
+   "name": "清空历史(二次确认)",
+   "kind": "player-visible",
+   "behavior": "弹确认框写明条数与「不可恢复」, 确认后清内存+写盘+当场重开面板看空态。两张表各清各的。非空才放出「清空历史」按钮。",
+   "trigger": "历史面板「清空历史」",
+   "source": "main.py:19691-19741, 19010-19056",
+   "params": "正文绝不能出现 markdown 星号(Kivy 原样显示)"
+  },
+  {
+   "id": "startup-info",
+   "name": "「游戏信息」弹窗(启动诊断)",
+   "kind": "player-visible",
+   "behavior": "标题 = 跳跳的弹珠机 vX.Y.Z; 正文 = 制作时刻(取 main.py mtime) + sfx.audio_detail() 若干行(音频后端/冷热启动总耗时/音效加载/加载失败/后端重建/音效个数) + 实时「温度：xx 度／耗电或充电：x.xx W」行(0.5 秒刷新) + 按钮 [重放冷启动|确定]。纯只读。",
+   "trigger": "菜单「游戏信息」",
+   "source": "main.py:15327-15500, 6506-6700, 2229-2278",
+   "params": "弹窗 0.84; 字体子集无「摄」「氏」「瓦」, 用「度」和 W; 行数有硬预算, 加行必须同步改高度公式"
+  },
+  {
+   "id": "log-export",
+   "name": "三类日志导出 txt + 降级链",
+   "kind": "player-visible",
+   "behavior": "_bench_frame_log 拼逐帧日志(头部: 设备/版本/窗口/口径A长停顿/物理跑分与该段CPU平均频率/逐轮步每秒/强制帧率与实际渲染/逐核频率/亲和性/GC/内存冻结/JNI/配置写盘, 之后每行一格「帧间隔,阶段,文字重建,_frame自算,主线程,发声,震动,最大子步骤,等屏幕」); _startup_log_text 拼启动全程; _power_log_text 拼功率原始采样。",
+   "trigger": "成绩弹窗「保存日志」/ 功率曲线「保存记录」/ 启动信息「保存加载日志」(后者已隐藏)",
+   "source": "main.py:17013-17847, 17985-18131, 17878-17984, 18153-18281",
+   "params": "文件名 plinko_fps_/plinko_startup_/plinko_power_ + YYYYmmdd_HHMMSS.txt; 四级落盘 + 剪贴板兜底"
+  },
+  {
+   "id": "boot-log",
+   "name": "启动加载日志记录器(只写不改)",
+   "kind": "silent-invariant",
+   "behavior": "_BOOT_T0 取在 kivy import 之前; _boot_log(tag,msg) 只 append (ms,tag,msg), 自身吞掉一切异常; 全文件 55 个调用点, tag ∈ boot/sfx/bake/load/probe/prebake/frame; 唯一读者是导出那一处。另有 _PROBE_TRACE/_PROBE_COST/_LOAD_BYTES 三个只读旁证。",
+   "trigger": "模块加载起到摘页",
+   "source": "main.py:32-88, 55 处调用",
+   "params": "一次 append 几微秒; 必须只写不改(没有任何逻辑读它做判断)"
+  },
+  {
+   "id": "arm-ladder",
+   "name": "三档对照实验(重放冷启动时轮换)",
+   "kind": "dev-tool",
+   "behavior": "每次「重放冷启动」把 gating 档位往下一档轮换: (first,'') 出货形态 / (off,'') 老探针对照 / (first,'pools') 2池vs4池对拍; 档位一律写在**后端对象**上(out._gate_mode/_arm_extra), 由 _await_ready 从后端读。SFX_GATE=False 则闸门永不挂载。",
+   "trigger": "「重放冷启动」每次点击",
+   "source": "main.py:60-88 ARM_LADDER/SFX_GATE, 15556-15666, 6270-6470",
+   "params": "3 档; 每档前清 _PROBE_TRACE/_PROBE_COST"
+  },
+  {
+   "id": "loadveil",
+   "name": "冷启动加载页(KTV 扫色动画)",
+   "kind": "player-visible",
+   "behavior": "_LoadVeil 盖整屏 + 吞掉所有触摸(必须是 Widget 不是只画矩形)。六个字两层 Label 叠 + Stencil 裁剪: 底下是上一轮颜色、上面是这一轮颜色露到圆点左边 —— 粒度像素级, 三色循环(银->沙金->灰绿)。整行同时淡入 0.22s; 摘页零淡出。",
+   "trigger": "音效未就绪时 build 建页",
+   "source": "main.py:21446-21569, 21571-21830",
+   "params": "VEIL_BG=#0b1220(必须与 buildozer presplash_color / p4a hook 同值); LEAD=0.25 SWEEP=0.62 ROUND_GAP=0.30; MIN_SEC=0.22; MAX_SEC=6.0"
+  },
+  {
+   "id": "veil-exit",
+   "name": "加载页摘除判据与时序埋点",
+   "kind": "silent-invariant",
+   "behavior": "普通启动页出口 = 音效就绪 且 t>=0.22 -> 立刻摘页, 记录「启动总耗时」(启动时钟绝对时刻)、「无音频加载累计耗时」= max(加载页演完实测时刻, 烘焙收工) 并夹在实际摘页时刻之下、四元快照。重放页出口只有玩家点击 + 15 秒防软锁。",
+   "trigger": "每帧 _frame 调 _LoadVeil.tick",
+   "source": "main.py:21118-21204, 15276-15325, 21737-21773",
+   "params": "两个时钟必须同源; _done_at_boot 必须实测(拿常量算会系统性偏小); REPLAY_BAKE_MAX_SEC=15.0"
+  },
+  {
+   "id": "replay-coldstart",
+   "name": "重放冷启动(不丢存档)",
+   "kind": "dev-tool",
+   "behavior": ": 先建结果页 -> 清音效缓存目录 -> 重置 Sfx 全部状态 -> 轮换实验档 -> 清探针累加器 -> replay_reset 换新池 -> 后台重烘。绝不新建 Sfx 对象。",
+   "trigger": "「游戏信息」->「重放冷启动」",
+   "source": "main.py:15556-15666",
+   "params": "只在 state=='ready' 且无 in-flight 时允许; 失败也必须置 baked=True 放行(绝不软锁)"
+  },
+  {
+   "id": "fps-cap-settings",
+   "name": "帧率上限设定(滑条)",
+   "kind": "player-visible",
+   "behavior": "六档滑条 + 「当前设定：N Hz」+ 提示「实际帧率上限=min(屏幕支持,系统设定,本窗口设定)」, 确定后持久化并立即重申 Android 高刷请求。",
+   "trigger": "菜单「帧率上限设定」",
+   "source": "main.py:20646-20716, 5683-5698",
+   "params": "FPS_CAP_OPTIONS=(60,90,120,144,165,185); FPS_CAP_DEFAULT=120; FPS_CAP_PC=120; 读坏存档永远回 120"
+  },
+  {
+   "id": "high-hz-request",
+   "name": "Android 高刷模式请求",
+   "kind": "platform-glue",
+   "behavior": "按「同分辨率模式里不超过 min(屏幕峰值, Settings.System.PEAK_REFRESH_RATE, 用户档位) 的最高档」选 modeId: API30+ 调 Window.setFrameRate, API23+ 设 preferredDisplayModeId(在 UI 线程)。跑分闸门开着时把 target 再压到 10。",
+   "trigger": "build 起循环前 / on_resume / _apply_fps_cap",
+   "source": "main.py:5701-5803, 5894-5930",
+   "params": "读不到系统设置时不能当 60; 只压 Clock._max_fps 不压这里是错的(真机实测 70.5fps 没按住)"
+  },
+  {
+   "id": "bench-sysui",
+   "name": "跑分期间系统栏/常亮/方向锁三连",
+   "kind": "platform-glue",
+   "behavior": "_show_bench_dim 一次性: 锁方向(setRequestedOrientation 14) + 切真全屏(6 个 SYSTEM_UI_FLAG) + FLAG_KEEP_SCREEN_ON; _hide_bench_dim 成对还原。三个都在同一个 UI 线程 Runnable 里应用。",
+   "trigger": "两波的黑屏开/关",
+   "source": "main.py:10990-11078, 14259-14343, 21983-22105",
+   "params": "常亮用窗口标志不用 WakeLock(不需权限且随窗口可见性自动失效)"
+  },
+  {
+   "id": "smoke",
+   "name": "桌面自动冒烟夹具",
+   "kind": "dev-tool",
+   "behavior": "定时器链 s1..s9b: 蓄力发射/截图/必中盘验中奖特效/静音对比/装杯/哑火/余额不足飘字/跑分中彩蛋不弹+解锁断言。when_ready 轮询等 state 回 ready 以免断言被静默跳过。",
+   "trigger": "python main.py --smoke",
+   "source": "main.py:22147-22331 _smoke",
+   "params": "截图落 tempfile/plinko_smoke; when_ready 默认 120 次 x0.1s"
+  }
+ ],
+ "constants": [
+  {
+   "name": "BENCH_TARGET_LAUNCHES",
+   "value": "5",
+   "meaning": "渲染采样阶段自动发射的球数(决定采样窗口约 25 秒)"
+  },
+  {
+   "name": "BENCH_SEED",
+   "value": "20260914",
+   "meaning": "跑分固定随机种子; 改它=换一盘录像, 历史跑分不可比"
+  },
+  {
+   "name": "BENCH_BOARD",
+   "value": "(5, 10, 20, 50, 100)",
+   "meaning": "跑分固定盘面的 5 个倍率, 第 N 发把 9 槽全填成第 N 个"
+  },
+  {
+   "name": "START_BEADS",
+   "value": "1000",
+   "meaning": "跑分开始/结束时把余额重置到的起始值"
+  },
+  {
+   "name": "SOC_WARMUP_CPU_SEC",
+   "value": "1.5",
+   "meaning": "波1 预热轮 CPU 秒数(不计成绩)"
+  },
+  {
+   "name": "SOC_SAMPLE_CPU_SEC",
+   "value": "4.0",
+   "meaning": "波1 每轮计分段 CPU 秒数"
+  },
+  {
+   "name": "SOC_SAMPLE_RUNS",
+   "value": "5",
+   "meaning": "波1 样本轮数(奇数, 取中位无偏)"
+  },
+  {
+   "name": "SOC_SAMPLE_GAP_SEC",
+   "value": "5.0",
+   "meaning": "波1 样本之间墙钟睡眠(Geekbench 6.1 口径)"
+  },
+  {
+   "name": "_BENCH_HEAD_SEC / _BENCH_TAIL_SEC",
+   "value": "0.5 / 0.0",
+   "meaning": "每轮窗口掐头(等 DVFS 爬坡) / 不掐尾"
+  },
+  {
+   "name": "SOC_SUSTAIN_WALL_SEC",
+   "value": "360.0",
+   "meaning": "波2 高压持续真实时间(墙钟), 循环条件本身"
+  },
+  {
+   "name": "SOC_SUSTAIN_WINDOW_CPU_SEC",
+   "value": "1.0",
+   "meaning": "波2 每窗 CPU 秒数(=步/秒的分母)"
+  },
+  {
+   "name": "HP_SAMPLE_SEC",
+   "value": "10.0",
+   "meaning": "高压面板「每 10 秒连续采样成绩」的抽点间隔, 360 秒=>36 段取段中点"
+  },
+  {
+   "name": "HP_FREQ_TRIM_SEC",
+   "value": "1.0",
+   "meaning": "高压频率/温度采样窗口掐头去尾 => 只统计 [1, 359] 秒"
+  },
+  {
+   "name": "HP_PWR_SKIP_SEC",
+   "value": "5.0",
+   "meaning": "跳过开头读不到的空段后, 再延 5 秒才开始统计功率"
+  },
+  {
+   "name": "POWER_GRAINS / POWER_GRAIN_K",
+   "value": "(每帧, 每5秒) / {每帧:1, 每5秒:25}",
+   "meaning": "功率曲线两个粒度及每点合并的格数"
+  },
+  {
+   "name": "_BENCH_FPS_FORCE / _BENCH_FPS_FORCE_PHYS",
+   "value": "10 / 10",
+   "meaning": "波2 / 波1 跑分期间强制帧率上限(两波同档)"
+  },
+  {
+   "name": "_PROBE_BLOCKS",
+   "value": "4",
+   "meaning": "纯算术探针与分配探针的分块数, 每块 12.5ms, 返回最快那块"
+  },
+  {
+   "name": "JANK_RATE / SLOW_RATE",
+   "value": "0.55 / 0.75",
+   "meaning": "卡顿帧/慢帧判据(帧率低于本机中位帧率的比例)"
+  },
+  {
+   "name": "FPS_CAP_OPTIONS / DEFAULT / PC",
+   "value": "(60,90,120,144,165,185) / 120 / 120",
+   "meaning": "帧率上限档位、默认值、PC 上等效上限"
+  },
+  {
+   "name": "SFX_GATE / ARM_LADDER",
+   "value": "True / 3 档元组",
+   "meaning": "音效就绪闸门总开关与重放冷启动轮换的对照档位表"
+  },
+  {
+   "name": "_BENCH_PIN_FAST_CORES",
+   "value": "True",
+   "meaning": "跑分/高压/渲染测量三条线程是否锁到性能簇"
+  },
+  {
+   "name": "VEIL_BG",
+   "value": "#0b1220",
+   "meaning": "启动页底色, 必须与 buildozer presplash_color 和 p4a hook 同值"
+  },
+  {
+   "name": "VEIL_TITLE_MIN_SEC / MAX_SEC",
+   "value": "0.22 / 6.0",
+   "meaning": "加载页最短停留(整行淡入时长) / 最长停留(=SFX_READY_TIMEOUT)"
+  },
+  {
+   "name": "VEIL_TITLE_LEAD/SWEEP/ROUND_GAP/IN_SEC",
+   "value": "0.25 / 0.62 / 0.30 / 0.22",
+   "meaning": "KTV 扫色: 前摇 / 扫完整行 / 轮间停顿 / 整行淡入"
+  },
+  {
+   "name": "REPLAY_BAKE_MAX_SEC",
+   "value": "15.0",
+   "meaning": "重放冷启动页的防软锁上限"
+  },
+  {
+   "name": "VEIL_TITLE_COLORS",
+   "value": "(银 0.86,0.88,0.91)(沙金 0.88,0.75,0.44)(灰绿 0.56,0.76,0.60)",
+   "meaning": "三色循环的色表"
+  },
+  {
+   "name": "_TW_GROW_MAX / power grain 等",
+   "value": "1.6",
+   "meaning": "宽屏表格等比放大的上限"
+  }
+ ],
+ "gotchas": [
+  "_bench_fps_lock_off 必须在 finally 的**首行**(门禁 L6 照首行查配对), 且波1 必须带 phys=True —— 少一个 _BENCH_FPS_PHYS 就只增不减, 跑完一次跑分帧率**再也回不去**。",
+  "黑屏矩形与白字必须在**主线程**建; 写进工作线程体里会真机卡死(黑屏出来了、白字停在「物理跑分 0/5」不动)。",
+  "_hide_bench_dim 必须在**三条路径**都调到: _bench_done 正常路径、两个 finally 的兜底 Clock.schedule_once。高压那条路径曾经整个漏掉 => 黑屏永久留在屏幕上, 看起来就是卡死。",
+  "隐藏档位必须写在**后端对象**上并由后端读(_SoundPoolOut._gate_mode/_arm_extra); 写在 RootWidget 读在后端 => 四档跑出一模一样的数据, 而日志还写着「档位 4/4」。",
+  "_buckets() 每一档必须显式列出: 曾经是「2 池 / 否则=4 池」两分支, 传 1 会返回 4 个桶, 配合 `if _gi >= len(pools): break` 只 load 了第一个桶 —— 报出漂亮得离谱的**假数而且不报错**。",
+  "_warm_all 必须逐个 play+stop: SoundPool maxStreams=8, 一次全 play 第 9 个起必然返回 0 => 等待条件永远不成立, 白等到超时。",
+  "random 必须 getstate/setstate 还原, **不能用「跑完再 seed()」** —— 那会把正常游戏的球路也钉成每局一样。",
+  "_bench_restore_board 必须在 _bench_running=False **之前**调; 之后 park_ball 就会重掷盘面, 还的就不是跑分前那份了。",
+  "存盘面必须存 list(v) 副本 —— multipliers 与 _boards[rtp_target] 是**同一个 list 对象**, 存引用会被原地改动连带污染。",
+  "_bench_counters 里 plays/hits 只能快照后放回, **不能归零**(那是玩家真实累计投中数, 还写进配置); 只有余额按玩家要求归零到 1000。",
+  "_FREQ_GATE 唯一写者是 benchmark_trajectories、唯一读者是频率采样线程 —— 是进程级共享状态。sleep 段关门的 finally 里必须开回来, 否则后续所有频率采样永久停摆。",
+  "_PHYS_WAIT_T0 必须**先清起点再累加** _PHYS_SLEPT, 否则同一段等待被算两次; 而只记已睡时长不够 —— 睡的 5 秒里数字照样冻着。",
+  "进度分子分母必须与**循环条件**同源: 波1 是 CPU 秒(+等待秒), 波2 是墙钟。混用会重演「面板顶到 360/360 了活儿还剩两成」。",
+  "_PHYS_PROG 的发布点必须在「每颗球一次」的外层 while, **绝不能挪进内层 4000 步的 for** —— 热循环里每步多加一点会直接把跑分拖下去。",
+  "频率/电池采样线程必须在**锁核之前**启动 —— sched_setaffinity 只改调用线程, 新线程继承创建者亲和性, 晚起会跟着被钉到性能核上跟被测线程抢核。",
+  "_hp_wall0 与采样窗口必须在锁核/提权**之后**填; 填之前 win[0]==0 => 采样线程一个样本都不收(这是刻意的, 但顺序反了会静默少采)。",
+  "_frq.sort() 会**毁掉时间轴**, 而频率曲线要的正是时间轴 => 排序前必须先留一份原序副本给曲线。",
+  "功率曲线**不能先过滤 None** —— 时刻按「原下标 x dt」推, 过滤掉一个点会让它后面所有点左移一格(末点从 357.8s 变 357.2s)。",
+  "功率单位只能**采完之后**按全程分布猜; 采样期就按错的单位算 W 会得到一串差 1000 倍的值。",
+  "保存 txt 必须走 java.lang.String(txt).getBytes(\"UTF-8\") 拿到真 byte[] —— 直接把 Python bytes 交给 OutputStream.write, pyjnius 可能挑中 write(int) 重载, 只写进去**一个字节**。",
+  "MediaStore insert 一旦返回那一行就已经落库、文件当场对玩家可见; 之后任何一步失败都必须 resolver.delete 掉, 否则公共 Download 里留下 0 字节或半截的同名 txt。",
+  "_copy_bench_log 的 `return False` 必须在 `btn is not None` **外面** —— 否则无参调用(保存链第 5 级)会一路落到 return True, 告知「已复制」而剪贴板是空的。",
+  "弹窗高度必须按内容算 + 收尾 _popup_fit_content; 但有 ScrollView 的那两张历史面板**严禁**调 _popup_fit_content(ScrollView 对 minimum_height 的贡献是 0, 列表会被压成 0 行)。",
+  "Kivy 的 Label 不认 markdown, 弹窗正文里绝不能出现 `**`(会原样显示成星号)。",
+  "_show_hp_curve 里给标题 Label 起的局部名**不能叫 title** —— 会遮蔽入参字符串, 切粒度重开弹窗时 Label(text=<Label>) 直接 ValueError 崩溃。",
+  "老记录缺字段一律印「—」, 且判据必须是「键在不在」而**不是**「值是不是 None」 —— 拿值判会把「当时没采集」印成「这台采不到」这种假结论。",
+  "面板上不能出现「瓦」和「摄氏度」的「摄」「氏」—— 字体 NotoSansSC-Medium.otf 是子集(约 1602 字形)不含这些字, 会渲染成豆腐块。加新文案前先查字形表。",
+  "帧率上限只在 _apply_fps_cap 这**一个**生效点设; 散在各调用点的话, 跑分途中任何一次弹窗关闭/切回前台都会把上限悄悄恢复。",
+  "_request_android_high_hz 里也必须按 _BENCH_FPS_LOCK 压对系统的请求 —— 只压 Kivy 不压这里是抓到的 bug: app 一边告诉系统要 120Hz 一边只画 60。",
+  "Window.bind(on_flip=...) 必须在 _finish_render_sample 里 unbind; 绑了不摘会一直记帧, 污染下一轮甚至游戏期。",
+  "_brk_wrap 包出来的函数 **__name__ 必须与原方法同名** —— Kivy 的 WeakMethod 存的是 __name__, 名字对不上下次调度 AttributeError。",
+  "采样期那一批模块级累加器(_FRAME_PROBE / _TEXUPD / _TEXEX_HIT / _FRAME_BRK / _COLD_FS / _SND_STAT / _VIB_STAT / _JNI_STAT / _CFG_STAT)必须在**开跑前清一次** —— 否则第一帧背着「上次采样结束以来」的全部累计, 印出物理上装不下的假数。",
+  "_bench_frames 元组的新列**只能加在末尾** —— 前面下标被 _bench_collect_diag 与外部解析脚本按号取, 插在中间会静默错位。",
+  "_bench_hz_tick 必须在采样期结束自己 return False 摘掉自己, 否则跑完分还在后台每 0.5 秒戳一次 JNI。",
+  "黑屏矩形必须用 self.parent 那块视口算, **不能按 -self.x 反推** —— Kivy canvas 指令是绝对窗口坐标, 负坐标会让平板右边露出一条缝(手机 self.x=0 所以永远发现不了)。",
+  "跑分开始必须等 state=='ready'(球落地)且预热链跑完(上限 20 秒)+ 让出 0.1 秒 —— 不留这 0.1 秒, HUD 重置引起的文字纹理重建会正好落进采样窗口。",
+  "屏幕一灭安卓会暂停游戏、冻结 Clock, 6 分钟的高压测试会被整段打断 => 防息屏是**正确性**问题不是体验问题; 而且必须用窗口标志 FLAG_KEEP_SCREEN_ON(不需权限、随窗口可见性自动失效), 常量在 WindowManager$LayoutParams 嵌套类里(pyjnius 要写 $)。",
+  "setSystemUiVisibility 必须在 Java UI 线程执行; 从 SDL/Python 线程直调会被 ViewRootImpl 拦下并**静默吞掉**(表现为「沉浸一直不生效、转一次屏才自愈」)。",
+  "_enter_immersive 的形参 *_ 必须保留 —— schedule_interval 会塞 dt 进来, 零参签名在真机启动 0.7s 即 TypeError 闪退(桌面测不出)。",
+  "非沉浸档必须直接 return, 硬去重申一次只会白花 UI 线程的钱(setSystemUiVisibility 会让窗口重算 inset + 走一趟 SurfaceFlinger)。",
+  "启动日志必须**只写不改**: 没有任何逻辑读 _BOOT_LOG/_PROBE_TRACE/_PROBE_COST 做判断; _boot_log 自己吞掉一切异常, 调用点不需要 try。",
+  "_BOOT_T0 必须取在 kivy import **之前**(Kivy 导入本身几百毫秒, 也是启动时间的一部分); 而 _LoadVeil._t0_boot 要另盖一个, 因为动画用的 _t0 是 time.time() 口径。",
+  "「无音频加载累计耗时」必须与「总耗时」**同一时钟**, 且要在调用方 min 一手夹在实际摘页时刻之下 —— 否则会重新长出「分项比总数大」(v0.8.69 玩家当场抓到 463ms < 1328ms)。",
+  "audio_ready() 在**音效关掉时恒为真** => 重放页绝不能落进「自动摘页」那个 elif 分支(出口只能是玩家点击); 且必须同时等 sfx.baked 与 _arm_busy, 否则报出上一次的 bake_ms 配刚清零的 ready_ms 这种偏小的假数。",
+  "启动信息面板行数有硬预算, 加行必须同步改弹窗高度公式(padding/spacing 那两个 dp 与公式里的 dp(24)/dp(8) 成对改), 否则定高标签会把尾巴裁掉。",
+  "清空历史必须二次确认 + 写明条数 + 两张表各清各的(plinko_bench_history.json / plinko_hp_history.json 分开是玩家定过的案)。",
+  "「保存加载日志」按钮自 v0.8.66 起**不上屏**, 但代码全留着 —— 它是导出启动日志的唯一入口, 藏了之后所有启动期诊断都只能靠重放 + 别的路子。",
+  "菜单 6 个按钮的「一行同色」是玩家明确选的取舍(代价是分不出行动/历史), 别自作主张改回两两配对。",
+  "KIVY_ORIENTATION 必须四方向 —— 只写竖屏两方向会把 SDL 也锁竖屏, buildozer.spec 放开四方向会被这里覆盖废掉。"
+ ],
+ "uncovered": [
+  "class SpeedCurve 内部完整绘制算法(12923-13126, 约 204 行)只看了 docstring 与调用契约, 没逐行核 y 轴刻度/留白的具体实现。",
+  "class FpsCurve(11643-11944, 约 302 行)的阶段条合并逻辑、build_legacy 分支、_grp 降采样公式细节只读了注释。",
+  "_bench_frame_log(17013-17847, **835 行单函数**)只读了头尾与采样行格式, 中间各诊断行的全文没逐行核。",
+  "_bench_diag_text(18465-18667, 203 行)只读了开头与结尾几段, 中间「瓶颈」「节拍」「CPU 构成」「内存冻结」等段的全部判据没逐条核。",
+  "_probe_cfg / _probe_parallel / _await_ready 的闸门与重试阶梯(约 3893-4180, 6120-6490)只读了 ARM_LADDER 与 _probe_verdict 一侧, 没穷举 6 秒硬超时与「修复阶梯」的每一级。",
+  "Sfx.audio_detail()(6506 起)只在两处读了片段, 全部行序与每个字段的判据没穷举。",
+  "_show_fps_curve(18354-18464)的 FpsCurve 构造参数与「保存日志」按钮的完整行为只读了片段。",
+  "PC/桌面分支(platform != android)在跑分链上的**全部**降级路径没逐条走(只核了保存降级链与锁核/提权的降级)。",
+  "两条历史表的「全表统一字号」算法(_fit_w / fit_font_size 配合)只读了注释, 没实测各档宽度。",
+  "_smoke 的 9 个阶段断言没逐条核对是否覆盖了跑分全部路径(它**不跑跑分**, 这是注释里明说的)。"
+ ],
+ "notes": "行数规模(绝对行号, 全部以 22347 行的 android/main.py 为准): (1) 1~500 段 = 500 行: 启动日志记录器 32-88 + 48k 对拍 91-259 + 池数对拍 260-364 + _LOAD_BYTES/_safe_size 367-376 + _cpu_groups 379-400 + _probe_boost_thread 403-426 + _cpu_shape 429-457。(2) 1402~2631 段 = 1230 行: 波1 按秒进度 1402-1426 + 锁核/提权/MAD 1434-1645 + benchmark_trajectories 1647-1817 + benchmark_sustained 1820-1885 + 逐核频率解析 1888-1922 + 两个探针 1922-2013 + 频率采样线程 2016-2116 + 电池温度/功率/热 2119-2628。(3) 5560~6008 段 = 449 行: _CPUFRQ 5560-5676 + 高刷策略 _fps_*/_screen_hz/_request_android_high_hz 5679-5811 + 跑分帧率闸门 5813-5930 + _cpu_split/_brk_wrap/慢帧门槛 5933-6008。(4) 21435~22347 段 = 913 行: 启动页常量与纯函数 21435-21569 + class _LoadVeil 21571-21830(260 行) + _brk_wrap 挂载 21832-21853 + class PlinkoApp 21856-22145(290 行) + _smoke 22147-22331(185 行) + main() 22333-22347。(5) RootWidget 里跑分/高压/诊断/启动相关方法合计 **约 5518 行**(我量了 60 个方法的定义区间), 其中单函数: _bench_frame_log 835 行、_bench_collect_diag 272 行、_show_bench_history 271 行、_bench_done 266 行、_bench_diag_text 203 行、_show_hp_history 200 行、_hp_done 193 行。(6) 外加 FpsCurve 302 行 + SpeedCurve 204 行。合计约 **9116 行 = 全文件的 41%**。\\n\\n是不是玩家功能: 结论是「**随出货包一起发的隐藏开发者/验收面板**, 不是产品功能, 但终端用户可达」。判断依据(全部可在文件里核到): ① 入口是长按标题 3 秒, 全文件 grep **没有任何 __debug__ / DEBUG_MODE / buildozer 开关**包着这条链 —— 同一份 APK 里就在; ② 文案全是玩家措辞的中文按钮与表格, 而代码注释通篇「玩家 2026-09-15 说…」, 那个「玩家」是作者本人在各台真机上做验收; ③ 面板里有 PC 分支(platform != android)与「非安卓」降级文案 => 它同时是桌面开发工具; ④ 它会**真实触碰存档状态**(把余额重置成 1000、钉住盘面、钉住全局随机), 所以每一步都必须还原 —— 这类「会改游戏状态」的隐藏面板不是普通彩蛋; ⑤ 它跑的载荷就是产品自己的 launch_ball / advance_flight, 量的是「这台设备玩弹珠的实际流畅度」, 对作者有决策价值, 对终端玩家只有干扰 => 归类为隐藏工程面板而非玩家功能。\\n\\n缺失即事故的清单(最该看的三条): (a) finally 首行的 _bench_fps_lock_off —— 漏了帧率永远回不去; (b) _hide_bench_dim 的三条路径 —— 漏了黑屏永久留在屏幕上(看起来像卡死); (c) 随机/盘面/余额/投中数的还原对 —— 漏了正常游戏的球路被钉死、或 9 个槽全挂 x100, 而且**都不报错**。"
+}

@@ -1,0 +1,514 @@
+{
+ "subsystem": "安卓平台胶水 (Java 侧能力 / pyjnius 调用 / buildozer.spec / manifest / p4a hook / 云构建 / monkeypatch 性能与兼容性 shim)",
+ "features": [
+  {
+   "id": "javasrc-inject",
+   "name": "自制 Java 源进包 (android.add_src)",
+   "kind": "platform-glue",
+   "behavior": "buildozer.spec 里 `android.add_src = java` ⇒ buildozer 1.5.0 的 execute_build_package 读 app.android.add_src → 转成 p4a 的 `--add-source` → bootstrap build.py → 喂给 gradle。全工程**只有一个** Java 文件: `java/com/plinko/SoundGate.java`, package com.plinko。取不到类时**不崩**: Python 侧 `autoclass(\"com.plinko.SoundGate\")` 包在 try/except 里, 失败就静默退回老探针, 日志印「闸门 无(类取不到: …)」。",
+   "trigger": "云构建时由 buildozer 解析 spec 触发",
+   "source": "buildozer.spec:6638-6645; main.py:3918-3923",
+   "params": "android.add_src = java; java 目录只有一个文件 com/plinko/SoundGate.java"
+  },
+  {
+   "id": "javasoundgate",
+   "name": "SoundGate.java 纯 Java 样本就绪闸门",
+   "kind": "silent-invariant",
+   "behavior": "SoundPool.load() 是异步的 —— 返回 sampleId **不等于**解码完, 此时 play() 返回 0 且什么都不做(无异常无日志)。本类在构造时 `sp.setOnLoadCompleteListener`, 在 Java 侧数回调: status==0 → ready.add(sampleId), 否则 failed++。Python 只做下行查询(读 plain int/bool), **不再注册 PythonJavaClass 监听器**(跨线程 JNI 代理被 GC / 从非 attached 线程调用都是静默失败)。`allReady()` 是**闩锁**(一旦全就绪永久 true, 不能实时重算 —— 重试路径会再 expect 一个, 实时算会\"开了又关\")。`readyMs()` 从**第一个 expect()** 起算, 不从构造起算(冷启动时池早于样本建好, 从构造起算会被烘焙时间淹没)。`firstMissing()` 返回第一个未就绪的 sampleId(0 表示全就绪), 为了回答\"是哪个样本卡住闸门\"。静态诊断 initCount/callbackTotal/callbackThreadName 回答\"这是新进程还是复用\"和\"回调到底送没送到\"。",
+   "trigger": "冷启动 / 重放冷启动 / 插拔耳机重建池时, 并在**任何 load() 之前** — 漏掉的回调永不再来",
+   "source": "android/java/com/plinko/SoundGate.java(全文 213 行); Python 接线 main.py:3903-4035, 6142-6150, 6273-6424",
+   "params": "样本总数 101 (合成音 + 61 条语音); 逐个 play() 建 AudioTrack 实测 29~33ms/次 ≈ 3 秒; kPlayOnCallingThread==true on Android 11..14; SFX_GATE_FIRST_SEC = 1.5; SFX_READY_TIMEOUT = 6.0; SFX_READY_POLL = 0.15"
+  },
+  {
+   "id": "hook-manifest",
+   "name": "p4a hook 注入 manifest 方向与 resizeable",
+   "kind": "platform-glue",
+   "behavior": "正则找 `<activity ... org.kivy.android.PythonActivity ... >` 标签, 把 `android:screenOrientation` 改成/补上 `fullSensor`, 把 `android:resizeableActivity` 改成/补上 `true`。找不到 AndroidManifest.xml 或 activity 标签就印日志并返回 0(不抛)。`before_apk_build` 在 gradle assemble 前跑(此时改才影响最终 APK), `after_apk_build` 幂等兜底再试一次。",
+   "trigger": "p4a 构建时 (cwd = dist_dir)",
+   "source": "p4a/hook.py:24-87, 164-176",
+   "params": "screenOrientation=fullSensor; resizeableActivity=true; 同时 spec 里 android.manifest.orientation = fullSensor"
+  },
+  {
+   "id": "hook-theme",
+   "name": "自定义启动窗口主题 + 透明图标",
+   "kind": "player-visible",
+   "behavior": "往 dist 写 `src/main/res/values/styles.xml` 定义 `PlinkoTheme`(parent 必须 = p4a 原来的 `@android:style/Theme.NoTitleBar`, 改动面越小越不容易起不来), 只改三项: windowSplashScreenBackground=#0b1220、windowSplashScreenIconBackgroundColor=#0b1220、windowSplashScreenAnimatedIcon=@drawable/plinko_blank。另写 `res/drawable/plinko_blank.xml` = 1dp 全透明 shape, **用来顶掉系统启动图上那个应用图标**。最后把 manifest `<application>` 的 android:theme 打到 @style/PlinkoTheme。病根: 冷启动 0.15~0.22s 应用窗口已开、presplash 还没画上, 屏幕是系统 starting window 的默认中性灰黑(实测 #181314), 与后面棋盘之间是个**突变**; 而不换图标玩家会看到\"奇怪的图标\"亮约 1 秒(尺寸被平台定死 288dp, 没法改成标题)。",
+   "trigger": "before_apk_build / after_apk_build",
+   "source": "p4a/hook.py:90-161",
+   "params": "windowSplashScreenBackground = #0b1220(与 presplash.png 底色 / main.py VEIL_BG 三处同值); 透明图标 1dp x 1dp, solid #00000000"
+  },
+  {
+   "id": "spec-core",
+   "name": "buildozer.spec 关键配置",
+   "kind": "platform-glue",
+   "behavior": "包名/域名/资源白名单/版本/依赖/API/ABI/图标/presplash 全在这里。子目录资源**必须显式列**(include_exts 白名单里本来有 png, include_patterns 是双保险 —— 真伪以出包后解 assets/private.tar 为准)。`android.numeric_version` 显式钉成一个大常数, **不许删、不许改成与 version 联动**: version 只决定 versionName, 真正管\"能不能装上去\"的是 versionCode, 而它由 buildozer/p4a 自推 —— 版本号从 0.7.111 退回 1.0 时若 versionCode 跟着退, Android 会拒绝安装(INSTALL_FAILED_VERSION_DOWNGRADE), 装新版得先卸载 ⇒ 玩家攒的历史(plinko_hp_history.json / 性能测试历史 / 弹珠数)一起清掉。",
+   "trigger": "buildozer 解析 spec",
+   "source": "buildozer.spec:4,7,8,10,11,15,6591,6613,6618,6621,6623,6627,6629,6634,6636,6650-6654,6656,6658,6661-6662,6667-6668",
+   "params": "title=跳跳的弹珠机; package.name=plinko; package.domain=org.danzhu; version=0.8.70; android.numeric_version=1000000; source.include_exts=py,png,jpg,kv,atlas,ttf,otf,wav,mp3; source.include_patterns=fonts/*.otf,voice/*.wav,assets/*.png; requirements=python3,kivy==2.3.0,pyjnius; p4a.branch=v2024.01.21; p4a.hook=p4a/hook.py; orientation=portrait, portrait-reverse, landscape, landscape-reverse; android.manifest.orientation=fullSensor; fullscreen=0; android.permissions=VIBRATE; android.api=33; android.minapi=21; android.ndk=25b; android.archs=arm64-v8a,armeabi-v7a; android.allow_backup=True; icon.filename=%(source.dir)s/icon.png; android.presplash_color=#0b1220; presplash.filename=%(source.dir)s/presplash.png; [buildozer] log_level=2, warn_on_root=1"
+  },
+  {
+   "id": "ci-build",
+   "name": "GitHub Actions 云构建 APK",
+   "kind": "platform-glue",
+   "behavior": "push 到 main/master 或手动 workflow_dispatch 触发。`yes | buildozer android debug`, 产物 `bin/*.apk` 上传 artifact(retention 30 天, if-no-files-found: error)。缓存 `~/.buildozer` + `.buildozer`, key 里带 spec 哈希 + 一个**手写版本前缀** v4(targetSdk 30→33 换代时靠它强制干净重建, 回退会捞回 targetSdk30 时代的 dist)。",
+   "trigger": "git push main/master",
+   "source": ".github/workflows/build-apk.yml:1-68",
+   "params": "runs-on ubuntu-22.04(别用 24.04); host Python 3.10; Java 17 temurin; pip install \"cython<3.0\" \"buildozer==1.5.0\"; cache key buildozer-v4-${os}-hash(spec); timeout-minutes 90; env BUILDOZER_WARN_ON_ROOT=0; 首构建 15-20 分钟, 缓存命中 ~2m49s"
+  },
+  {
+   "id": "kivy-env",
+   "name": "Kivy 环境变量 (参数不被抢 + 方向)",
+   "kind": "silent-invariant",
+   "behavior": "① `os.environ.setdefault(\"KIVY_NO_ARGS\", \"1\")` 必须在 **import kivy 之前** —— 否则 Kivy 的 argparse 会吃掉 `--selftest/--smoke` 并报 \"option not recognized\"。② `os.environ[\"KIVY_ORIENTATION\"] = \"Portrait PortraitUpsideDown Landscape LandscapeUpsideDown\"` 运行时再设一次(防 bootstrap 未带上 p4a env); **只写竖屏两方向会把 SDL 也锁竖屏**, 横拿时系统只给 letterbox 兼容盒 —— buildozer.spec 放开四方向会被这里覆盖废掉。",
+   "trigger": "import 期(模块顶部, 任何 kivy import 之前)",
+   "source": "main.py:9, 13",
+   "params": "KIVY_NO_ARGS=1; KIVY_ORIENTATION=Portrait PortraitUpsideDown Landscape LandscapeUpsideDown"
+  },
+  {
+   "id": "graphics-config",
+   "name": "Kivy graphics 配置 (maxfps/vsync)",
+   "kind": "player-visible",
+   "behavior": "必须在**导入 Window 之前** `Config.set(\"graphics\",\"maxfps\",\"120\")` + `Config.set(\"graphics\",\"vsync\",\"1\")`。所有平台都保留 SDL swap interval: Windows 上关掉它绕不过桌面合成器, 实测反而把 60Hz 显示器从稳定 60fps 拖到约 50fps。运行期由 `_apply_fps_cap` 覆盖。",
+   "trigger": "import 期",
+   "source": "main.py:19-21",
+   "params": "maxfps=120; vsync=1"
+  },
+  {
+   "id": "font-register",
+   "name": "中文字体同名覆盖注册",
+   "kind": "player-visible",
+   "behavior": "`LabelBase.register(name=\"Roboto\", fn_regular=fonts/NotoSansSC-Medium.otf)` —— 用**同名覆盖 Kivy 默认字体**, 所有控件自动生效, 不用逐个设 font_name。Android 不带中文字体, 不打 = 所有汉字显示成豆腐块。文件不存在就静默跳过。",
+   "trigger": "import 期(kivy LabelBase 可用后)",
+   "source": "main.py:487-494",
+   "params": "fonts/NotoSansSC-Medium.otf(417KB, Apache 2.0); 别用微软雅黑/黑体(商业字体侵权)"
+  },
+  {
+   "id": "immersive-run",
+   "name": "系统栏两档 + 屏幕常亮 (同一个 UI 线程 Runnable)",
+   "kind": "player-visible",
+   "behavior": "用 pyjnius 的 `PythonJavaClass` 造一个 Java `java/lang/Runnable`(`@java_method('()V') def run`), 由 `act.runOnUiThread(task)` 投递到 **UI 线程**执行。run() 里一次做两件事: ①按 `_SYSUI_MODE` 选系统栏标志 —— False ⇒ `setSystemUiVisibility(0)`(一个标志都不设 = 状态栏+导航栏都在, 平时用), True ⇒ 6 位 `FULLSCREEN|HIDE_NAVIGATION|IMMERSIVE_STICKY|LAYOUT_FULLSCREEN|LAYOUT_HIDE_NAVIGATION|LAYOUT_STABLE`(跑分黑屏期间用); ②按 `_WAKE_MODE` 用 `WindowManager$LayoutParams.FLAG_KEEP_SCREEN_ON` addFlags/clearFlags。任务实例**类级单例缓存**(`_immersive_task_inst`)反复投递 —— 防 pyjnius 代理被 GC 后 native 崩溃; 且**必须在主线程上建**(要注册 Java 代理), 启动期由 `_guard_warm()` 预热。`_enter_immersive(*_)` 每 2.5 秒周期重申一次当前档, **非沉浸档直接 return**(那一档该有的样子就是系统默认值, 硬调只是白花 UI 线程)。",
+   "trigger": "PlinkoApp.build 里 Clock.schedule_once 1.0s 起一次 + Clock.schedule_interval 2.5s; on_resume; _set_system_ui/_set_keep_awake 各立刻投一次",
+   "source": "main.py:21983-22105 (_immersive_task / _enter_immersive), 21906-21921 (调度), 11015-11078 (_set_system_ui/_set_keep_awake), 10592-10623 (_SYSUI_MODE/_WAKE_MODE)",
+   "params": "6 位沉浸标志; 周期 2.5s; FLAG_KEEP_SCREEN_ON 走 WindowManager$LayoutParams(用 `$` 取嵌套类, 取 android.view.WindowManager.FLAG_KEEP_SCREEN_ON 会抛并被吞 ⇒ 全屏正常但常亮失效)"
+  },
+  {
+   "id": "orient-split",
+   "name": "方向分流: 宽屏四方向 / 瘦长手机锁竖屏",
+   "kind": "player-visible",
+   "behavior": "`_device_is_wide()` 用 `Display.getRealSize()` 的物理分辨率算 短边/长边, ≥ 9/16 (0.5625) 判为宽屏(平板/16:9 及以上), 读不到按宽屏(保持原有行为); 结果**缓存一次**(开机量一遍, 不随旋转/状态栏变)。`_guard_orient_now()`: 跑分锁定期 ⇒ `setRequestedOrientation(14)`(LOCKED, 锁当前方向); 否则宽屏且 `getRotation() in (1,3)` ⇒ 10(FULL_SENSOR), 瘦长手机 ⇒ 7(SENSOR_PORTRAIT, 正竖+倒竖)。",
+   "trigger": "启动 1.0s 一次(`Clock.schedule_once`) + 常驻 `Clock.schedule_interval(self._orient_guard, 0.7)` + on_resume + 窗口尺寸变化分支",
+   "source": "main.py:11394-11416 (_device_is_wide), 11002-11012 (_guard_orient_now), 21944-21960 (_apply_orientation/_orient_guard), 10976+10567 (_BENCH_ORIENT_LOCK)",
+   "params": "_DEVICE_WIDE_MIN = 9.0/16.0 = 0.5625; 方向码 7=SENSOR_PORTRAIT / 10=FULL_SENSOR / 14=LOCKED(API 18+, minapi 21 可用); 周期 0.7s; 启动延迟 1.0s"
+  },
+  {
+   "id": "land-layer",
+   "name": "横屏反旋转层 LandLayer",
+   "kind": "player-visible",
+   "behavior": "FloatLayout + canvas.before PushMatrix/Rotate(angle, axis=(0,0,1), origin=中心) / canvas.after PopMatrix。内容在\"等效竖屏窗口\"(AnchorLayout 尺寸置成 (h,w))里布局, 横屏时整棵树旋转 90° 铺满 ⇒ 屏幕上的构图与竖拿时一模一样。`angle = _land_angle()`: `Display.getRotation()==3` ⇒ -90, 其余/读不到 ⇒ +90。竖屏时 angle=0、层尺寸=窗口, 零回归。`_to_eq()` 做逆旋转(只做逆旋转, **绝不再减 anchor.pos** —— Kivy 是单一 window 坐标系, AnchorLayout 不是 RelativeLayout, 多减一次会把所有控件点击判定区平移出屏幕 1740x1000 时偏移 (370,-370))。",
+   "trigger": "窗口尺寸变化 / 每帧轮询 Window.width/height 变了才重算 / on_resume",
+   "source": "main.py:11418-11488 (LandLayer / _land_angle / apply_orientation / _to_eq); 触摸三处的修复见 BUILD_APK.md §3.21",
+   "params": "只有宽屏设备 + 窗口为横向(w>h)才启用; 桌面要 `--landscape` 才模拟"
+  },
+  {
+   "id": "fps-request",
+   "name": "高刷请求与帧率上限",
+   "kind": "player-visible",
+   "behavior": "`_request_android_high_hz()`: 取 `Display.getSupportedModes()` 中与当前**同物理分辨率**的模式, target = min(屏幕同分辨率最高 Hz, `Settings.System.PEAK_REFRESH_RATE`, 用户档位); 跑分/高压期间再 `min(target, _bench_fps_force_now())`。在**同分辨率模式里挑 ≤ target 的最高档**(没有精确档位时宁可保守降档); 然后 `@run_on_ui_thread` 里 API≥30 调 `window.setFrameRate(hz)`, 并设 `attrs.preferredDisplayModeId = mode_id` + `win.setAttributes(attrs)`。`_apply_fps_cap()` 是**唯一生效点**: `Clock._max_fps = cap` + `Config.set(\"graphics\",\"maxfps\", cap)`, 挂 0.6s 后回读实际 Hz。只压 `Clock._max_fps` 而**不压对系统的请求**是错的(会一边报 120Hz 一边只画 60)。",
+   "trigger": "PlinkoApp.build 起循环前; on_resume; 用户改档位",
+   "source": "main.py:5701-5710 (_android_system_fps_cap), 5713-5730 (_screen_hz), 5733-5803 (_request_android_high_hz), 5806-5810 (_refresh_screen_hz), 5894-5930 (_apply_fps_cap), 5860-5868 (跑分档)",
+   "params": "FPS_CAP_OPTIONS=(60,90,120,144,165,185); FPS_CAP_DEFAULT=120; FPS_CAP_PC=120; _BENCH_FPS_FORCE=10; _BENCH_FPS_FORCE_PHYS=10; API≥30 才 setFrameRate; 回读延迟 0.6s"
+  },
+  {
+   "id": "vibrate",
+   "name": "震动 (Vibrator + VibrationEffect)",
+   "kind": "player-visible",
+   "behavior": "`_vib_get()` 缓存系统服务代理: **必须用 `Context.VIBRATOR_SERVICE` 字符串**, 传 `autoclass(\"android.os.Vibrator\")` 的 Class 对象匹配不到 `getSystemService(Class<T>)` 重载、静默失败(权限给了、代码跑了、就是不震)。`_vibrate_now(ms, amp)` 优先 `VibrationEffect.createOneShot(ms, amp)`, API<26 退回 `vib.vibrate(ms)`; 代理失效(Binder 断)时抛 ⇒ 清缓存下次重取。全部走**工作线程队列**(maxsize=32), 队列满就丢这一次(绝不阻塞主线程)。`_vib_warm()` 启动期预热: 建工作线程 + 预取代理(否则第一次发射那帧要现付建线程 + JNI AttachCurrentThread + getSystemService)。",
+   "trigger": "WinPileFX._bounce 挂在 sfx.play() 返回值上(音效已关时不震); 每球落袋",
+   "source": "main.py:10567-10570, 10853-10930, 11284 (预热注释), 9764+ prebake_step 里调 _vib_warm",
+   "params": "amp=255 (满振幅; DEFAULT_AMPLITUDE=-1 约 50% 太弱); 震动 10~18ms 随撞击强弱; android.permissions = VIBRATE 必声明; 队列 maxsize=32"
+  },
+  {
+   "id": "battery",
+   "name": "电池温度/电压/充电态",
+   "kind": "player-visible",
+   "behavior": "`_battery_manager()`: **必须传 `Context.BATTERY_SERVICE` 字符串**(同 _vib_get 的坑), 取到就缓存。`_battery_snapshot()` 用 `registerReceiver(None, IntentFilter(ACTION_BATTERY_CHANGED))` 读**一次**广播就拿到全部字段 —— 温度与电压**共用这一次读**(该广播被 BatteryService 限流: 温度变化 ≥1℃ **或**其它字段变化才发, 多读几次不会更新)。单位: EXTRA_TEMPERATURE = 0.1℃(合法区间 -500..1200, 否则当没读到)、EXTRA_VOLTAGE = mV(合法 2000..6000, 未实现给 0 时当\"没有\", **不编数**)、EXTRA_PLUGGED 非 0 = 正在充电(此时电流是充入方向)。",
+   "trigger": "跑分/高压期间采样",
+   "source": "main.py:2168-2192, 2194-2230",
+   "params": "温度合法区间 -500..1200 (0.1℃); 电压合法区间 2000..6000 mV"
+  },
+  {
+   "id": "sfxpool",
+   "name": "SoundPool 构造 (唯一构造点)",
+   "kind": "silent-invariant",
+   "behavior": "`_mk_soundpool(voices)`: AudioAttributes.Builder().setUsage(USAGE_GAME).setContentType(CONTENT_TYPE_SONIFICATION).build() → SoundPool.Builder().setMaxStreams(voices).setAudioAttributes(attrs).build()。取 Java **内部类**用 `Outer$Inner` 规范写法, 失败才退回 `getattr(autoclass(outer))` —— pyjnius 对 `Outer.Inner` 属性访问解析不可靠, 一旦抛就被吞 ⇒ **整台设备静默降级到 Kivy 后端**(2026-09-11 真机事故)。降级链 SoundPool → winmm → Kivy SoundLoader → 静音, **每一级都要把异常原文记进 `_BACKEND_ERRORS`**(以前全是 `except: pass`, 一块专门用来抓静默的面板自己在静默降级)。`needs_worker = True`: 真机实测 `play()` 会阻塞调用线程几十到一百多毫秒(Y700 二代: 50 次累计 2674ms、单次最慢 143.6ms), 所以 Sfx 起发声工作线程, 主线程只投递不等待。",
+   "trigger": "_SoundPoolOut.__init__ (冷启动 build / 插拔耳机重建 / 重放冷启动)",
+   "source": "main.py:3579-3607 (_mk_soundpool), 3610-3701 (_SoundPoolOut.__init__), 4445-4476 (open_output 降级链)",
+   "params": "SFX_VOICES=8 (每个池上限); SFX_POOL_SPLIT=True ⇒ 共 2 个池, 语音(voice_*)走第二个池(AOSP kDecoderThreads 硬编码 2/池, 再开池就是 4 条); SoundPool 构造耗时记进启动日志"
+  },
+  {
+   "id": "route-rebuild",
+   "name": "插/拔耳机重建 SoundPool",
+   "kind": "silent-invariant",
+   "behavior": "PythonJavaClass BroadcastReceiver(`__javainterfaces__=['android/content/BroadcastReceiver']`, `__javacontext__='app'`) 注册 ACTION_AUDIO_BECOMING_NOISY(拔耳机, 不重建就永久无声) + ACTION_HEADSET_PLUG(插耳机 —— SoundPool 的输出路由是**建流那一刻**定下的, 建在扬声器上就永远往扬声器送, 玩家报的\"插耳机没声音、重启 app 就有\"就是这个)。HEADSET_PLUG 是 **sticky** 广播, registerReceiver 会立刻回放当前状态 ⇒ 第一条只记初值 `self._plugged`、**绝不重建**(旧代码 `if st == self._plugged: return` 恒假 ⇒ 每次启动都白重建一次)。receiver 存 `self._receiver` 保活防 GC; close 时 unregisterReceiver。`_rebuild` 跑在 Android **主线程**(onReceive 默认线程), 只做\"重建 + 一轮对账\"不做等待。",
+   "trigger": "系统广播",
+   "source": "main.py:3703-3757 (_register_noisy_receiver), 3837+ (_rebuild), 3759+ (prime 分池)",
+   "params": "重建顺序: _reset_pools → _build_sp ×2 → _attach_gates(**先挂闸门再 prime**) → release 旧池 → 按 _paths 快照重 prime"
+  },
+  {
+   "id": "pause-resume",
+   "name": "生命周期: 切后台暂停/恢复",
+   "kind": "silent-invariant",
+   "behavior": "`App.on_pause` → `sfx.pause_out()` ⇒ `_each_pool(lambda p: p.autoPause())` —— **必须所有池**(原来只 pause 了 _sp, 语音池从来没被暂停过 ⇒ 按静音/切后台时正在念的那句语音会继续念完, 而语音恰是最长的 1~3 秒); 然后 `_cfg_flush()` 把挂着的那份异步落盘等完(超时放弃, 绝不卡住系统回调); **返回 True 保持 GL 上下文**。`on_resume` → `_apply_fps_cap()`(刷新率会随智能刷新率/外接屏变) + `_apply_orientation()`(回前台 SDL 会重报方向, 抢回话语权) + `_enter_immersive()`(回前台系统栏复活) + `sfx.resume_out()`。`on_stop` → `sfx.close()`(unregisterReceiver + 全部池 release) + unschedule 预热回调。",
+   "trigger": "Android 生命周期回调",
+   "source": "main.py:4371-4392 (_each_pool / pause / resume / close), 22107-22145 (on_pause/on_resume/on_stop)",
+   "params": "on_pause 必须 return True; release 时**不把池字段置 None**(play_named/probe_all 都在判 is not None)"
+  },
+  {
+   "id": "gate-attach",
+   "name": "闸门接线 + 就绪等待策略",
+   "kind": "silent-invariant",
+   "behavior": "`_attach_gates()` 给两个池各挂一个 SoundGate,**必须在任何 load() 之前**; 总开关 `SFX_GATE`; 拿不到类一律静默置 None 并记 `_gate_err`, **绝不抛、绝不降级后端**。查询: `gate_all_ready()` 两池都满才真 / `gate_ready_ms()` 取两池**最晚**那个 / `gate_first_missing()` 带**池序号**反查 sid→名字(两个池的 sampleId 各自从 1 编号, 只用 sid 做键会跨池互相冒充)。`_await_ready()`: 闸门优先, 最多等 `SFX_GATE_FIRST_SEC`(1.5s), 到点没开就转老探针兜底; 全程 `SFX_READY_TIMEOUT`(6.0s) 硬超时无条件放行(**绝不软锁** — 项目红线)。老探针 `_probe_serial()`: 0 增益 `play()` 试播, 每轮从头扫、撞到第一个未就绪就提前退出, 已亲眼确认能播的不再重扫; **探针自己出错一律当\"能播\"**(它只是护栏, 绝不允许反过来把玩家锁在加载页)。",
+   "trigger": "冷启动 / 重放冷启动的加载页等待",
+   "source": "main.py:3906-4035 (_attach_gates/gate_*), 4052-4100 (_probe_serial), 6142-6150 (常量), 6273-6424 (档位与兜底)",
+   "params": "SFX_GATE_FIRST_SEC=1.5; SFX_READY_TIMEOUT=6.0; SFX_READY_POLL=0.15(起手值, 之后按实测速率自适应); SFX_VOICES=8; 闸门档位 GATE_MODE_FIRST(出货) / OFF / ONLY(退休); ARM_LADDER 四档"
+  },
+  {
+   "id": "pin-fontid",
+   "name": "字体钉子: 从 Kivy 淘汰队列里摘掉热字号",
+   "kind": "silent-invariant",
+   "behavior": "`_find_sdl2_order()` 用 `gc.get_objects()` 在 CPython 对象图里找 Kivy 的 `sdl2_cache_order`(**cdef 属性, `getattr(_text_sdl2, ...)` 拿不到, 但它是个 list 对象被 GC 跟踪**); 判据 = 元素**全是** 6 段 5 竖线的 `'<字号>|<字体全路径>|<bold>|<italic>|<underline>|<strikethrough>'` 字符串。找不到就**如实返回 None**(日志印\"没找到\"), 并记下\"形状命中的 list 一共几个\"(`_PIN_CAND`)以防认错。`_pin_fontid(fid)` 把该 fontid 从淘汰队列里 `remove` 掉 —— **只 remove, 绝不 append**(order 里出现重复项时淘汰那句 `del cache[popid]` 会 KeyError **崩在渲染路径上**); 钉之前断言 `len(order)==len(set(order))`; 超过 `_PIN_MAX` 就不再钉。",
+   "trigger": "启动期预热跑完后、**在 `gc.freeze()` 之前**定位一次; 之后每次 `fit_font_size` 里\"冷开够次数\"时钉",
+   "source": "main.py:4700-4729 (常量), 4732-4761 (_find_sdl2_order), 4764-4792 (_pin_fontid), 10124-10134 (定位调用点), 10322-10376 (冷开计数与钉的触发)",
+   "params": "_PIN_MAX=24(每个 fontid 实测约 0.88MB, 24 个 ≈ +21MB RSS 预算); _PIN_AFTER=3(同一个字号冷开满 3 次才钉); _POPUP_N[0]>0 时跳过不钉; 扫描要求 list 长度 8..64; 钉/失败/复冷三个数必须印进日志"
+  },
+  {
+   "id": "texex-cache",
+   "name": "文字纹理缓存 (按标签 + 全局两级)",
+   "kind": "player-visible",
+   "behavior": "`_texupd_wrap()` 包装 `Label.texture_update`: 只对打了 `_texupd_tag` 且 `self.text` 非空的标签生效。命中(先查标签自己 `_texex`, 再查全局 `_TEXEX_G`)⇒ 第一趟 refresh、第二趟真光栅化、纹理上传**三样全跳过**(真机 4.1~10.7ms/次, 全拿掉 1%Low 从 81.1 → 95.2)。未命中 ⇒ **不让标签自己渲染**, 而是 `_texex_bake()` 烘一个**专用的 CoreLabel**(它的 text/options 从此一个字都不动 ⇒ 延迟填充只会发生一次、填的必然是它自己的内容), 再把那张纹理交给标签, 同时存进标签自己那份和全局那份。",
+   "trigger": "任何打了 _texupd_tag 的 Label 文本/属性变化",
+   "source": "main.py:4858-4934 (常量与设计取舍), 4894-4971 (_texex_key/norm/get/put), 4974-5052 (_texex_bake/_texex_apply), 5312-5411 (_texupd_wrap), 4593-4599 (_tag_texupd)",
+   "params": "_TEXTEX_PER_LABEL=64(状态栏要存 10 条固定 + 35 条带数字 = 45 项, 留在 12 会自己把自己挤掉且不报错); _TEXEX_G_MAX=256; _TEXEX_FIELDS 15 个; _TEXEX_ON=True"
+  },
+  {
+   "id": "texfill-swap-clock-wrap",
+   "name": "第二趟光栅化 / flip / Clock.tick 三个埋点包装",
+   "kind": "dev-tool",
+   "behavior": "① `_texfill_wrap()` 包 `LabelBase._texture_fill`(第二趟**真光栅化**, 由 Texture 回调在纹理下次被用时触发 = 跑在 `texture_update` **外面**)并计进 `_brk_add(\"填纹\")` —— 包装函数**必须保住 `__name__`**(Kivy 有按方法名找的地方)。② `_swap_wrap()` 包 **`type(Window).flip`**(不是 `Window.flip` —— 那是绑定方法改不动类; 真机上 type(Window) 是 WindowSDL, 它的 flip 先调 SDL_GL_SwapWindow —— 正好罩住\"等屏幕\"那一段, 不含渲染), 在 `_orig` **之前**读 `_FRAME_END`(因为 `_on_flip` 是在 _orig 里面被派发的, 它读完 `_FRAME_BRK` 就清空), 把「尾」切成 `尾·回调`(_frame 跑完→Clock 本轮跑完) + `尾·空档`(Clock 跑完→进 flip), flip 自身记进 `_FRAME_SWAP`。③ `_clock_wrap()` 包 `Clock.tick` 的结束(`finally`)盖时间戳 `_CLOCK_END`, 拿不到就退回原来那一格「尾」。",
+   "trigger": "仅在跑分采样期 `_TEXUPD_ACTIVE[0]` 为真时真的计时(别让埋点改变被测量的东西)",
+   "source": "main.py:4585-4590 (_FRAME_SWAP/_TEXUPD_ACTIVE), 10302 (_CLOCK_END), 5414-5458, 5461-5517, 5519-5557",
+   "params": "三处都设 `_probe_wrapped` 防重复包装; 都 try/except 兜住(埋点绝不能让主循环抛)"
+  },
+  {
+   "id": "prebake",
+   "name": "启动分帧预热链",
+   "kind": "player-visible",
+   "behavior": "`prebake_step(dt=0)` 自链式 `Clock.schedule_once(self.prebake_step, 0.05)`, **每帧只做一件事**并各自打启动日志: ①玻璃贴图 `_glass_textures()`(现场解码+上传 GL, 桌面 21ms / 平板 40~80ms, 正好落在冷启动后第一次中奖那一帧) ②远侧环层 `_glass_over()` ③震动预热 `_vib_warm()` + 守卫预热 `_guard_warm()`(建工作线程 + 主线程建 Runnable) ④文字纹理, 每帧一个组合(`_warm_one`) ⑤字号阶梯, 每帧一个。最后 `gc.collect(2)` 计时 + `gc.freeze()`。",
+   "trigger": "启动后 0.05s 起自链; 跑分前会等预热跑完",
+   "source": "main.py:9764-10040 (prebake_step), 5139-5177 (_warm_one), 5055-5136 (_build_texwarm), 10124-10144 (定位钉子 + freeze)",
+   "params": "每步间隔 0.05s; 回调**必须能收 1 个位置参数**(零参签名真机启动 0.7s 必 TypeError 闪退, 桌面测不出); 字号预热 12 个 HUD 基准 + 4 个大字基准 x FIT_SCALES 6 档 ≈ 48 项(去重后)"
+  },
+  {
+   "id": "texwarm-table",
+   "name": "预热表: 哪些文字必须提前烘",
+   "kind": "player-visible",
+   "behavior": "`_build_texwarm(rw, bet)` 列出\"启动期该提前烘好的 (标签, 文案, 颜色[, 字号])\" —— 这些句在一局里**必然出现**, 不预热的话第一次发射/第一次落袋那几帧仍要各卡 4~10 毫秒(那时玩家还在看加载页, 挪过去白拿)。内容: 状态栏 10 句固定文案 + **从代码派生**枚举出的 \"命中 xN · 结算中\" / \"中奖! +N (xM)\"(倍率取自 VALUE_SHAPE 的键 ∪ {2}, 只烘**当前投注档**那 7 条) + 音效按钮 2 句 x 2 色 + 两个标题标签(只烘一个色, 亮暗改走 `_set_lbl_tint` 画布染色) + 中奖大字/阴影(`_bigtext_warm_items`) + 飘字(`_toast_warm_items`)。",
+   "trigger": "prebake_step 第 ④ 阶段, 每帧一个组合",
+   "source": "main.py:5055-5136 (_build_texwarm), 5186-5204 (_warm_tmpl), 5219-5263 (_toast_warm_items), 5266-5309 (_bigtext_warm_items), 5139-5177 (_warm_one)",
+   "params": "结算大字/阴影 = 当前投注档 7 个赔付 + 未中, x 2 个标签 = 16 次约 80ms; 飘字 4 条固定 + 3 个轮次档(20/50/100); 字号必须与 big_result_text/center_toast 用**同一句**算(同一个 avail、同一个 base、同一个 fit_font_size), 差一点就一条都命中不了; 模板标签**必须打 `_texupd_tag`**, 否则整条预热是空转且不报错"
+  },
+  {
+   "id": "fontwarm-grid",
+   "name": "字号阶梯预热 (只烘 FIT_SCALES, 不烘 FIT_FINE)",
+   "kind": "silent-invariant",
+   "behavior": "HUD 的每个基准字号 x 6 档基础阶梯全烘一遍。**只烘 `FIT_SCALES`, 不能连 `FIT_FINE` 一起烘** —— Kivy 的 SDL2 字体缓存上限是 64, 开过 64 个不同字号后最早那个会被挤掉; 12+4 个基准 x 13 档 = 155 项超上限 ⇒ 预热**自己把自己挤掉**(表里明明有、也真量过, 运行期一量还是冷), 实测低90 从 8 帧退回 10 帧。",
+   "trigger": "prebake_step 最后一阶段, 每帧一个",
+   "source": "main.py:9858-10040",
+   "params": "FIT_SCALES 6 档(1.0/0.94/0.88/0.82/0.76/0.70); 基准必须从标签自己的 `_fit_base` 读(**不许手抄 sp(N)** —— sp() 在真机上是非整数, 差 0.01 就是另一个 fontid); **绝不能 round**(实测差 1e-7~5e-5 就是两个 fontid, 各要 20.5/16.6ms)"
+  },
+  {
+   "id": "gc-freeze",
+   "name": "gc.Freeze (冻结长期存活对象)",
+   "kind": "silent-invariant",
+   "behavior": "预热全部跑完后 `gc.collect()` + `gc.collect(2)`(计时, 这就是\"真机上一次全量回收要多久\"的直接读数) + `gc.freeze()` —— 冻结 = 此刻活着的对象永不被 GC 回收。之后 gen-2 全量回收从 2.9ms → 0.0ms, gen-0/gen-1 也变便宜(老的不用再被反复提升)。冻结之后新造的东西(球堆 100 颗球、画布指令、_balls)照常被跟踪回收, 不会泄漏。阈值不动(CPython 默认 700/10/10)。",
+   "trigger": "启动预热链末尾",
+   "source": "main.py:10136-10144",
+   "params": "先 collect 再 collect(2) 再 freeze; 要留意**会被淘汰的缓存**(本工程 _PILE_CACHE 上限 128 现用 28、_CUP_BALL_TEX 4 个从不淘汰、_FIT_PX 超 512 clear)"
+  },
+  {
+   "id": "thread-priority",
+   "name": "加载线程钉大核 + 迟延敏感优先级",
+   "kind": "dev-tool",
+   "behavior": "`_probe_boost_thread()` 只动**当前这条线程**: `os.sched_setaffinity(0, 大核+次大核簇)` + `Process.setThreadPriority(-16)`(THREAD_PRIORITY_AUDIO; AOSP 里 THREAD_PRIORITY_AUDIO=-16 / URGENT_AUDIO=-19 —— 原注释写错过)。主线程/渲染照旧。只为把\"CPU 状态\"这个变量钉死, 让并行的收益归因干净 —— 真机日志显示探针起手时三簇已经顶到 2995/2745/1804(满频 3187/2745/2016), 本来就没降频, **别指望它有多大收益**。",
+   "trigger": "探针实验(重放冷启动)档位",
+   "source": "main.py:403-426",
+   "params": "setThreadPriority(-16); 亲和性 = _cpu_groups() 前两簇"
+  },
+  {
+   "id": "cpu-topology",
+   "name": "/sys 读 CPU 簇结构 (启动日志与归因)",
+   "kind": "dev-tool",
+   "behavior": "`_cpu_groups()` 读 `/sys/devices/system/cpu/cpuN/cpufreq/cpuinfo_max_freq`, **按值分组** ⇒ 同频一批就是一个簇(big.LITTLE 与 2+6 都成立), 不需要 root, 返回从快到慢。`_cpu_shape()` 拼成 \"1+3+4\" + 各簇 MHz + 每个簇抽一个核看**当前**频率。`_cpufreq_cores()` 逐核读 `scaling_cur_freq`(调频器目标值)与 `cpuinfo_cur_freq`(硬件实际值, 高通平台上 scaling_cur_freq 会被 EPSS/温控按下去而不回写)。**读不到一律返回空/0, 绝不编数** —— 调用方据此整行不出现。",
+   "trigger": "启动日志 / 跑分采样(频率采样放在工作线程, 不能塞进 _on_flip)",
+   "source": "main.py:379-455 (_cpu_groups/_probe_boost_thread/_cpu_shape), 5574-5611 (_CPUFRQ/_cpufreq_cores), 18019-18049 (启动日志里的 CPU/SoC 行)",
+   "params": "逐核上限 12(8 核封顶留余量); 同时读 Build.SOC_MANUFACTURER/SOC_MODEL, 老版本退回 Build.HARDWARE"
+  },
+  {
+   "id": "guard-thread",
+   "name": "方向/沉浸守卫搬工作线程",
+   "kind": "silent-invariant",
+   "behavior": "那两条链**每 0.7 秒**各跑一次且**跑分期间照跑**, 是全 app 唯一常驻的周期性主线程 JNI; 而 JNI/Binder 在本项目已实测是灾难级慢(play() 单次 143.6ms)。`_guard_warm()` 启动期建队列(maxsize=16)+ 工作线程 + 在**主线程**上预热 Runnable; `_guard_post(tag)` 投递返回 True 表示主线程没付 IPC 的钱, 队列满/建不起来返回 False ⇒ 调用方退回同步 `_guard_*_now()`。两条链都幂等, 丢一次毫无影响。失败次数、UI 线程耗时都记进 `_JNI_STAT`(不许静默)。",
+   "trigger": "每次 _orient_guard / _enter_immersive / _set_system_ui / _set_keep_awake / _set_orient_lock",
+   "source": "main.py:10572-10590 (_JNI_STAT), 11081-11163 (_guard_immersive_now/_guard_worker/_guard_warm/_guard_post), 9822-9830 (prebake 里预热)",
+   "params": "_JNI_STAT[0..8] = [主线程累计秒, 主线程最慢, 发起次数, 工作线程累计秒, 工作线程最慢, 失败次数, UI线程累计秒, UI线程次数, UI线程最慢]; 队列 maxsize=16"
+  },
+  {
+   "id": "version-and-buildinfo",
+   "name": "版本号与制作时刻",
+   "kind": "player-visible",
+   "behavior": "`_app_version()`: 安卓走 `getPackageManager().getPackageInfo(getPackageName(), 0).versionName`(= buildozer.spec 的 version), 桌面临时读**同目录的 buildozer.spec**(出货打包用的就是同一个文件), 都没有返回 \"\"。**全工程版本号只出现在弹窗标题里一处**(玩家定稿), `_startup_title()` → \"跳跳的弹珠机 vX.Y.Z\"、`_soc_result_title()` → \"CPU高压测试 vX.Y.Z\"; 拿不到版本时退化成纯名字, 不留孤零零的 \"v\"。`_build_info()` 取 `os.path.getmtime(__file__)` —— **不能烘成源码常量**(生成器是纯字符串拼接, 写死日期 `--check` 每次都报不同步), mtime 约等于构建日因为 p4a 把整个 app 目录塞进 private.tar 且 tarfile 保留 mtime; 用 `1600000000 < t < now+86400` 过滤坏时钟。",
+   "trigger": "长按标题的两个隐藏弹窗",
+   "source": "main.py:12787-12814 (_app_version), 12816-12843 (_startup_title/_soc_result_title), 16714-16745 (_build_info)",
+   "params": "BUILD_TIME_FMT = '%Y年%m月%d日 %H:%M'(年月日必须写汉字防读反; 必须 %H 不能 %I); mtime 合法区间 1600000000..now+86400"
+  },
+  {
+   "id": "save-downloads",
+   "name": "导出日志到公共 Download",
+   "kind": "player-visible",
+   "behavior": "API≥29 走 MediaStore: `ContentValues().put(\"_display_name\", name)` + `put(\"mime_type\",\"text/plain\")` → `resolver.insert(MediaStore$Downloads.EXTERNAL_CONTENT_URI, cv)` → `openOutputStream` 写 → flush → close。写的字节**必须**走 `autoclass(\"java.lang.String\")(txt).getBytes(\"UTF-8\")` —— 直接把 Python bytes 交给 `OutputStream.write` 时 pyjnius 可能挑中 `write(int)` 重载, 只写进去一个字节(静默截断)。⚠️ insert 一返回那一行就已落库、文件对玩家可见(没设 is_pending) ⇒ 此后任何一步抛都必须 `resolver.delete(uri)` 清掉, 否则公共 Download 里留下 0 字节或半截的同名 txt。API<29 依次退: `getExternalFilesDir(None)` → `App.user_data_dir` → `tempfile.gettempdir()`。",
+   "trigger": "玩家点\"导出启动日志\"",
+   "source": "main.py:18193-18260",
+   "params": "mime_type=text/plain; API≥29 门槛; 候选目录列表每一项都要在 try 里(tempfile.gettempdir() 在候选目录都不存在时会抛, 裸写会让整个函数冲出异常)"
+  },
+  {
+   "id": "launch-page",
+   "name": "冷启动加载页与音效硬超时",
+   "kind": "player-visible",
+   "behavior": "`Sfx(SOUND_ENABLED)` 是 `PlinkoApp.build` 的**第一句**(异步烘, 不再 sync=True —— 以前在主线程烘完, 玩家看几秒黑屏且能按发射出哑球)。若 `sfx.audio_ready()` 为假 ⇒ 挂 `_LoadVeil` 盖住整屏挡输入, 由 `RootWidget._frame` 收掉。这一行同时是\"总闸门\"的判据: 走到这里音频已就绪 ⇒ 加载页根本不建 ⇒ 启动信息里那个\"音效等待 1000ms\"就跟玩家感知的等待没关系。",
+   "trigger": "build(); 音效就绪/6s 超时后由 _frame 摘页",
+   "source": "main.py:21856-21901, 22333-22347 (main 入口); veil 相关 0.6.37 起见 buildozer.spec:569-660",
+   "params": "SFX_READY_TIMEOUT=6.0s 硬超时; VEIL_BG=#0b1220(与 presplash_color / 主题底色三处同值); VEIL_TITLE_IN_SEC=0.22"
+  },
+  {
+   "id": "cli",
+   "name": "命令行开关 (桌面/调试)",
+   "kind": "dev-tool",
+   "behavior": "`main()` 里手写解析(靠 KIVY_NO_ARGS 挡住 Kivy): `--nosound` 关音效; `--selftest` 跑物理/RTP/哑火/音效体检后 return/exit(1); `--smoke` 跑桌面自动冒烟(蓄力发射/必中盘/哑火/余额不足飘字 + 截图)后 return; 其余进 `PlinkoApp().run()`。另有 `--landscape` 在 build() 里把窗口设成 1740x1000 以模拟横屏反旋转。",
+   "trigger": "python main.py <flag>",
+   "source": "main.py:22333-22347 (main), 21863 (--landscape), 11460 (--landscape 参与判断)",
+   "params": "--nosound / --selftest / --smoke / --landscape"
+  },
+  {
+   "id": "glyph-probe",
+   "name": "字形级像素探针 (fx_probe 用)",
+   "kind": "dev-tool",
+   "behavior": "用专用 `GlyphLabel` + `_GLYPH_FONT=\"Roboto\"` 逐字形烘纹理并**数 alpha>0 的像素**, 用来做\"某个字符到底画没画出来\"的功能性断言(不是 grep 源码)。工程惯例: 探针必须能被它自己的参数改变行为, 且要用两个**已知不同**的输入跑一遍确认它会报差异(见 buildozer.spec:6560-6571 那段\"假绿灯\"教训)。",
+   "trigger": "tools/fx_probe.py(不在 git 内)",
+   "source": "main.py:10656-10706, 11956",
+   "params": "_GLYPH_FONT=\"Roboto\"(就是项目注册的那个中文字体)"
+  }
+ ],
+ "constants": [
+  {
+   "name": "SFX_GATE",
+   "value": "True",
+   "meaning": "闸门总开关。置 False ⇒ 闸门永不挂载, 全链路等价于 v0.8.60(连日志都只多一行「闸门未启用」)"
+  },
+  {
+   "name": "SFX_GATE_FIRST_SEC",
+   "value": "1.5",
+   "meaning": "闸门先跑, 最多等它 1.5 秒; 到点没开才转老探针兜底。只在「闸门存在但打不开」时才被付掉"
+  },
+  {
+   "name": "SFX_READY_TIMEOUT",
+   "value": "6.0",
+   "meaning": "等「真的能播」的硬超时, 到点无条件放行 —— 绝不软锁(项目红线)"
+  },
+  {
+   "name": "SFX_READY_POLL",
+   "value": "0.15",
+   "meaning": "探测间隔起手值, 之后按实测速率自适应接管"
+  },
+  {
+   "name": "SFX_VOICES",
+   "value": "8",
+   "meaning": "并发声道数 —— **每个池**的上限(8→16→8 是回退, 16 相对 8 无已证实的收益)"
+  },
+  {
+   "name": "SFX_POOL_SPLIT",
+   "value": "True",
+   "meaning": "开第二个 SoundPool 池只装语音(voice_*)。AOSP 每池解码线程硬编码 2 ⇒ 两池 = 4 条"
+  },
+  {
+   "name": "SFX_MASTER / SFX_SEED",
+   "value": "1.0 / 20260727",
+   "meaning": "总音量(手机喇叭需要满幅) / 合成用固定种子(每次启动音色一致)"
+  },
+  {
+   "name": "GATE_MODE_FIRST / OFF / ONLY",
+   "value": "\"first\" / \"off\" / \"only\"",
+   "meaning": "闸门四档实验: first=出货默认(闸门优先+兜底), off=老探针对照, only=只等闸门(已退休)"
+  },
+  {
+   "name": "_PIN_MAX",
+   "value": "24",
+   "meaning": "字体钉子名额上限。每个 fontid 实测约 0.88MB, 24 个 ≈ +21MB RSS, 是按 RSS 预算倒推的"
+  },
+  {
+   "name": "_PIN_AFTER",
+   "value": "3",
+   "meaning": "同一个字号冷开满 3 次才钉。别再调回 2(名额不够且分错人)"
+  },
+  {
+   "name": "_PIN_CAND",
+   "value": "[0] (运行时填)",
+   "meaning": "那次扫描里\"形状对得上\"的 list 一共有几个。>1 说明可能认错了 —— 必须印进日志"
+  },
+  {
+   "name": "_TEXTEX_PER_LABEL",
+   "value": "64",
+   "meaning": "每个标签的文字纹理缓存上限。状态栏要存 45 项, 留在 12 会自己把自己挤掉且不报错"
+  },
+  {
+   "name": "_TEXEX_G_MAX",
+   "value": "256",
+   "meaning": "全局(跨标签)纹理缓存上限, 一张几十 KB ⇒ 256 张约十几 MB"
+  },
+  {
+   "name": "_TEXEX_FIELDS",
+   "value": "15 个字段",
+   "meaning": "text/font_size/bold/color/text_size/halign/valign/padding/mipmap/outline_width/disabled/font_name/underline/strikethrough/font_kerning —— 漏一项 = 改了属性但缓存命中(只在命中时犯, 极难复现)"
+  },
+  {
+   "name": "FPS_CAP_OPTIONS",
+   "value": "(60, 90, 120, 144, 165, 185)",
+   "meaning": "用户可选的帧率档位"
+  },
+  {
+   "name": "FPS_CAP_DEFAULT / FPS_CAP_PC",
+   "value": "120 / 120",
+   "meaning": "默认档位 / 桌面档位"
+  },
+  {
+   "name": "_BENCH_FPS_FORCE / _BENCH_FPS_FORCE_PHYS",
+   "value": "10 / 10",
+   "meaning": "跑分波2(高压) / 波1(物理跑分) 期间把帧率按到的上限。两波统一 10fps(玩家定案)。**别再往下压**"
+  },
+  {
+   "name": "_DEVICE_WIDE_MIN",
+   "value": "9.0/16.0 = 0.5625",
+   "meaning": "短边/长边 ≥ 这个值判为宽屏(16:9 及更宽/更方, 平板类), 允许四方向旋转; 否则锁竖屏"
+  },
+  {
+   "name": "方向码",
+   "value": "7=SENSOR_PORTRAIT / 10=FULL_SENSOR / 14=LOCKED",
+   "meaning": "瘦长手机锁 7; 宽屏横置(rot 1/3)重申 10; 跑分黑屏期间锁 14(锁当前方向, API 18+)"
+  },
+  {
+   "name": "沉浸标志位",
+   "value": "FULLSCREEN|HIDE_NAVIGATION|IMMERSIVE_STICKY|LAYOUT_FULLSCREEN|LAYOUT_HIDE_NAVIGATION|LAYOUT_STABLE",
+   "meaning": "「真全屏」6 位; 非沉浸档直接 setSystemUiVisibility(0)"
+  },
+  {
+   "name": "震动 amp",
+   "value": "255",
+   "meaning": "VibrationEffect.createOneShot(ms, 255) —— 满振幅。DEFAULT_AMPLITUDE(-1) 通常只输出约 50% 功率, 手机上震感微弱"
+  },
+  {
+   "name": "BUILD_TIME_FMT",
+   "value": "'%Y年%m月%d日 %H:%M'",
+   "meaning": "制作时刻格式。年月日写汉字防读反; 必须 %H 不能 %I(12/24 制)"
+  },
+  {
+   "name": "buildozer.spec version / android.numeric_version",
+   "value": "0.8.70 / 1000000",
+   "meaning": "version 只决定 versionName; numeric_version 是显式钉的 versionCode 常数, 防 INSTALL_FAILED_VERSION_DOWNGRADE"
+  },
+  {
+   "name": "android.api / minapi / ndk / archs",
+   "value": "33 / 21 / 25b / arm64-v8a,armeabi-v7a",
+   "meaning": "targetSdk 33 是 12L+ 大屏给全屏窗口的前提(30 会被塞 letterbox 兼容盒); ndk 25c+/26 有兼容问题"
+  },
+  {
+   "name": "p4a.branch",
+   "value": "v2024.01.21",
+   "meaning": "命根子。新版 p4a 默认下载 Python 3.14 alpha, _PyLong_AsByteArray 从 5 参变 6 参, Kivy 2.3 的 Cython 代码编译不过。tag 格式必须严格 `v2024.01.21`(带 v、月日补零)"
+  },
+  {
+   "name": "requirements",
+   "value": "python3,kivy==2.3.0,pyjnius",
+   "meaning": "三个都锁; CI 侧 pip install \"cython<3.0\" \"buildozer==1.5.0\""
+  },
+  {
+   "name": "KIVY_ORIENTATION",
+   "value": "\"Portrait PortraitUpsideDown Landscape LandscapeUpsideDown\"",
+   "meaning": "运行时再设一次防 bootstrap 未带上。只写竖屏两方向会把 SDL 也锁竖屏"
+  },
+  {
+   "name": "android.presplash_color",
+   "value": "#0b1220",
+   "meaning": "必须和 presplash.png 边缘同色, 且与主题底色 / VEIL_BG 三处同值, 否则闪屏突变"
+  }
+ ],
+ "gotchas": [
+  "所有碰 Android View/Window 的调用一律 `runOnUiThread`。从 SDL/Python 线程直调 `setSystemUiVisibility`, 视图已 attach 时会被 ViewRootImpl 拦下(CalledFromWrongThread), 被 `except: pass` 吞掉 —— 真机表现是「竖屏启动沉浸不生效, 转一次屏才自愈」这种灵异现象。凡吞异常的代码必须保证调用姿势本身不会错。",
+  "交给 `Clock.schedule_*` 的函数引用**签名必须能收 1 个位置参数**。零参 `@staticmethod` 在真机上启动 0.7 秒整必抛 TypeError 闪退(桌面 sig/selftest/smoke 全测不出 —— TypeError 发生在函数体执行之前, try/except 保险在屋里、人死在门外)。统一写 `def f(*_)`。",
+  "`getSystemService` 必须传**字符串常量**(`Context.VIBRATOR_SERVICE` / `Context.BATTERY_SERVICE`), 传 `autoclass(...)` 的 Class 对象匹配不到 `getSystemService(Class<T>)` 重载, **静默失败** —— 权限给了、代码跑了、就是不震。",
+  "pyjnius 取 Java 内部类必须用 `Outer$Inner` 规范写法; `Outer.Inner` 属性访问解析**并不可靠**, 一旦抛就被 open_output 的 except 吞掉 ⇒ **整台设备静默降级到 Kivy 后端**。`android.view.WindowManager$LayoutParams.FLAG_KEEP_SCREEN_ON` 同款(写成 `android.view.WindowManager.FLAG_KEEP_SCREEN_ON` 会抛 ⇒ 全屏正常但常亮失效)。",
+  "SoundPool.load() 返回 sampleId **不等于**解码完; 没解码完 `play()` 返回 0 且什么都不做(无异常无日志) —— 这就是「音效都在、就是不响」的形态。",
+  "闸门 `setOnLoadCompleteListener` **必须在任何 load() 之前**挂上 —— 回调是一次性的, 已经解完的样本永不再报, 漏一个回调闸门就永远打不开。",
+  "闸门 `allReady()` 必须**闩锁**, 不能实时重算 —— 重试路径会再 expect 一个样本, 实时算会让闸门「开了又关」。",
+  "闸门 `readyMs()` 从**第一个 expect()** 起算, 不从构造起算 —— 冷启动时池建好很久了样本还在合成, 从构造起算会被烘焙时间淹没。",
+  "两个 SoundPool 池的 sampleId **各自从 1 编号** —— 只用 sid 做键会跨池互相冒充(本项目头号失效形状)。反查名字必须带池序号。",
+  "字体钉子的淘汰队列 `sdl2_cache_order` 是 `.pyx` 里的 cdef, `getattr(_text_sdl2, \"sdl2_cache_order\")` **拿不到**(不进模块 dict), 只能靠 `gc.get_objects()` 扫; 而且**必须在 `gc.freeze()` 之前**做 —— freeze 把对象移进永久代后 `gc.get_objects()` 只剩 11 个, 钉子会静默失效。",
+  "`_pin_fontid` **绝不 append**, 只准 `remove` —— order 里出现重复项时那句 `del cache[popid]` 会 KeyError 崩在渲染路径上。钉之前必须断言 `len(order)==len(set(order))`。",
+  "`_texex` 那一层**不能直接缓存 Kivy 给标签建的那张 Texture** —— `CoreLabel.refresh()` 在宽高不变时会 `texture.ask_update(...)` **原地重画进同一张纹理**, 于是 A 改字会把 B 正在显示的字悄悄改掉(只在同尺寸时发生)。必须烘一个**专用 CoreLabel**(text/options 从此一个字不改)再把它的纹理交出去。",
+  "`_texex_bake` 里 `_cl.refresh()` **绝不能漏** —— 漏了 `_cl.texture` 恒为 None ⇒ `_texex_apply` 返回 False ⇒ 永远存不进缓存, 而**画面完全正常**(退回去渲染了), 命中率恒为 0、白拿一个 CoreLabel 的开销。",
+  "`_texex_bake` 里 `_cl.texture.bind()` **必须调** —— `CoreLabel.refresh()` 只量宽高挂回调, 真正的光栅化要等纹理第一次被绑上去画才发生。不 bind 的话预热只是把那一笔 4~10.7ms 的账推迟到\"这句话第一次上屏\"那一帧, 一个字都没省。",
+  "字号预热**只能烘 `FIT_SCALES`, 不能连 `FIT_FINE` 一起烘** —— Kivy 的 SDL2 字体缓存上限是 64, 155 项超上限 ⇒ 预热自己把自己挤掉(表里有、真量过, 运行期还是冷), 实测低90 从 8 帧退回 10 帧。",
+  "预热字号时**绝不能 `round`**, 也**不能手抄 `sp(N)`** —— Kivy 的字体缓存按**全精度**索引, 差 1e-7~5e-5 就是两个 fontid, 预热等于白烘且不报错。必须从标签自己的 `_fit_base` 读、和运行期算同一个数。",
+  "模板标签(`_warm_tmpl` 造的)**必须打 `_texupd_tag`** —— `_texupd_wrap` 的入口判据是 `self._texupd_tag is not None and self.text`, 没打标的标签直接走 Kivy 老路、压根不进缓存 ⇒ 烘了等于没烘且不报错。tag 本身不进 `_texex_key` 字段表, 所以一个模板够。",
+  "`_texfill_wrap` / `_swap_wrap` / `_clock_wrap` 包装后**必须保住 `__name__`** —— Kivy 有按方法名找的地方, 改名会静默失联。",
+  "`_swap_wrap` 要包的是 **`type(Window).flip`**, 不是 `Window.flip` —— 后者是绑定方法, 赋值上去只会给实例加属性, 而真正被调的是 `WindowBase.on_flip` 里的 `self.flip()`(走类)。",
+  "`_swap_wrap` 必须在 `_orig` **之前**读 `_FRAME_END` —— `_on_flip` 是在 `_orig` 里面被派发的, 它读完 `_FRAME_BRK` 就清空; 记晚了这一帧白记。",
+  "`Sfx.pause_out/close` 必须**遍历所有池** —— 原来只 pause/release 了 `_sp`, 语音池从来没被暂停过 ⇒ 按静音/切后台时正在念的语音会继续念完(而语音恰是最长的 1~3 秒)。",
+  "release 后**不把池字段置 None** —— `play_named` / `probe_all` 都在判 `is not None`, 置 None 会把\"释放后的旧引用\"变成\"路径分岔\"。",
+  "`ACTION_HEADSET_PLUG` 是 **sticky** 广播, registerReceiver 会立刻回放当前状态 ⇒ 第一条必须只记初值、**绝不重建**(旧写法 `if st == self._plugged: return` 初值 None 恒假 ⇒ 每次启动都白重建一次 SoundPool, 还会在冷路径烘焙中途清掉 _ids)。",
+  "PythonJavaClass 代理(receiver / Runnable)**必须存成字段保活**防被 GC —— 这是 OnLoadCompleteListener 那座桥的前车之鉴。",
+  "`_immersive_task()` 的 Runnable **必须在主线程上建**(它要注册 Java 代理), 且**单实例缓存反复投递** —— 绝不在工作线程上现造 PythonJavaClass。",
+  "沉浸「切档必须立刻见效一次」, 不能只改标志位等下一个 2.5 秒周期重申 —— 从真全屏切回非沉浸时系统栏会继续藏着最多 2.5 秒。反过来, `_enter_immersive` 在**非沉浸档必须直接 return**(那一档该有的样子就是系统默认值, 硬调只是白花 UI 线程)。",
+  "`FLAG_KEEP_SCREEN_ON` 是**正确性问题不是体验问题** —— 屏幕一灭, 安卓会暂停游戏、冻结 Clock, 6 分钟的高压测试会被打断, 成绩是假的。用窗口标志而不是 WakeLock: 不需要权限, 且随窗口可见性自动失效。",
+  "`_request_android_high_hz` 里那个 `if _BENCH_FPS_LOCK[0] > 0` 的压制**必须有** —— 只压 `Clock._max_fps` 而不压对系统的请求是错的: app 会一边告诉系统\"我要 120Hz\"一边只画 60。真机实测(游戏120+OS120, 只压 Kivy) 实际渲染 70.5fps 没按住。",
+  "`_apply_fps_cap()` 是「帧率上限」的**唯一生效点** —— 压制闸门必须挂在这里; 散在各调用点的话, 跑分途中任何一次 `_apply_fps_cap`(弹窗关闭/切回前台)都会把上限悄悄恢复, 日志上看不出来。",
+  "`_guard_orient_now` 跑分锁定期用 **14 (LOCKED)** 而不是 `NOSENSOR(5)` —— 后者语义是\"用 manifest 声明的方向\"(平板横竖都可能), 不是\"锁在当前方向\"。",
+  "`LandLayer._to_eq` **只做逆旋转, 绝不再减 anchor.pos** —— Kivy 是单一 window 坐标系, AnchorLayout 不是 RelativeLayout, 多减一次会把所有控件点击判定区平移出屏幕(1740x1000 时偏移 (370,-370))。",
+  "横屏触摸三处缺一不可: ①必须用 `touch.apply_transform_2d(transform)`(`touch.pos = (x,y)` 是无效变换, 而 `ButtonBehavior.on_touch_down` 判的是 `touch.x/y`); ②变换只做逆旋转不减容器 pos; ③旋转层必须覆写 `to_local`/`to_parent`(grab 之后的 move/up 不走你的 on_touch_*, 走祖先链 to_local ⇒ 不然按钮按下有反馈、抬起无动作)。",
+  "`Cloud.` 不用 —— 用 MediaStore 写公共 Download 时, insert 一返回那一行就已落库、文件对玩家可见(没设 is_pending): 此后任何一步抛都必须 `resolver.delete(uri)` 清掉, 否则公共 Download 里留下 0 字节或半截的 txt(而那个功能的全部承诺就是\"去 Download 拿\")。**别把 close 挪进 finally** —— 那样\"没写全\"会被吞成\"已保存\"。",
+  "写字节给 `OutputStream.write` **必须**走 `java.lang.String(txt).getBytes(\"UTF-8\")` —— 直接把 Python bytes 交过去时 pyjnius 可能挑中 `write(int)` 重载, 只写一个字节(静默截断)。",
+  "`android.permissions = VIBRATE` 必须声明 —— 没权限 `Vibrator.vibrate()` 静默失败(不抛异常, 直接不振, 最难排查的一类)。",
+  "降级链每一级都要把异常原文记进 `_BACKEND_ERRORS` —— 以前这里全是 `except: pass`, 结果是玩家的安卓设备上 SoundPool 一直构造失败、静默降到 Kivy-SoundLoader 上跑, 而面板只能显示\"后端是 Kivy-SoundLoader\", 说不出为什么。",
+  "**版本号 `version` 只决定 versionName**; 真正管能不能装上去的是 versionCode。所以 `android.numeric_version = 1000000` 那一行别删、也别改成跟 version 联动的写法 —— 版本号一旦退回, Android 会 `INSTALL_FAILED_VERSION_DOWNGRADE` 拒绝安装, 装新版得先卸载, 那会清掉玩家攒的历史。",
+  "`os.environ.setdefault(\"KIVY_NO_ARGS\", \"1\")` 必须在 **import kivy 之前** —— 否则 Kivy 的 argparse 会吃掉 `--selftest/--smoke` 并报 \"option not recognized\"。",
+  "`p4a.branch` 的 tag 格式必须严格 `v2024.01.21`(带 v、月日补零) —— 写 `2024.1.21` 会报 \"Remote branch not found\"。",
+  "buildozer 1.5.0 的 `orientation` **只认** landscape / portrait / portrait-reverse / landscape-reverse 四个值 —— 写 `sensorPortrait`/`fullSensor` 会直接报 \"is not a valid value for orientation\"。manifest 层的 fullSensor 靠 `android.manifest.orientation` + p4a hook 注入。",
+  "`source.include_patterns` 里子目录资源**必须显式列**(包含 `assets/*.png` 的\"双保险\"), 真伪以出包后解 `assets/private.tar` 为准 —— `unzip -p plinko-<版本>.apk assets/private.tar > p.tar; tar -tf p.tar | grep '^assets/glass_tumbler'` 期望 3 张。",
+  "CI 缓存 key 里那个版本前缀(v4)是有用的: 换 targetSdk 时必须 bump —— 回退前缀会把 targetSdk30 时代的 dist 捞回来。",
+  "`_find_sdl2_order()` 只能在**启动期做一次** —— `gc.get_objects()` 要建 5.4 万个引用的列表, 在采样窗口里调它本身就是一次长帧。",
+  "启动期的 `_boot_log` 必须**极便宜且吞掉一切异常** —— 一次 append 几微秒, 全流程最多几百条; 但绝不能让它影响启动, 调用点不需要 try。",
+  "本文件是 `tools/build_android_main.py` 纯字符串拼接的**生成物, 勿手改**; 生成器**不做去重**, 同名模块级变量会**静默覆盖**(后来者获胜、前面那个变成死代码, 不报错)。新段的模块级名字一律加前缀。",
+  "`tools/` 与 `../wingui/` **都不在 git 里** —— 仓库里只有生成物 `android/main.py`, 所以\"改了 tools 忘记重跑生成器\"会**静默丢改动**。提交前必须跑 `python ../tools/build_android_main.py --check`。",
+  "`android/java/com/plinko/SoundGate.java` **通篇只写 ASCII** —— CI 上 javac 的默认源编码不保证是 UTF-8, 注释里一个中文字节就可能把整个 APK 编崩。(中文说明写在 buildozer.spec 里。)",
+  "`stop_soundpool` 页面上真实存在的那句 `_play_missed` 计数**必须印进日志**(0 也要印) —— 它是\"运行期静默不响\"唯一的探照灯, 而面板要玩家主动点开。"
+ ],
+ "notes": "盘点范围: android/java/ 下**全部** Java 文件(实际只有一个 SoundGate.java, 213 行)、buildozer.spec 的 [app]/[buildozer] 配置段(文件 6668 行, 其中 6600+ 行是 changelog 注释, 真正生效的 key=value 只有 24 处)、BUILD_APK.md 全文、.github/workflows/build-apk.yml、p4a/hook.py 全文, 以及 android/main.py 里平台胶水相关的 Python 侧(main.py 实测 22347 行, 与任务书给的 22,347 一致)。\\n\\n分类框架:\\n· **性能必需**(去掉会掉帧) —— `texex-cache`(命中即跳过第一趟+第二趟+上屏三样, 真机 4~10.7ms/次)、`texfill-swap-clock-wrap`(不是性能本身, 但它们量化出的\\\"第二趟 8~11ms 落在中奖那帧\\\"直接驱动了 texex 和预热表)、`prebake`/`texwarm-table`/`fontwarm-grid`(把\\\"必然出现的第一次\\\"从采样/中奖那帧挪到加载页)、`gc-freeze`(gen-2 从 2.9ms → 0.0ms)、`guard-thread`(每 0.7s 的 JNI 往返搬出主线程)、`sfxpool` 的 needs_worker(play() 单次最慢 143.6ms 会卡主线程)、`pin-fontid`(防热字号被 64 上限挤出 ⇒ 复冷 20~30ms)。\\n· **兼容性 shim**(去掉是兼容性问题, 不一定掉帧) —— `hook-manifest`(大屏 letterbox)、`hook-theme`(启动窗口突变 / 奇怪图标)、`land-layer`(横屏触摸三坑)、`font-register`(中文字体, 不去 = 全豆腐块)、`kivy-env`(KIVY_NO_ARGS / KIVY_ORIENTATION)、`javasoundgate` 存在的理由就是\\\"不用那座会 GC 的 pyjnius 监听器桥\\\"。\\n· **两者都是** —— `route-rebuild`(不重建 = 永久无声/耳机无声)、`pause-resume`(漏语音池 = 语音念完)。\\n\\n关于 `_texex_*` 这几个 monkeypatch 的分工(任务点名): `_texupd_wrap` 是第一趟(Kivy 延后执行的 texture_update, 含缓存命中路径), `_texfill_wrap` 是第二趟(真光栅化, 由 Texture 回调在纹理下次被用时触发, 跑在 texture_update **外面**), `_swap_wrap` 记\\\"_frame 算完 → 真正交画面\\\"的墙钟(渲染 + 等 GPU/驱动), `_clock_wrap` 把那段\\\"尾\\\"再切两刀(尾·回调 / 尾·空档)。四者只有 `_texupd_wrap` 是**性能必需**, 后三个是纯埋点(dev-tool)。\\n\\n关于 `_pin_fontid`/`_find_sdl2_order`: 它不是性能优化而是**防退化** —— Kivy 的 SDL2 字体缓存上限 64, 热字号被挤出后每次复冷要现开 TTF 字形表(真机 20.5/16.6ms, 桌面 26ms)。钉子把已经进过队列的 fontid 从淘汰队列摘掉。三个静默失效面(定位失败 / 断言不通过 / 超上限)都必须印进日志。\\n\\nPython 侧调用 Java 的能力清单(全部经 pyjnius, 无第二座桥): autoclass + 类级调用(Process/Build/Settings/VibrationEffect/AudioAttributes/SoundPool.Builder/MediaStore)、`org.kivy.android.PythonActivity.mActivity`(取 Activity)、`getSystemService(字符串常量)`(Vibrator/BatteryManager)、`registerReceiver`(PythonJavaClass BroadcastReceiver)、`runOnUiThread` + `PythonJavaClass Runnable`、`android.runnable.run_on_ui_thread`(setFrameRate/preferredDisplayModeId)、SystemClock.elapsedRealtimeNanos(闸门计时, 在 Java 侧)。",
+ "uncovered": [
+  "`android/main.py` 的 UI 层(LoadVeil 的填充线扫色动画、RotPopup、LandLayer 的弹窗挂层)只读到入口与调度, 没有逐行盘完 —— 那些偏 UI 表现而非平台胶水。",
+  "`Sfx` 总线的完整状态机(bake → prime → _await_ready → _retry_failed → 48k 对拍档 → _arm_pools_bench 的四档阶梯)只盘了与\"平台就绪判定\"相关的部分; 音效合成/波形配方/音量分级属于音效子系统。",
+  "buildozer.spec 里 6600+ 行 changelog 注释只抽样读了约 300 行(0.6.x/0.7.x/0.8.x 的版本记录), 不可能逐条提取行为 —— 若新实现需要与旧版的**文案/数值口径**完全对齐, 那部分仍需专项盘点。",
+  "`tools/` 目录不在 git 里(本机 E:\\\\AI_Tools\\\\other\\\\DanZhu\\\\tools\\\\ 是否存在于参考仓库未确认), 所以 `build_android_main.py` 的抽取边界、`android_part_{head,backends,ui}.py` / `pile3d.py` / `android_part_pile.py` 的切分点无法核实 —— 只从 BUILD_APK.md 的表格知道分工。",
+  "真机实测数字(如\"单次 play 143.6ms\"\"玻璃贴图 21ms\"\"冷/热 1%Low 91.8 vs 114.8\")全部来自注释转述, 没有复跑; 新实现若要沿用作参数, 应重测。",
+  "`fx_probe.py`(336 条门禁)与 `--smoke` 的具体断言清单不在本仓库, 只从注释里知道它覆盖了压暗覆盖/绘制次序/震动同步/字体钉子/文字缓存等 —— 移植时需要单独盘这套验收。",
+  "MediaStore 导出还有 `_err1` / 候选目录 ④ 之后的收尾逻辑(18260 行往后)没读完。",
+  "`android/CLAUDE.md`(57KB)只做了存在性确认, 未与 buildozer.spec 的 changelog 交叉核对是否有口径冲突。"
+ ]
+}

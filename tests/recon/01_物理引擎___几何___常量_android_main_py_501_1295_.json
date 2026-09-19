@@ -1,0 +1,800 @@
+{
+ "subsystem": "物理引擎 + 几何 + 常量（android/main.py 501~1295 为主，含被物理引用的 GUI 落地/卡死段）",
+ "features": [
+  {
+   "id": "geo-regions",
+   "name": "画布/区域划分（尺寸层）",
+   "kind": "silent-invariant",
+   "behavior": "定 520x660 画布；外墙厚 12；地板 y=648；右侧一条宽 42 的发射竖井（x 466~508），竖井与场区之间是一道厚 7px 的隔墙（x 459~466，只在 y>=160 存在）；场区 x 12~459（宽 447），9 个槽每格宽 49.667。所有后续几何、落格映射、钉阵间距全部由这几个数派生（SLOT_W=PEG_SX=FIELD_W/9）——改一个就整体变盘。",
+   "trigger": "模块导入时求值，全程不变",
+   "source": "android/main.py 501-538",
+   "params": "CW=520 CH=660 WALL=12 FLOOR=648 LANE_W=42 LANE_WALL_TH=7 RIGHT_INNER=508 LANE_L=466 FIELD_R=459 FIELD_L=12 FIELD_W=447 NUM_SLOTS=9 SLOT_W=49.667 SLOT_H=32 SLOT_TOP=616 DIV_W=6 DIV_TOP=606 LANE_WALL_TOP=160"
+  },
+  {
+   "id": "geo-pegs",
+   "name": "钉阵几何 build_pegs",
+   "kind": "player-visible",
+   "behavior": "7 行钉，行距 55，首行 y=150（末行 y=480）；偶数行(r=0,2,4,6) 9 颗钉落在槽中心 x=12+(i+0.5)*49.667；奇数行(r=1,3,5) 10 颗钉（含左右两颗贴墙钉 x=21 与 x=450）。深部奇数行（r>=3）除最右钉(409.33)与两颗墙钉外整体右移 0.30 列宽(14.9px) 以错开 24.3° 对角穿隙通道。全部钉半径 6。总计 66 颗钉。",
+   "trigger": "build_geo() 调用一次（构建期）",
+   "source": "android/main.py 871-896, PYTHON 526 PEG_SX, 531 PEG_DEEP_SHIFT, 532 PEG_DEEP_MIN_ROW",
+   "params": "PEG_TOP=150 PEG_SY=55 PEG_ROWS=7 PEG_R=6 BALL_R=9 PEG_SX=49.667 PEG_DEEP_SHIFT=0.30 PEG_DEEP_MIN_ROW=3"
+  },
+  {
+   "id": "geo-divpegs",
+   "name": "隔板正上方一排钉（y=570，末段悬念钉）",
+   "kind": "player-visible",
+   "behavior": "在 8 条槽隔板的正上方各加一颗钉，固定在 y=570，8 颗（x=61.67/111.33/161/210.67/260.33/310/359.67/409.33），作为 peg_rows 的最后一行。y=570 这个**字面量**还是 PEG_SPRINT 冲刺分支的唯一判据（见 peg-sprint）。",
+   "trigger": "build_pegs 尾部",
+   "source": "android/main.py 890-895, 1042",
+   "params": "8 颗，y=570"
+  },
+  {
+   "id": "geo-dividers",
+   "name": "槽隔板几何 build_dividers",
+   "kind": "player-visible",
+   "behavior": "8 块竖直隔板，x 中心落在槽边（12+k*49.667），宽 6，从 y=606（比槽口 616 高 10px，做出“过挡板”观感）一直落到地板 648。",
+   "trigger": "build_geo()",
+   "source": "android/main.py 898-904",
+   "params": "DIV_W=6 DIV_TOP=606 底=FLOOR=648"
+  },
+  {
+   "id": "geo-walls",
+   "name": "墙体几何 build_walls",
+   "kind": "player-visible",
+   "behavior": "5 个轴对齐矩形：顶(0,0,520,12)、左(0,0,12,660)、右(508,0,520,660)、底(0,648,520,660)、竖井隔墙(459,160,466,648)。**底墙矩形在 physics_step 里被显式跳过**（见 land-detect）。顶墙矩形被 _collide_rect 识别为“天花板”（判据 ry1==0 and ry2==WALL），走天花板弹射器分支。",
+   "trigger": "build_geo()",
+   "source": "android/main.py 906-914, 1083, 1180-1181",
+   "params": "顶=(0,0,520,12) 隔墙=(459,160,466,648)"
+  },
+  {
+   "id": "geo-arc",
+   "name": "弧面（导流弧）几何 build_deflectors",
+   "kind": "player-visible",
+   "behavior": "竖井右壁口部一条 11 段折线导轨，12 个顶点：(508.0,148.9)→(506.8,148.3)→(505.6,147.3)→(504.7,146.3)→(504.0,145.0)→(497.7,131.4)→(495.5,126.7)→(492.5,120.4)→(489.8,114.0)→(487.2,107.5)→(484.6,100.9)→(482.1,94.5)，总长 60.79px。形状 = 根部 R≈8 圆弧(段0~3，与竖直夹角 63°→28° 快速过渡) + 25° 接触斜段(段4，长 14.99，与竖直夹角 24.9°) + 5 段近乎直线的缓弯延长(段5~10，每段约 7px，与竖直夹角 25.5°→21.3°，描述成 R≈400 微弯)。球纯竖直上升时在此被带向左上抛入钉阵——这是**唯一的转向机构**（转向处的所有水平引导力已被全删）。实测每发恰好 1 次 EV_ARC、零二次接触。",
+   "trigger": "build_geo()；每发射前按 arc_dy 整体平移重建（见 geo-arcjitter）",
+   "source": "android/main.py 916-938, 940-948",
+   "params": "12 顶点 / 11 段，总长 60.79px，接触段 14.99px@24.9°"
+  },
+  {
+   "id": "geo-arcjitter",
+   "name": "弧面每发抖动 arc_dy",
+   "kind": "player-visible",
+   "behavior": "每次发射前把整条弧面折线**整体**（两端同步）上下平移 arc_dy=uniform(-6,+6) px，写回 geo['deflectors']（源始终从 self._base_deflectors 重建，不累积）。同一发内物理与渲染共用这份 geo，所以玩家看到球与导轨始终相切。跑分模式下 arc_dy 从按球号派生的确定流取（Random(BENCH_SEED+1000+ball_i)），正常游戏走全局 random。",
+   "trigger": "launch() 发射前",
+   "source": "android/main.py 20109-20127, 13271",
+   "params": "arc_dy ∈ [-6, +6] px"
+  },
+  {
+   "id": "launch-power",
+   "name": "力度→发射速度映射",
+   "kind": "player-visible",
+   "behavior": "power_u(power) 把 [0.15,1.0] 线性归一化到 [0,1]（低于 0.15 的走哑火，不进这里）；发射速度 = 1077 + 37*u，即全蓄力区间内竖直速度只变 3.4%（为了让越顶时刻只散 ~30ms，预烘的 1.5s 飞行音才能对齐全过程）。球从 (487, 637) 竖直向上发射（vx=0）。",
+   "trigger": "玩家松手 → launch() → launch_ball(frozen_power)",
+   "source": "android/main.py 1217-1219, 1244-1261, 20089-20127",
+   "params": "LAUNCH_MIN=1077 LAUNCH_MAX=1114 PLUNGER_X=487.0 PLUNGER_Y=637 MISFIRE_POWER=0.15 CHARGE_RATE=0.9"
+  },
+  {
+   "id": "misfire-def",
+   "name": "哑火：定义（升不过隔墙顶）",
+   "kind": "player-visible",
+   "behavior": "power < MISFIRE_POWER(0.15) ⇒ 球照常弹出，但速度只有 misfire_speed(power) = 475 + 460*clamp(power/0.15,0,1)，最高 935 ⇒ apex y≈212，高于隔墙顶 y=160（即升不过去），必然原路掉回柱塞。发射音走 SFX_MISFIRE_GAIN 档（0.35→0.50 随力度），震动 8ms，**不扣弹珠、不计一局、不换盘面**，状态文案“力度不足,未扣弹珠”。GUI 力度条上有一条红线画在 ty=(SLOT_TOP-8)-MISFIRE_POWER*200，玩家看得见阈值。",
+   "trigger": "launch() 中 self.power < MISFIRE_POWER",
+   "source": "android/main.py 742-749, 1263-1273, 20093-20106, 12311-12313",
+   "params": "MISFIRE_POWER=0.15 MISFIRE_V_MIN=475.0 MISFIRE_V_MAX=935.0（注释里写的 980 是旧值）"
+  },
+  {
+   "id": "misfire-advance",
+   "name": "哑火：一维升降与归位",
+   "kind": "player-visible",
+   "behavior": "advance_misfire 完全不走 physics_step（否则落袋判据没有 x<FIELD_R 保护，会把落回柱塞的球报成 8 号槽）。只做 vy+=G*dt; y+=vy*dt；当 vy>0 且 y>=PLUNGER_Y 时贴回 637：若撞击速度 > MISFIRE_BOUNCE_VY(200) 则 vy=-vy*0.22 弹回（return False 继续），否则 vy=0 停住（return True 归位）。GUI 侧另有 MISFIRE_MAX_FRAMES=180 帧兜底（实测最长 121 帧），到点直接摆回柱塞并 park_ball。全程 x 恒等于 PLUNGER_X（自测有断言）。",
+   "trigger": "GUI state=='misfire' 每物理步",
+   "source": "android/main.py 1275-1287, 21324-21336",
+   "params": "MISFIRE_E=0.22 MISFIRE_BOUNCE_VY=200.0 MISFIRE_MAX_FRAMES=180"
+  },
+  {
+   "id": "integrate",
+   "name": "子步积分（重力 + 限速 + 位移）",
+   "kind": "silent-invariant",
+   "behavior": "physics_step 把一帧拆 SUBSTEPS=6 个子步；每个子步顺序固定为：vy += G*sub → 速度模长超过 VMAX 就整体按比例缩回 2400 → x += vx*sub, y += vy*sub → 依次做 墙(跳过地板) → 弧面 → 钉 → 隔板 四类碰撞 → 落袋判据。VMAX 必须 ≥ 最大发射速度（1114）且需防穿透；子步数增加是为了高速下不穿透。",
+   "trigger": "advance_flight(b, geo) 每物理帧一次（GUI/selftest/benchmark 共用）",
+   "source": "android/main.py 1155-1215, 1289-1295",
+   "params": "G=1000.0 VMAX=2400.0 SUBSTEPS=6 FIXED_DT=1/60"
+  },
+  {
+   "id": "rng-det",
+   "name": "随机流归属与确定性",
+   "kind": "silent-invariant",
+   "behavior": "所有碰撞随机（钉的反弹系数/法线扰动、弧面旋钮、天花板旋钮）都写成 `rng = getattr(b,'_rng',None) or random`：正常发射 _rng=None ⇒ 走全局 random（每球天然不同）；跑分发射按球号派生 Random(BENCH_SEED+1000+ball_i) ⇒ 与墙钟无关、逐帧可复现。⚠️ 预演/真发共用同一 rng 的旧约定在安卓版已不存在预演，但 `_rng` 这条通路是全局随机流的**唯一**隔离手段。",
+   "trigger": "launch_ball(power, rng=...)",
+   "source": "android/main.py 977, 1005, 1086, 1133, 20110-20127",
+   "params": "BENCH_SEED=20260914"
+  },
+  {
+   "id": "wall-collide",
+   "name": "墙/矩形碰撞 _collide_rect",
+   "kind": "player-visible",
+   "behavior": "最近点法：把球心 clamp 到矩形上取最近点，距离 < BALL_R(9) 就沿法线推出到正好相切，再 _reflect（恢复系数 e）。球心落在矩形**内部**时按“最近的一条边”选法线推出（左/右/上/下四个候选取最小）。墙用 WALL_E=0.5，隔板用 E=0.20。碰撞点若有法向接近速率就 _mark 事件位（撞产生音效）。",
+   "trigger": "physics_step 子步内，对 walls 与 dividers 各一遍",
+   "source": "android/main.py 1058-1106, 1186, 1194-1199",
+   "params": "WALL_E=0.5（墙）E=0.20（隔板）BALL_R=9"
+  },
+  {
+   "id": "ceil-eject",
+   "name": "天花板弹射器（撞顶旋钮）",
+   "kind": "player-visible",
+   "behavior": "顶墙矩形(0,0,520,12) 的碰撞被特别识别。**每发第一次撞顶**时按当前力度档从 KNOB_CEIL_ANGLE / KNOB_CEIL_BOOST 各抽一个值，缓存在 b.ceil_knob；之后所有撞顶复用同一对值（不重抽）。施加顺序：先把 vx,vy 同乘 boost（限幅 0.65~1.25，即加速 ≤25%/减速 ≤35%），再把速度向量整体旋转 tilt 度（-30~+30°），最后**保底 vy≥180** 防止旋转/减速把球吸在顶上反复撞顶。事件位记 EV_CEIL。",
+   "trigger": "_collide_rect 且 ry1==0 and ry2==WALL",
+   "source": "android/main.py 1083-1104, 677-700",
+   "params": "KNOB_CEIL_ANGLE 角 ∈[-30,+30]° KNOB_CEIL_BOOST ×∈[0.65,1.25] vy 保底 180"
+  },
+  {
+   "id": "arc-ease",
+   "name": "弧面缓动带球（逐帧规则）",
+   "kind": "player-visible",
+   "behavior": "球与弧面线段距离 < r=BALL_R*ARC_VISUAL=12.6 且正在接近(vn<0) 才生效：先把球心钉到“切点法线方向 r 处”（相切不嵌入）；首次接触时按力度档从 KNOB_ARC_ANGLE/KNOB_ARC_BOOST 各抽一个值存进 b.arc_ease=[n, last_frame, 角偏移, 力度系数]，并**只在第一接触帧**把 vx,vy 同乘力度系数一次（不每帧连乘），随后系数置 1；每一帧方向角 th = 35*min(1, n/3) + 角偏移（n = 已发生的接触帧数，逐帧 +1），速度方向被直接**改写成** (-sin th, -cos th) 保持速率不变（出口速度 = 入射速度，弧面不耗能）。即 3 个接触帧内 0°→11.7°→23.3°→35°，玩家看到球“滑过导轨逐渐转向”而不是一帧突变。事件位记 EV_ARC（静音接触，只作统计/折角豁免）。",
+   "trigger": "physics_step 子步内，y 带粗筛(|dy|>12.6 跳过)后逐段调用",
+   "source": "android/main.py 1108-1153, 1187-1192, 634",
+   "params": "ARC_VISUAL=1.4 _ARC_REACH=12.6 ARC_OUT_ANGLE=35.0 ARC_EASE_FRAMES=3 KNOB_ARC_ANGLE 偏移 ∈[-15,+30]° KNOB_ARC_BOOST ×∈[0.65,1.25]"
+  },
+  {
+   "id": "arc-frame-clock",
+   "name": "弧面缓动的帧钟（全局 _ARC_FRAME）",
+   "kind": "silent-invariant",
+   "behavior": "缓动的“帧”由模块级全局 _ARC_FRAME 提供，advance_flight 每次 +1；physics_step 的 6 个子步共享同一个帧号 ⇒ 一帧内不会多算 n。状态存在球自己身上（b.arc_ease），所以多颗球/多线程交错不会串味，但**帧钟是全局单调的**——预演与真发若同时存在会共用同一条时钟。",
+   "trigger": "advance_flight 入口",
+   "source": "android/main.py 720, 1289-1295, 1139-1152",
+   "params": "_ARC_FRAME 初始 0"
+  },
+  {
+   "id": "peg-collide",
+   "name": "碰钉 e(v) 恢复系数与法线扰动",
+   "kind": "player-visible",
+   "behavior": "钉球距离 < BALL_R+PEG_R=15 时先推出到相切，然后：① 按法线方向选恢复系数——|nx|>|ny|（侧碰）取 E_SIDE=0.20（擦面滑下几乎不弹）；否则 E_eff = E_SLOW(0.70) - (0.70-0.40)*clamp(vn/700,0,1)，即低速弹得高、高速粘（vn 是碰前的法向接近速率）；E_eff 再乘 ±8% 随机。② 法线加高斯扰动 gauss(0,0.04) 并 clamp 到 ±0.15（模拟表面粗糙度；曾加大到 0.08/±0.25 被“凭空横向移动”投诉打回）。③ 用扰动后法线 + E_eff 做反射。④ 记录事件位 EV_PEG 与撞击速率 amp，写 last_nx/last_ny（卡死踢球方向用）、hit_peg（同钉再访判据）、peg_flash（渲染高亮）、squash=1-0.05*clamp(vn/700,0,1)、spin += (vx*ny-vy*nx)*0.02。",
+   "trigger": "physics_step 子步内对 peg_rows 逐行",
+   "source": "android/main.py 975-1057",
+   "params": "E_SLOW=0.70 E_FAST=0.40 E_SIDE=0.20 E_VREF=700.0 E=0.20 BALL_R+PEG_R=15 扰动 σ=0.04 clamp ±0.15"
+  },
+  {
+   "id": "peg-limits",
+   "name": "碰钉后的全部限幅（顺序即语义）",
+   "kind": "player-visible",
+   "behavior": "反射后按固定顺序施加，每一条都对应一次玩家投诉：① crown 再访（同一颗钉且 |ny|>=|nx|）：vy 抬到 ≥70 向下离开、vx 沿原方向抬到 ≥60 逃逸（vx==0 时不给，避免“看不见的手”）；② vy<-280 的向上回弹被截到 280（弹高 ≤39px，球顶不越上层钉）；③ 若 vy>=0 且 vy < max(70, 碰前vy*0.35) 则补到该值（比例保底防失速，且不注入能量）；④ |vx|>300 截到 300（横穿 ≤1 钉距）；⑤ 侧碰且 vy∈[0,150) 时 vy=150（沿重力向下补速，**不是**沿法线横向推）；⑥ 只有 y==570 那一排钉走冲刺（见 peg-sprint）；⑦ 最后才做摩擦：vx*=0.95、vy*=0.97（摩擦乘在反射之后，所以上面所有钳位值还要再打这个折）。",
+   "trigger": "每次真反弹(vn>0)之后",
+   "source": "android/main.py 1017-1050",
+   "params": "PEG_BOUNCE_VY_MAX=280 PEG_BOUNCE_VY_MIN=70 PEG_KEEP_VY=0.35 PEG_REFLECT_VX_MAX=300 PEG_MIN_ESCAPE=150 PEG_FRICTION=0.95 PEG_FRICTION_VY=0.97 PEG_CROWN_ESCAPE=60"
+  },
+  {
+   "id": "peg-sprint",
+   "name": "570 隔板钉冲刺（末段手感）",
+   "kind": "player-visible",
+   "behavior": "当被碰的钉 y 恰好 == 570（那一排隔板正上方的钉）且 PEG_SPRINT=True：vx *= 0.7（收窄末段横速、落袋干净），并且若 0.0 <= vy < 160 则把 vy 补到 160（只兜底“仍在向下且不够快”的球，**不覆盖**碰钉顶刚反射出的向上分量，否则会变成机关枪式顶碰）。注意 vx 的 0.7 在这之后还要再乘一次 PEG_FRICTION(0.95)，净 0.665。",
+   "trigger": "碰钉判定 py == 570",
+   "source": "android/main.py 1042-1047",
+   "params": "PEG_SPRINT=True 阈值 py==570（字面量，与 build_pegs 的 y=570 硬耦合）"
+  },
+  {
+   "id": "pegs-yband",
+   "name": "钉阵 y 带粗筛（性能）",
+   "kind": "silent-invariant",
+   "behavior": "逐行处理钉子前先看该行**第 0 颗钉**的 y：若 |row[0].y - b.y| >= 15(=BALL_R+PEG_R) 则整行跳过（数学上等价，因为最近点距离必然 ≥ dy）。⚠️ 判据必须**每次重读 b.y**（同一次调用里前面的钉会改 b.y，缓存住就会漏碰，而且是静默的）。⚠️ 这个粗筛隐含要求**同一行内所有钉 y 相同**——build_pegs 满足（含 y=570 那一排）。",
+   "trigger": "physics_step 子步内",
+   "source": "android/main.py 978-984",
+   "params": "rr = BALL_R+PEG_R = 15"
+  },
+  {
+   "id": "land-detect",
+   "name": "落袋判据与“落袋即终态”不变量",
+   "kind": "silent-invariant",
+   "behavior": "y+BALL_R >= FLOOR-0.5 即判落袋：把球贴到 y=FLOOR-BALL_R，**只清 vx（不清 vy）**，立刻 return 槽号 int((x-FIELD_L)/SLOT_W) 夹到 [0,8]，该帧剩余子步全部跳过。只清 vx 让“结算槽==落格槽”成为**结构性不变量**（之后谁再推进这颗球，球心 x 与槽号都不变）；保留 vy 是为了落地那一下还能弹起来（回弹=撞击速度×LAND_E）。⚠️ 底墙矩形 (0,648,520,660) 被**显式跳过**不当弹性墙撞——否则同一子步里球会先被它以 WALL_E=0.5 弹成向上，导致落袋那一帧被 GUI 的“每轮覆盖 landed”吞掉，球斜着弹过隔板落进隔壁槽（玩家三次报的 bug）。跳过是槽号无关的（该矩形法线恒为竖直、从不改 x）。注意判据**没有 x 范围保护**：球落回竖井(x>459)会被夹成 8 号槽 → GUI 据此识别为彩蛋。",
+   "trigger": "physics_step 每子步末尾",
+   "source": "android/main.py 1167-1184, 1200-1215, 21243-21304",
+   "params": "判据阈值 FLOOR-0.5=647.5 槽号 = int((x-12)/49.667) 夹 [0,8]"
+  },
+  {
+   "id": "land-bounce",
+   "name": "落袋后的回弹与入槽弹簧（GUI landing 态）",
+   "kind": "player-visible",
+   "behavior": "进 landing 态首帧补初速：vy = max(真实下落 vy, 440) × uniform(0.85,1.15)（所以落得越快弹得越高、每发高度都不同，这是刻意的）。之后每物理步：vx += (槽中心x - x)*16*dt → vx *= 0.80 → vx 夹到 ±800；vy += G*dt；位置积分；触地(y>=FLOOR-BALL_R)时贴地、若 vy>60 播 bounce 音(音量 clamp(vy/500,0.3,1.0))、vy = -vy*0.42*uniform(0.92,1.08)，且回弹 vy 若超 -220 就压到 -220（并取 JITTER 下半段随机，避免所有快球都停在同一个高度）。落定判据：|x-槽中心| < 49.667*0.45 且 |vy|<10 且贴地；否则 0.5s 超时兜底强制停住。⚠️ 进 landing 时 GUI 把 b.vx 清零（回弹改纯竖直）——因为 landing 循环里**只有弹簧/重力/地板，没有隔板碰撞**，带横速的球会横滑过隔板停在隔壁槽。彩蛋（球落回竖井）时 land_target_x 用 PLUNGER_X 而不是槽中心，否则弹簧会把球往左拽穿隔墙。",
+   "trigger": "GUI state=='landing'（physics_step 落袋返回槽号之后）",
+   "source": "android/main.py 21337-21379（LAND_* 常量在 721-740）",
+   "params": "LAND_K=16.0 LAND_DAMP=0.80 LAND_E=0.42 LAND_BOUNCE_MIN_VY=440.0 LAND_BOUNCE_JITTER=(0.85,1.15) LAND_BOUNCE_DECAY_JITTER=(0.92,1.08) LAND_BOUNCE_MAX_VY=220.0 ALIGN_VX_MAX=800.0 落定超时 0.5s"
+  },
+  {
+   "id": "stall-kick",
+   "name": "卡死兜底：位移判据 + 踢球 + 强制结算",
+   "kind": "silent-invariant",
+   "behavior": "判据用**位移**不用速度（卡死球的速度数值和微碰撞从未停过，位置不说谎）：每物理帧若与上一帧的位移平方 > 1.0 就刷新 _last_motion；否则若静止超过 STALL_RETRY_SEC(1.2s) 且 _stall_retry<10，沿 last_nx/last_ny 的**接触法线向下**踢一次（切向取 (-ny,nx)，若 ty>0 则反向，力度 120），retry+1 并重置 crossed/risen/topped 标记；仍未落且静止超过 MAX_FALL_SEC(4.0s) 则用物理槽号强制结算。两条路都不退回柱塞重发，玩家看不到“发射失败重发”。selftest 的等价口径是“静止 72 帧(1.2s)”。",
+   "trigger": "GUI flying 态每帧；selftest 同构复刻",
+   "source": "android/main.py 21265-21286, 764-771, 7231-7241",
+   "params": "STALL_RETRY_SEC=1.2 STALL_MAX_RETRY=10 MAX_FALL_SEC=4.0 位移阈值 1.0px² 踢力 120 selftest 静止帧阈值 72"
+  },
+  {
+   "id": "events",
+   "name": "事件位协议（物理层 → 音效层）",
+   "kind": "silent-invariant",
+   "behavior": "b.events 是 int 位掩码，b.amp 是 {bit: 该帧最大法向撞击速率}。位：EV_PEG=1 撞钉 / EV_CEIL=2 撞天花板 / EV_WALL=4 撞外墙与竖井隔墙 / EV_DIV=8 撞槽隔板 / EV_ARC=16 碰导流弧。_mark 只在速率更大时更新 amp。**消费方每物理帧读完必须清零 events 并 clear amp**（残留位会让撞钉计数虚高，实测差 35%）。EV_ARC 在音效侧被 SFX_MIN_SP 设成 1e9 ⇒ 永不发声，它只用于“弧面接触帧豁免折角门禁”和接触率统计。",
+   "trigger": "各碰撞分支内 _mark；GUI/selftest 每物理步读后清零",
+   "source": "android/main.py 775-780, 965-973, 21236-21242, 2902-2906",
+   "params": "EV_PEG=1 EV_CEIL=2 EV_WALL=4 EV_DIV=8 EV_ARC=16；SFX_MIN_SP={PEG:45,CEIL:60,WALL:70,DIV:45,ARC:1e9}"
+  },
+  {
+   "id": "ball-struct",
+   "name": "Ball 数据结构与兼容接口",
+   "kind": "silent-invariant",
+   "behavior": "__slots__ 固定 21 个字段（x/y/vx/vy/item/born/events/amp/misfire/launch_power/_stall_retry/_rng/last_nx/last_ny/hit_peg/squash/squash_nx/squash_ny/spin/arc_ease/peg_flash/ceil_knob）以消除 dict 哈希开销；同时实现 __getitem__/__setitem__/get 兼容 b['x'] 与 b.get('k',d) 语法（旧代码有 18000 次查找/发）。构造走 **kwargs setattr，缺字段的球（如 park_ball 造的）靠 getattr(b,'arc_ease',None) 这类带默认值的读取兜住——直接改 __slots__ 会静默炸掉这些容错分支。",
+   "trigger": "launch_ball / 各处 Ball(...)",
+   "source": "android/main.py 1221-1242, 1131, 1087",
+   "params": "__slots__ 21 项"
+  },
+  {
+   "id": "sample-table",
+   "name": "离散表抽样与力度分档",
+   "kind": "silent-invariant",
+   "behavior": "_sample_table 从 [(值, 权重), ...] 按权重归一化抽一个值（权重全 0 时退化为取第一个，避免除零）；_power_band(power) 把连续力度定位到最近的力度档索引 0..9（KNOB_POWERS=[0.15,0.25,...,1.00]）。这两者合起来是 4 张旋钮表（弧面角/弧面力度/天花板角/天花板力度）的唯一入口；力度档位错位 ⇒ 整个落格分布漂移。",
+   "trigger": "弧面首次接触 / 天花板首次撞顶",
+   "source": "android/main.py 702-719, 1089-1091, 1134-1137",
+   "params": "KNOB_POWERS=10 档；KNOB_ARC_ANGLE 47 项 / BOOST 43 项 / CEIL_ANGLE 44 项 / CEIL_BOOST 51 项"
+  },
+  {
+   "id": "clamp-accum",
+   "name": "固定步长累加器截断（防卡顿正反馈）",
+   "kind": "platform-glue",
+   "behavior": "_clamp_accum 把累加器积压截到 MAX_STEPS_PER_FRAME*FIXED_DT（最多补 4 步）；超出的时间**直接丢掉**，不往下攒。原因是真机实测单帧 dt 到过 625ms、一帧跑 37 个物理步 ⇒ “帧慢→补更多物理步→更慢”的正反馈。代价是那一帧球走得比墙钟慢一点，是刻意取舍。60Hz 正常 1 步、30Hz 2 步，取 4 留余量。",
+   "trigger": "GUI 每个 state 分支的 while 循环前",
+   "source": "android/main.py 583-605, 21228, 21325, 21347",
+   "params": "MAX_STEPS_PER_FRAME=4 FIXED_DT=1/60 FRAME_TICK_HZ=185 FRAME_MS=16"
+  },
+  {
+   "id": "palette",
+   "name": "配色体系与禁用色派生",
+   "kind": "player-visible",
+   "behavior": "一整套扁平配色（深蓝底 #0e1524 / 面板 #15223c / 画布 #0b1220 / 墙 #2b436e / 钉 #7b8fad / 球 #ffd451 / 隔板 #33507f / 按钮 #3563d1 …）+ 槽位倍率色 COL_x={2:绿#1e8a5a, 3:蓝#3d8bfd, 5:红#e0533b, 10:深红#9e1f30, 20:紫#a335ee, 50:深金#c88800, 100:深橙#ff8c00}（同时是中奖大字/灯带的取色依据）。dim_rgb(h, keep=0.55, base=COL_BG) 把按钮身份色**朝背景色线性混合**得到“不可用”色（不能改成逐通道乘系数——会把暗色压到背景以下、按钮由凸变凹，且三个通道等比缩会偏色）。",
+   "trigger": "渲染层各处",
+   "source": "android/main.py 782-868, 496-499",
+   "params": "BTN_OFF_DIM=0.55 COL_BTN_OFF=#26324f COL_BTN_LOCK=#4a5a6a COL_MUTE_OFF=#4a2e28 COL_FIRE=#e0533b COL_GREEN=#39d98a COL_METER=#f0b000 COL_FIRE_HOT=#8B6914 BTN_LINE_UP=1.75 BTN_LINE_DOWN=0.50"
+  },
+  {
+   "id": "geo-build",
+   "name": "几何装配 build_geo / 渲染-物理共用",
+   "kind": "silent-invariant",
+   "behavior": "build_geo() 返回 dict(pegs=平铺列表(渲染用), peg_rows=按行(物理用), dividers, walls, deflectors)。同一份 dict 同时喂物理与渲染；发射时只重建 deflectors 那一项（arc_dy），其余引用不变（渲染层用 _base_deflectors 做基准）。",
+   "trigger": "启动构建一次；每次发射重建 deflectors",
+   "source": "android/main.py 940-948, 20125-20126, 13271"
+  }
+ ],
+ "constants": [
+  {
+   "name": "CW",
+   "value": "520",
+   "meaning": "画布宽"
+  },
+  {
+   "name": "CH",
+   "value": "660",
+   "meaning": "画布高"
+  },
+  {
+   "name": "WALL",
+   "value": "12",
+   "meaning": "外墙厚度"
+  },
+  {
+   "name": "FLOOR",
+   "value": "648",
+   "meaning": "地板 y = CH-WALL"
+  },
+  {
+   "name": "LANE_W",
+   "value": "42",
+   "meaning": "右侧发射竖井宽度"
+  },
+  {
+   "name": "LANE_WALL_TH",
+   "value": "7",
+   "meaning": "竖井与场区之间隔墙厚度"
+  },
+  {
+   "name": "RIGHT_INNER",
+   "value": "508",
+   "meaning": "右外墙内沿 x"
+  },
+  {
+   "name": "LANE_L",
+   "value": "466",
+   "meaning": "竖井左沿 x = RIGHT_INNER-LANE_W"
+  },
+  {
+   "name": "FIELD_R",
+   "value": "459",
+   "meaning": "场区右沿 x = LANE_L-LANE_WALL_TH"
+  },
+  {
+   "name": "FIELD_L",
+   "value": "12",
+   "meaning": "场区左沿 x"
+  },
+  {
+   "name": "FIELD_W",
+   "value": "447",
+   "meaning": "场区宽"
+  },
+  {
+   "name": "NUM_SLOTS",
+   "value": "9",
+   "meaning": "底部倍率槽数量"
+  },
+  {
+   "name": "SLOT_W",
+   "value": "49.667",
+   "meaning": "槽宽 = FIELD_W/NUM_SLOTS；同时是落格映射与钉距的依据"
+  },
+  {
+   "name": "SLOT_H",
+   "value": "32",
+   "meaning": "槽高"
+  },
+  {
+   "name": "SLOT_TOP",
+   "value": "616",
+   "meaning": "槽口顶 y = FLOOR-SLOT_H"
+  },
+  {
+   "name": "DIV_W",
+   "value": "6",
+   "meaning": "槽隔板宽度"
+  },
+  {
+   "name": "DIV_TOP",
+   "value": "606",
+   "meaning": "隔板顶 y = SLOT_TOP-10，比槽口高 10px"
+  },
+  {
+   "name": "PEG_TOP",
+   "value": "150",
+   "meaning": "钉阵首行 y"
+  },
+  {
+   "name": "PEG_SY",
+   "value": "55",
+   "meaning": "钉阵行距"
+  },
+  {
+   "name": "PEG_ROWS",
+   "value": "7",
+   "meaning": "钉阵行数（不含 y=570 那一排隔板钉）"
+  },
+  {
+   "name": "PEG_R",
+   "value": "6",
+   "meaning": "钉子半径"
+  },
+  {
+   "name": "BALL_R",
+   "value": "9",
+   "meaning": "球碰撞半径（物理真值；渲染用 BALL_VIEW=1.4 的 BALL_VIS_R=12.6）"
+  },
+  {
+   "name": "PEG_SX",
+   "value": "49.667",
+   "meaning": "钉子水平间距 = FIELD_W/NUM_SLOTS（与 SLOT_W 同值）"
+  },
+  {
+   "name": "PEG_DEEP_SHIFT",
+   "value": "0.30",
+   "meaning": "深部奇数行右移量（列宽比例）=14.9px，治对角穿隙"
+  },
+  {
+   "name": "PEG_DEEP_MIN_ROW",
+   "value": "3",
+   "meaning": "从第几行开始应用深部偏移"
+  },
+  {
+   "name": "LANE_WALL_TOP",
+   "value": "160",
+   "meaning": "竖井隔墙顶部 y（开口下沿）；哑火判据的参照高度"
+  },
+  {
+   "name": "PLUNGER_X",
+   "value": "487.0",
+   "meaning": "发射槽中心 x = (LANE_L+RIGHT_INNER)/2"
+  },
+  {
+   "name": "PLUNGER_Y",
+   "value": "637",
+   "meaning": "发射槽球心 y = FLOOR-BALL_R-2"
+  },
+  {
+   "name": "RISER_Y",
+   "value": "495",
+   "meaning": "无钉区起点 = PEG_TOP+(PEG_ROWS-1)*PEG_SY+BALL_R+PEG_R；越过它播 riser 音"
+  },
+  {
+   "name": "G",
+   "value": "1000.0",
+   "meaning": "重力 px/s²（曾 1200，玩家评“嗖嗖穿过”）"
+  },
+  {
+   "name": "E",
+   "value": "0.20",
+   "meaning": "隔板碰撞恢复系数（_collide_rect 对 dividers 用）"
+  },
+  {
+   "name": "E_FAST",
+   "value": "0.40",
+   "meaning": "高速撞钉恢复系数（e(v) 下界）"
+  },
+  {
+   "name": "E_SLOW",
+   "value": "0.70",
+   "meaning": "低速撞钉恢复系数（e(v) 上界）"
+  },
+  {
+   "name": "E_SIDE",
+   "value": "0.20",
+   "meaning": "侧碰（|nx|>|ny|）恢复系数：擦面滑下不弹"
+  },
+  {
+   "name": "E_VREF",
+   "value": "700.0",
+   "meaning": "e(v) 过渡参考速度与压扁量归一化基准"
+  },
+  {
+   "name": "PEG_BOUNCE_VY_MAX",
+   "value": "280.0",
+   "meaning": "碰钉向上回弹 vy 上限（弹高≤39px，不回到上层钉）"
+  },
+  {
+   "name": "PEG_BOUNCE_VY_MIN",
+   "value": "70.0",
+   "meaning": "碰钉后垂直保底下落速度，防水平滑翔"
+  },
+  {
+   "name": "PEG_REFLECT_VX_MAX",
+   "value": "300.0",
+   "meaning": "碰钉反射横速上限，防横向跳"
+  },
+  {
+   "name": "PEG_MIN_ESCAPE",
+   "value": "150.0",
+   "meaning": "侧碰后最小向下逃逸速度（沿重力补，不沿法线推）"
+  },
+  {
+   "name": "PEG_KEEP_VY",
+   "value": "0.35",
+   "meaning": "碰后 vy 比例保底系数（至少保留碰前 35%）"
+  },
+  {
+   "name": "PEG_FRICTION",
+   "value": "0.95",
+   "meaning": "碰钉切向摩擦（乘在反射之后）"
+  },
+  {
+   "name": "PEG_FRICTION_VY",
+   "value": "0.97",
+   "meaning": "碰钉法向摩擦（更轻，保留弹起）"
+  },
+  {
+   "name": "PEG_GLANCE_UP",
+   "value": "150.0（死代码，无引用）",
+   "meaning": "历史“掠射向上保证”，侧碰不再被向上踢，只剩常量与注释"
+  },
+  {
+   "name": "PEG_CROWN_ESCAPE",
+   "value": "60.0",
+   "meaning": "同钉顶冠再访时的最小横向逃逸速度（vx==0 时不给）"
+  },
+  {
+   "name": "PEG_SPRINT",
+   "value": "True",
+   "meaning": "y==570 那一排隔板钉的冲刺开关（vx*0.7 + vy 补 160）"
+  },
+  {
+   "name": "WALL_E",
+   "value": "0.5",
+   "meaning": "墙（含天花板与竖井隔墙）恢复系数"
+  },
+  {
+   "name": "VMAX",
+   "value": "2400.0",
+   "meaning": "速度上限（必须 ≥ 最大发射速度 1114 以保防穿透语义）"
+  },
+  {
+   "name": "FIXED_DT",
+   "value": "1/60",
+   "meaning": "物理固定步长"
+  },
+  {
+   "name": "SUBSTEPS",
+   "value": "6",
+   "meaning": "每物理帧的子步数（防高速穿透）"
+  },
+  {
+   "name": "FRAME_TICK_HZ",
+   "value": "185",
+   "meaning": "呈现/界面调度上限频率（物理仍 60Hz，累加器决定推进）"
+  },
+  {
+   "name": "MAX_STEPS_PER_FRAME",
+   "value": "4",
+   "meaning": "单帧最多补的物理步数（超出的积压丢掉）"
+  },
+  {
+   "name": "FRAME_MS",
+   "value": "16",
+   "meaning": "帧毫秒基准（未见其它引用）"
+  },
+  {
+   "name": "JITTER",
+   "value": "6.0（死代码，仅注释提及）",
+   "meaning": "历史“撞钉切向随机扰动”已被法线扰动取代"
+  },
+  {
+   "name": "LAUNCH_MIN",
+   "value": "1077.0",
+   "meaning": "power=0.15 时的发射速度（apex≈57）"
+  },
+  {
+   "name": "LAUNCH_MAX",
+   "value": "1114.0",
+   "meaning": "满蓄力发射速度（apex≈17，不撞顶）"
+  },
+  {
+   "name": "CHARGE_RATE",
+   "value": "0.9",
+   "meaning": "蓄力速度（每秒充满 0.9）"
+  },
+  {
+   "name": "ALIGN_DAMP",
+   "value": "0.86（死代码，仅定义）",
+   "meaning": "历史入槽横向阻尼；安卓落地循环实际用 LAND_DAMP"
+  },
+  {
+   "name": "ALIGN_VX_MAX",
+   "value": "800.0",
+   "meaning": "落袋后横向速度硬上限（landing 循环用）"
+  },
+  {
+   "name": "ARC_E",
+   "value": "0.50（死代码）",
+   "meaning": "历史弧面法向反弹系数，物理层已不读"
+  },
+  {
+   "name": "ARC_VISUAL",
+   "value": "1.4",
+   "meaning": "弧面碰撞半径系数，必须与渲染 BALL_VIEW=1.4 联动；改动会实测让 84.7% 的落格槽号变化"
+  },
+  {
+   "name": "_ARC_REACH",
+   "value": "12.6",
+   "meaning": "弧面 y 带粗筛的 reach = BALL_R*ARC_VISUAL（必须与 _collide_arc 里算的 r 同值，否则静默漏碰）"
+  },
+  {
+   "name": "ARC_OUT_ANGLE",
+   "value": "35.0",
+   "meaning": "弧面缓动出口角（相对竖直向左）"
+  },
+  {
+   "name": "ARC_EASE_FRAMES",
+   "value": "3",
+   "meaning": "弧面缓动帧数（每接触帧约 11.7°）"
+  },
+  {
+   "name": "ARC_EJECT_ANGLE",
+   "value": "12.0（死代码）",
+   "meaning": "旧“电磁弹射器”出口角随机，已被 KNOB_ARC_ANGLE 取代"
+  },
+  {
+   "name": "ARC_EJECT_SPEED",
+   "value": "(0.7, 1.0)（死代码）",
+   "meaning": "旧出口力度范围"
+  },
+  {
+   "name": "ARC_EJECT_BOOST",
+   "value": "0.2（死代码）",
+   "meaning": "旧非线性增幅系数"
+  },
+  {
+   "name": "ARC_EJECT_POW",
+   "value": "2.0（死代码）",
+   "meaning": "旧增幅指数"
+  },
+  {
+   "name": "CEIL_VX_KEEP",
+   "value": "1.5（死代码）",
+   "meaning": "旧天花板加能系数，已被 KNOB_CEIL_BOOST 取代"
+  },
+  {
+   "name": "KNOB_POWERS",
+   "value": "[0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.00]",
+   "meaning": "4 旋钮离散表的 10 个力度档中心"
+  },
+  {
+   "name": "KNOB_ARC_ANGLE",
+   "value": "10 行 / 47 项，值域 [-15.00, +30.00]°",
+   "meaning": "弧面出口角偏移的 (值,权重) 表，按力度档索引"
+  },
+  {
+   "name": "KNOB_ARC_BOOST",
+   "value": "10 行 / 43 项，值域 [0.65, 1.25]",
+   "meaning": "弧面出口力度乘子表（加速≤25%/减速≤35%）"
+  },
+  {
+   "name": "KNOB_CEIL_ANGLE",
+   "value": "10 行 / 44 项，值域 [-30.00, +30.00]°",
+   "meaning": "天花板撞顶后速度向量旋转角表（正=左转）"
+  },
+  {
+   "name": "KNOB_CEIL_BOOST",
+   "value": "10 行 / 51 项，值域 [0.65, 1.25]",
+   "meaning": "天花板撞顶后 vx,vy 同乘系数表"
+  },
+  {
+   "name": "LAND_K",
+   "value": "16.0",
+   "meaning": "落袋横向软吸附刚度（朝槽中心）"
+  },
+  {
+   "name": "LAND_DAMP",
+   "value": "0.80",
+   "meaning": "落袋横向阻尼"
+  },
+  {
+   "name": "LAND_E",
+   "value": "0.42",
+   "meaning": "落地恢复系数（弹 3~4 次逐渐停住）"
+  },
+  {
+   "name": "LAND_BOUNCE_MIN_VY",
+   "value": "440.0",
+   "meaning": "落地**撞击**速度保底（回弹=撞击×0.42≈185→apex≈17px）"
+  },
+  {
+   "name": "LAND_BOUNCE_JITTER",
+   "value": "(0.85, 1.15)",
+   "meaning": "落地撞击速度随机系数（每发高度不同）"
+  },
+  {
+   "name": "LAND_BOUNCE_DECAY_JITTER",
+   "value": "(0.92, 1.08)",
+   "meaning": "每次触地回弹的 ±8% 随机"
+  },
+  {
+   "name": "LAND_BOUNCE_MAX_VY",
+   "value": "220.0",
+   "meaning": "落地回弹 vy 上限（apex≤24px，球顶不越隔板顶 606）"
+  },
+  {
+   "name": "MISFIRE_POWER",
+   "value": "0.15",
+   "meaning": "哑火阈值；同时是力度条红线的位置"
+  },
+  {
+   "name": "MISFIRE_V_MIN",
+   "value": "475.0",
+   "meaning": "power→0 的哑火发射速度（apex y≈524）"
+  },
+  {
+   "name": "MISFIRE_V_MAX",
+   "value": "935.0",
+   "meaning": "power→阈值 的哑火发射速度（apex y≈212 > 隔墙顶 160）"
+  },
+  {
+   "name": "MISFIRE_E",
+   "value": "0.22",
+   "meaning": "哑火球落回柱塞的弹跳恢复系数"
+  },
+  {
+   "name": "MISFIRE_BOUNCE_VY",
+   "value": "200.0",
+   "meaning": "落回柱塞时低于此速度直接停住（否则回弹）"
+  },
+  {
+   "name": "MISFIRE_MAX_FRAMES",
+   "value": "180",
+   "meaning": "哑火兜底帧数（实测最长 121 帧）"
+  },
+  {
+   "name": "MAX_FALL_SEC",
+   "value": "4.0",
+   "meaning": "连续静止超时 → 物理槽号强制结算"
+  },
+  {
+   "name": "STALL_RETRY_SEC",
+   "value": "1.2",
+   "meaning": "连续静止超时 → 沿接触法线向下踢一次"
+  },
+  {
+   "name": "STALL_MAX_RETRY",
+   "value": "10",
+   "meaning": "踢球次数上限，到顶后交给 MAX_FALL_SEC 兜底"
+  },
+  {
+   "name": "LAND_HOLD",
+   "value": "0.60",
+   "meaning": "落袋后球停留展示时长（秒）；大字中奖时 GUI 会缩短 0.5s"
+  },
+  {
+   "name": "EV_PEG",
+   "value": "1",
+   "meaning": "撞钉事件位"
+  },
+  {
+   "name": "EV_CEIL",
+   "value": "2",
+   "meaning": "撞天花板弧事件位"
+  },
+  {
+   "name": "EV_WALL",
+   "value": "4",
+   "meaning": "撞外墙/竖井隔墙事件位"
+  },
+  {
+   "name": "EV_DIV",
+   "value": "8",
+   "meaning": "撞槽隔板事件位"
+  },
+  {
+   "name": "EV_ARC",
+   "value": "16",
+   "meaning": "碰导流弧事件位（静音，只作检测/统计）"
+  },
+  {
+   "name": "START_BEADS",
+   "value": "1000",
+   "meaning": "初始弹珠数"
+  },
+  {
+   "name": "PRESETS",
+   "value": "[1, 10, 50, 100]",
+   "meaning": "投注档位预设"
+  },
+  {
+   "name": "DEFAULT_BET",
+   "value": "10",
+   "meaning": "默认投注"
+  },
+  {
+   "name": "BENCH_SEED",
+   "value": "20260914",
+   "meaning": "跑分固定种子（改它=换一盘录像）"
+  },
+  {
+   "name": "BENCH_BOARD",
+   "value": "(5, 10, 20, 50, 100)",
+   "meaning": "跑分用固定盘面倍率（每轮同内容可直接比）"
+  }
+ ],
+ "gotchas": [
+  "碰钉反弹的**施加顺序**本身就是行为：crown → vy≥-280 → 比例保底 → |vx|≤300 → 侧碰 vy=150 → 570 冲刺 → 最后才乘摩擦(0.95/0.97)。调换顺序或把摩擦提前，落格分布立刻变（摩擦会把上面所有钳位值再打一次折）。",
+  "`PEG_SPRINT` 的判据是字面量 `py == 570` 的**精确浮点相等**，而不是行号或常量。build_pegs 里那排钉的 y 一旦不是整数 570，冲刺分支会**静默失效**（不报错、不掉帧，只是末段手感变了）。",
+  "`_ARC_REACH = BALL_R*ARC_VISUAL` 与 `_collide_arc` 内部算的 `r = BALL_R*ARC_VISUAL` 必须是同一个值：前者是 y 带粗筛的 reach，两处不同步会**静默漏碰**（粗筛把该碰的段跳过）。",
+  "`ARC_VISUAL` 是**物理常量不是视觉参数**：实测改动会让 360 条定种子飞行里 84.7% 的落格槽号变化。它和渲染层 `BALL_VIEW=1.4` 必须联动，历史上有人把 BALL_VIEW 提到 1.6 并同时改注释说“二者无关”，被回退。",
+  "地板矩形 (0, FLOOR, CW, CH) **必须**在 physics_step 里 continue 跳过：当弹性墙撞会让球在“被判定落袋”的同一子步里先被弹成向上（实测首触 vy=-295~-312），导致 GUI 每轮覆盖 landed 时整帧落袋被吞掉、球斜着弹过隔板进隔壁槽（玩家三次报的 bug），同时把真实下落速度吃掉、74% 的落袋只弹 4px。",
+  "落袋返回处**只清 vx、保留 vy**，并且要 `b.y = FLOOR - BALL_R` 贴地。清 vy 会把落地弹跳抹平；不贴地会让球停在半像素上，视觉不稳。",
+  "落袋判据**没有 x 范围保护**（球在场区外也会被夹成 0 或 8 号槽）。GUI 依赖这一点把“球落回竖井”识别成彩蛋；给判据加 x 保护会静默砍掉彩蛋。",
+  "GUI 的 landing 循环里**没有隔板碰撞**，只有重力/横向弹簧/地板 ⇒ 进 landing 时必须把 b.vx 清零，否则球会横滑过隔板停到隔壁槽（钱算对了、球停错地方）。同理彩蛋那发的 land_target_x 必须用 PLUNGER_X，用槽中心会把球拽穿隔墙嵌在墙里。",
+  "`_clamp_accum` **不能改成“把积压留到下帧再还”**：那会让之后每帧都跑满上限、拖出一长串慢帧；也不能把 MAX_STEPS_PER_FRAME 调小（60Hz 正常就是 1 步、30Hz 2 步）。",
+  "钉阵 y 带粗筛每次都必须**重读 b.y**（同一遍里前面的钉会改 b.y）。缓存住 b.y 会漏碰，而且是静默的。该粗筛还隐含“同一行内所有钉 y 相同”这一前提。",
+  "`_rng` 是全局随机流的唯一隔离手段：正常发射 _rng=None ⇒ 走全局 random；跑分才按球号派生。物理里任何一处把 `getattr(b,'_rng',None) or random` 写成裸 `random`，跑分就不可复现（实测连跑两轮帧数都不同）。",
+  "事件位/b.amp 必须在每个物理步**读后清零**（GUI 和 selftest 都这么做）：残留位会让撞钉计数虚高，实测偏差 35%。",
+  "天花板旋钮（角度+力度）**每发只抽一次**并缓存在 b.ceil_knob，之后所有撞顶复用同一对值；若改成每次撞顶重抽，同一发的弹道会自相矛盾。",
+  "弧面力度系数只在**第一接触帧**乘一次（随后置 1.0），角度偏移则每帧都参与；把力度系数改成每帧连乘会让速度指数级变化。",
+  "哑火**不能走 physics_step**：它的落袋判据没有 x<FIELD_R 保护，会把落回柱塞的球报成 8 号槽。必须用 advance_misfire 的一维升降。",
+  "卡死判据必须用**位移**（<=1px/帧）而不是速度或碰撞事件：卡死球的速度数值和微碰撞从未停过，但位置被碰撞钉死；位置不说谎。",
+  "卡死踢球方向依赖 `last_nx/last_ny`（上一次碰钉的**扰动后**法线）和切向取反后必须朝下（ty>0 时反向）。丢掉这两个字段，踢球会退化成恒定的 (0,-1)，卡死兜底失效。",
+  "`LAUNCH_MIN/MAX` 的窄带（1077~1114，只差 3.4%）是**为音效对齐服务的**：预烘的 1.5s 连续飞行音靠“越顶时刻只散 30ms”这个前提才能对齐全过程。放宽速度带会同时坏掉音画同步。",
+  "`dim_rgb` 必须**定义在配色块之后**（keep/base 是默认参数，在 def 那一刻求值，挪到文件顶部会在 import 期 NameError）；也不能改成逐通道乘系数（暗色会被压到背景以下、按钮由凸变凹，且等比缩会偏色）。",
+  "`COL_BTN_OFF` 一色多用（约 20 处弹窗底色 + 未选中档），**不要**为了“禁用态”去改它；禁用态走 dim_rgb 派生。",
+  "配色常量里的 `COL_MUTE_OFF` 不能用 COL_BTN_OFF 代替（玩家打回过：那样“音效已关”和“重置”一模一样，读起来像禁用）。"
+ ],
+ "uncovered": [
+  "渲染层几何：钉子/隔板/墙/弧面的实际绘制（Line/Ellipse/Rectangle 坐标、BALL_VIEW=1.4 视觉半径、弧面 3~4px 金属细带、弹簧 Z 字形、力度条）没有逐条盘点——只盘了物理用的那份 geo。",
+  "GUI landing 循环外的落袋演出链（settle / WinPileFX 装杯 / 揭晓 / 震动 / 灯带），只盘了它和 LAND_* 常量交互的那一段。",
+  "板面倍率生成 roll_multipliers / _is_bad_board / VALUE_SHAPE / K_DIST / MAX_REROLL / _effective_rtp / _solve_p2（2790~2845 起）属于经济系统，只是地理上落在给的区间尾部，未展开。",
+  "跑分与 CPU 高压那整套（_clamp_accum 之外的 benchmark_trajectories / benchmark_sustained / 频率采样 / 温度与功率读取）不属于物理引擎，只盘了它会调用的 launch_ball+advance_flight 用法。",
+  "音效合成与播放（bake_bank/iter_bank/SFX_*）只在事件位协议那一层交叉，未展开。",
+  "PC 版 plinko.py 与 tools/ 已与 android/main.py 分叉（注释多处点名），本盘点全部以 android/main.py 为准；plinko.py 的对应常量没有逐一比对。",
+  "`PEG_GLANCE_UP` / `JITTER` / `ALIGN_DAMP` / `ARC_E` / `ARC_EJECT_*` / `CEIL_VX_KEEP` / `FRAME_MS` / `HILITE` / `FONT` 这批常量经 grep 只出现在定义行（或仅注释），判定为死代码——但这是基于本文件 grep 的结论，没有跨文件（tools/、temp/）确认。"
+ ],
+ "notes": "盘点范围与口径：以 `E:\\AI_Tools\\other\\DanZhu\\android\\main.py` 为准（22,347 行的生成物），任务给的 501~2845 区间里真正的物理层是 501~1295；1297~1640 是跑分/CPU 高压的常量与辅助，1640~2845 是跑分/采样/盘面生成，与物理引擎无关（已在 uncovered 标注）。所有数值均取自文件真实赋值行，未采信注释里的旧值——注意本文件多处注释与常量值**不一致**（例：`misfire_speed` 的 docstring 写“上限 980”，实际 `MISFIRE_V_MAX=935`；`PEG_BOUNCE_VY_MAX` 注释里还在说 150/300，值是 280；`PEG_SPRINT` 注释说“vy≥200”，代码是 160）。根目录 CLAUDE.md 的参数表（G/E/E_SLOW/LAUNCH_*/PEG_*/ARC_*/LAND_*/ALIGN_H/K/DAMP）与安卓版**已经对不上**：安卓版没有 ALIGN_H/ALIGN_K，落地吸附用 LAND_K=16.0/LAND_DAMP=0.80；LAND_BOUNCE_MIN_VY 是 440（不是 220）、ARC_OUT_ANGLE 是 35（不是 25）、PEG_SPRINT 的 vy 下限是 160（不是 200）、PEG_BOUNCE_VY_MAX 是 280（不是 300）。重写时以代码为准。\n\n几何实算（供重写直接复核）：FLOOR=648，SLOT_W=PEG_SX=49.667，槽中心 = [36.8, 86.5, 136.2, 185.8, 235.5, 285.2, 334.8, 384.5, 434.2]；钉行 y = [150,205,260,315,370,425,480] + 隔板钉排 570，钉总数 66+8=74，其中贴墙钉 x=21 与 x=450；弧面 11 段共 60.79px，接触段 (504.0,145.0)→(497.7,131.4) 长 14.99px、与竖直夹角 24.86°。\n\n四条对“1:1 重写”最危险的不变量（删掉不报错、只出事故）：① 落袋只清 vx 不清 vy + 贴地 + 立即 return；② 地板矩形必须跳过；③ 事件位读后清零；④ 钉阵 y 带粗筛每次重读 b.y。<br>三条对“手感 1:1”最危险的行为：① 碰钉七道限幅的**顺序**；② 弧面缓动“首帧乘力度一次、角度每帧递增、速率不变”；③ 天花板旋钮“每发只抽一次”。"
+}

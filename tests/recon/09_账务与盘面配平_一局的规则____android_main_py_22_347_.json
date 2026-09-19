@@ -1,0 +1,485 @@
+{
+ "subsystem": "账务与盘面配平（一局的规则）—— android/main.py（22,347 行，参考实现）",
+ "features": [
+  {
+   "id": "tier-table",
+   "name": "返奖档位表（常驻 4 档）",
+   "kind": "player-visible",
+   "behavior": "「期望返还比例」一行只有 4 个常驻档按钮，标签+数值来自 RTP_TIERS=(('80%',0.80),('120%',1.20),('200%',2.00),('360%',3.60))；点谁 set_rtp 谁 —— rtp_target 改值、按钮高亮、self.multipliers 直接指向 self._boards[t]（不重掷）、播 voice_rtp_{80|120|200|360}、存盘。冷启动默认 rtp_target=0.80。",
+   "trigger": "点返奖率行上的档位按钮 → set_rtp(t)",
+   "params": "RTP_TIERS 4 档 = 0.80/1.20/2.00/3.60；默认 rtp_target=0.80",
+   "source": "19804 RTP_TIERS / 13297 默认档 / 20001 set_rtp"
+  },
+  {
+   "id": "hidden-tiers",
+   "name": "隐藏档 1000%/2000%/5000%",
+   "kind": "player-visible",
+   "behavior": "长按「期望返还比例」标签 RTP_UNLOCK_HOLD 秒 → 弹窗四选一（关闭隐藏 / 1000% / 2000% / 5000%）；点选项只高亮，点「确定」才生效。生效时把该档按钮动态插到常驻档右边，且只留当前这一个隐藏档按钮（改选 2000% 会摘掉 1000%）；选「关闭隐藏」摘掉全部隐藏档按钮并切回 max(RTP_TIERS)=3.60，本来就在常驻档则什么都不做。state != 'ready' 时弹窗根本不开（防 Window 级子控件绕过输入锁）。",
+   "trigger": "长按返奖率标签 3s → _on_title_touch_down → _ask_unlock_rtp",
+   "params": "RTP_UNLOCK_HOLD=3.0（原 5.0）；RTP_HIDDEN=(('1000%',10.0),('2000%',20.0),('5000%',50.0))",
+   "source": "19812 RTP_HIDDEN / 19813 RTP_UNLOCK_HOLD / 19906 _ask_unlock_rtp / 19888 _unlock_rtp / 19864 _close_rtp_hidden"
+  },
+  {
+   "id": "hidden-nonpersist",
+   "name": "隐藏档不持久化（结构性保证）",
+   "kind": "silent-invariant",
+   "behavior": "隐藏档会被照常写进存档（rtp_target 写成 50.0），但读档白名单走 _regular_rtp()（只含 RTP_TIERS 的 4 个值）⇒ 重开游戏 rtp_target 保持 __init__ 的默认 0.80，隐藏档按钮也不存在（'有没有隐藏档'的唯一真源是 rtp_btns 的键，冷启动时它是空的）。玩家必须重新长按解锁。",
+   "trigger": "冷启动 _load_config 读 rtp_target",
+   "params": "白名单 = (0.80,1.20,2.00,3.60)，由 RTP_TIERS 派生不手抄",
+   "source": "20329 _regular_rtp / 20578-20580 _load_config / 13917-13921 rtp_btns"
+  },
+  {
+   "id": "board-tables",
+   "name": "盘面两张分布表（K_DIST / VALUE_SHAPE）",
+   "kind": "silent-invariant",
+   "behavior": "每档盘面 = (a) K_DIST[档] 有奖格数 k 的分布（概率和必须=1），(b) VALUE_SHAPE[档] 非 x2 部分的相对权重（允许写整数、和不必为 1，由 _shape_of 归一化）。x2 的权重不在任何表里，由 _solve_p2 反解 ⇒ 改这两张表任何一项都会自动重新配平。",
+   "trigger": "import 期构建 VALUE_DIST",
+   "params": "K_DIST: 0.80{2:.8507,3:.1493} 1.20{3:.7761,4:.2239} 2.00{3:.25,4:.5,5:.25} 3.60{6:.10,7:.70,8:.20} 10/20/50{9:1.0}；VALUE_SHAPE: 0.80=1.20={3:.556,5:.289,10:.122,20:.033}；2.00=3.60={3:.50,5:.27,10:.12,20:.06,50:.033,100:.017}；10.0={5:17,10:12,20:8,50:5,100:3}；20.0={5:10,10:20,20:32,50:26,100:12}；50.0={20:20,50:40,100:40}",
+   "source": "2650 VALUE_SHAPE / 2684 K_DIST / 2709 _shape_of"
+  },
+  {
+   "id": "p2-solve",
+   "name": "x2 权重闭式反解（_solve_p2）",
+   "kind": "silent-invariant",
+   "behavior": "先探单调方向（比较 f(0.9) 与 f(0.1)），再二分 200 次，解出 p2 使「含坏盘重抽的有效 RTP」精确等于档位；VALUE_DIST[档] = {2: p2} ∪ (1-p2)×归一化形状。我在本地按同代码跑出：p2(0.80)=0.725778、p2(1.20)=0.443256、p2(2.00)=0.430556、p2(3.60)=0.439122、p2(10)=0.563636、p2(20)=0.435737、p2(50)=0.225806 —— 都是算出来的，一个都不许手抄。",
+   "trigger": "import 期对 7 个档各解一次",
+   "params": "二分 200 次；区间 [0.0, 1.0-1e-12]；收敛判据 1e-9",
+   "source": "2774 _solve_p2 / 2788-2798 VALUE_DIST 构建"
+  },
+  {
+   "id": "effective-rtp",
+   "name": "重抽对 RTP 的闭式修正",
+   "kind": "silent-invariant",
+   "behavior": "_effective_rtp(p2,rtp) 枚举 (k, c2 个 x2, ch 个高倍率) 的全部组合概率与盘和，算出无条件 E[盘和]=e_sum、坏盘概率 P、E[盘和|坏盘]=e_bad_cond，返回 (e_sum + (P+P²)·(e_sum − e_bad_cond))/9。P+P² 正对应 MAX_REROLL=2（最多三盘、最后一盘无条件收）。代数上恒等于 (1−P³)E_good + P³E_bad。我实测核对：40 万盘 MC 与闭式差 3e-4~3e-3，在噪声内 ⇒ 闭式精确。",
+   "trigger": "import 期配平 + 断言校验",
+   "params": "factor = Σ_{i=1..MAX_REROLL} P^i = P+P²（MAX_REROLL=2）",
+   "source": "2745 _effective_rtp"
+  },
+  {
+   "id": "bad-board",
+   "name": "坏盘判据（解析与实测共用一处）",
+   "kind": "silent-invariant",
+   "behavior": "_is_bad_board(k,n2,nh) = (n2*5 >= k*4) 或 (nh >= 2)：即 x2 占比 ≥80%（几乎全 x2）或高倍率（≥x5）出现 ≥2 个。**解析期望 _effective_rtp 与实际重抽 roll_multipliers 共用这一个函数**，改一处两边一起变（以前是互补的两处写法，改一处忘另一处 RTP 就分家）。阈值 0.8 只以整数形式 *4/5 出现，不引入浮点比较。",
+   "trigger": "roll_multipliers / _effective_rtp / _reroll_dead 三处调用",
+   "params": "CEIL_THRESHOLD=5（x5 起算高倍率）；0.8 写成 n2*5 >= k*4",
+   "source": "2734 _is_bad_board / 2648 CEIL_THRESHOLD"
+  },
+  {
+   "id": "roll-board",
+   "name": "掷盘（重抽循环 + 随机落位）",
+   "kind": "player-visible",
+   "behavior": "roll_multipliers(rtp)：最多 MAX_REROLL+1=3 盘，每盘独立抽 k=_pick(K_DIST) 与 k 个倍率（各 _pick(VALUE_DIST)），一旦不是坏盘就收，第 3 盘无论好坏都收。最后用 random.sample(range(9), k) 无放回地把 k 个倍率放到 9 格中的 k 格，剩下 9−k 格为 0（空槽）。__init__ 给每个档各掷一份存进 _boards（切档不重掷），球落定后 park_ball 才把**所有档**一起重掷。",
+   "trigger": "__init__ / park_ball(reroll=True)；set_rtp 只换指针不重掷",
+   "params": "MAX_REROLL=2（最多 3 盘）；NUM_SLOTS=9",
+   "source": "2826 roll_multipliers / 13298 _boards / 20348-20360 park_ball"
+  },
+  {
+   "id": "reroll-dead",
+   "name": "判据恒真的档只掷一遍",
+   "kind": "silent-invariant",
+   "behavior": "_reroll_dead(rtp) 枚举该档全部 (k,c2,ch) 组合，若每一种都判坏 ⇒ 重抽纯属空转（三次独立抽样取最后一个与只掷一次分布逐位相同）。我实测 REROLL_DEAD = {10.0, 20.0, 50.0}（三个隐藏档 K 恒 9、除 x2 外全 ≥x5 ⇒ 每盘必判坏）。这三档 roll_multipliers 的 _n 取 1，跳过那两遍白掷；RTP 一分不变（顶层 assert 兜底）。",
+   "trigger": "import 期计算 REROLL_DEAD",
+   "params": "REROLL_DEAD={10.0,20.0,50.0}；_n = 1 if rtp in REROLL_DEAD else MAX_REROLL+1",
+   "source": "2801 _reroll_dead / 2823 REROLL_DEAD / 2832"
+  },
+  {
+   "id": "balance-assert",
+   "name": "import 期配平断言（改错即死）",
+   "kind": "silent-invariant",
+   "behavior": "构建 VALUE_DIST 时逐档断言：① VALUE_SHAPE 权重全 >0 且 K_DIST 概率和 =1（1e-9）；② VALUE_DIST 概率和 =1（1e-12）；③ |_effective_rtp(p2,档) − 档| < 1e-9。任一条不成立模块根本 import 不进来 ⇒ 改表改错立刻炸，不会静默漂移。",
+   "trigger": "import",
+   "params": "容差 1e-9（RTP）/ 1e-12（概率和）",
+   "source": "2792-2798"
+  },
+  {
+   "id": "slot-set",
+   "name": "槽上会出现哪些倍率",
+   "kind": "player-visible",
+   "behavior": "全档合并的槽上取值只有 0/2/3/5/10/20/50/100。分档：0.80、1.20 → {0,2,3,5,10,20}；2.00、3.60 → 加 50/100；10.0、20.0 → {0,2,5,10,20,50,100}（无 x3）；50.0 → {0,2,20,50,100}（无 x3/x5/x10）。倍率 0 = 空槽：不画数字（size 归 0）、底色恒 #2a3550。x100 用黑字（白字对比度太低），其余白字。",
+   "trigger": "每次重掷/切档后 _redraw / _update_slots",
+   "params": "COL_x={2:'#1e8a5a',3:'#3d8bfd',5:'#e0533b',10:'#9e1f30',20:'#a335ee',50:'#c88800',100:'#ff8c00'}；空槽 '#2a3550'；slot_txt: m>=100 → '#0b1220'",
+   "source": "10190 slot_color / 10226 slot_txt / 12202-12212 _update_slots / 12300-12305"
+  },
+  {
+   "id": "winrate-ref",
+   "name": "每档中奖率参考值 + 回归门禁（selftest）",
+   "kind": "dev-tool",
+   "behavior": "selftest 里 _ref 记着每档的中奖率参考值，跑 _n1b=20000 盘「整盘求期望」，判据四条：中奖率须在参考 ±1.5pp 内、不得出现空军（0 个有奖格）、返还倍率 |MC−档位| < 4σ（σ 用本次样本实时估出）、中奖率随档位单调不降；档位若不在 _ref 里直接报错。我用同样代码跑 40 万盘复核：24.133 / 35.679 / 43.393 / 78.573 → 与 _ref 24.15/35.67/43.37/78.52 一致。",
+   "trigger": "python android/main.py --selftest",
+   "params": "_ref={0.80:24.15, 1.20:35.67, 2.00:43.37, 3.60:78.52, 10/20/50:100.00}；n=20000；中奖率门禁 ±1.5pp；返还倍率门禁 4σ；空军必须 0",
+   "source": "7152 _ref / 7168-7209 门禁"
+  },
+  {
+   "id": "rtp-gate",
+   "name": "RTP 精确性门禁（selftest）",
+   "kind": "dev-tool",
+   "behavior": "对 0.80/1.20/2.00/3.60 各跑 n=40000 发「掷盘 + 均匀随机挑一格」，实测 RTP 须 |实测−档位| < 0.05（2.00/3.60 放宽到 0.15，因为含 x50/x100 方差大；n=40000 时四档 σ≈0.010/0.012/0.035/0.046，3σ=0.029/0.034/0.104/0.139）。",
+   "trigger": "--selftest",
+   "params": "n=40000；tol=0.05（<2.00）/ 0.15（>=2.00）",
+   "source": "7125-7136"
+  },
+  {
+   "id": "bet-presets",
+   "name": "投注档 1 / 10 / 50 / 100",
+   "kind": "player-visible",
+   "behavior": "「每次投入弹珠：」一行四个按钮「1个/10个/50个/100个」，默认 DEFAULT_BET=10。点一下 set_bet：改 self.bet、按钮高亮、播 click、播 voice_bet_{1|10|50|100}（节流 0.6s）、存盘。投注档同时决定装杯球色（BET_COLORS：1 绿 #39c98a / 10 蓝 #4da8ff / 50 红 #e0533b / 100 紫 #a335ee；未知档回退金球，不 KeyError）。**set_bet 本身不做余额校验**（余额不足的拦截在 start_charge）。",
+   "trigger": "点投注按钮 / 冷启动恢复 set_bet(silent=True, click=False)",
+   "params": "PRESETS=[1,10,50,100]；DEFAULT_BET=10；voice_bet 节流 0.6s",
+   "source": "762 PRESETS / 763 DEFAULT_BET / 8247 BET_COLORS / 19791 set_bet / 13947-13952"
+  },
+  {
+   "id": "bet-deduct",
+   "name": "发射扣注与计数",
+   "kind": "player-visible",
+   "behavior": "launch() 里只有 power ≥ MISFIRE_POWER 才：balance -= bet；plays += 1；round_plays += 1。蓄力过程不扣钱；哑火（power < 0.15）完全不扣、不计局、不换盘面（进 misfire → park_ball(reroll=False) 防免费刷盘）。扣注发生在发射那一帧、结算（第一次触地）之前 ⇒ 飞行途中余额就已经是扣过的值。",
+   "trigger": "松手发射 launch()",
+   "params": "MISFIRE_POWER=0.15；MISFIRE_V_MIN/MAX=475/935；MISFIRE_MAX_FRAMES=180",
+   "source": "20089-20148 launch / 20093 哑火分支 / 20108 扣注 / 20137-20138 计数"
+  },
+  {
+   "id": "payout",
+   "name": "中奖判定与赔付",
+   "kind": "player-visible",
+   "behavior": "settle(i) 的 i = 物理落格槽（球心 x 换算的格号，夹 0..8）；m = self.multipliers[i]；payout = bet × m；balance += payout；m > 0 则 hits += 1。判据就是「该格倍率 > 0」——盘面最小中奖倍率是 2，所以中奖恒为净赚。m ≤ 0 → 状态栏「未中」+ 中央红字「未中」（COL_FIRE, sp(36)）+ 播 lose 音。账务（余额/命中/存盘）留在落袋那一帧，演出/揭晓延后。",
+   "trigger": "球第一次触地 → landing 分支 → settle(i)",
+   "params": "payout = bet × m；m ∈ {0,2,3,5,10,20,50,100}；payout 上限 = 100×100 = 10000（结算大字 '+10000' 6 字符，_GLYPH_MAX_CHARS=12）",
+   "source": "20181-20185 settle / 12351-12368 big_result_text / 21287-21321（落格→settle）"
+  },
+  {
+   "id": "balance-start",
+   "name": "起始弹珠 1000 与重置值",
+   "kind": "player-visible",
+   "behavior": "冷启动余额 = START_BEADS = 1000；「重置」按钮、轮次结束自动重置、改每轮次数、跑分前后，都把余额设回 1000。余额是**持久化**的（写进存档），所以正常退出再进是接着玩，不是回 1000。",
+   "trigger": "__init__ / reset_balance / _set_max_plays / _show_round_end 的确定 / 跑分",
+   "params": "START_BEADS=1000",
+   "source": "751 / 13273 / 20036 / 20865 / 20787 / 15829"
+  },
+  {
+   "id": "balance-anim",
+   "name": "余额显示（取整、不滚动）",
+   "kind": "player-visible",
+   "behavior": "HUD 余额 = int(round(display_balance))。2026-09-14 起数字不再逐帧滚动（装杯演出已承担「钱到账」的观感），中奖揭晓那一刻把 display_balance 一次推到 balance；揭晓前 _anim_pending=True 期间余额冻结在扣注后的值，一帧都不许追平（防提前剧透）。",
+   "trigger": "每帧 _frame 尾部",
+   "params": "—",
+   "source": "21394-21418 / 20318-20320 _reveal_win / 13336 _anim_pending"
+  },
+  {
+   "id": "nomoney-guard",
+   "name": "余额不足拦截",
+   "kind": "player-visible",
+   "behavior": "start_charge 里若 balance < bet：语音档播 voice_nomoney（节流 3.0s）否则播 error（0.4s），中央飘字「弹珠数量不足\\n请重置或降低投入」，**不进 charging** ⇒ 这一发根本发不出去。这条检查排在轮次上限检查**之前** ⇒ 两个条件同时成立时玩家看到的是「钱不够」而不是轮次弹窗。",
+   "trigger": "按住发射键 start_charge",
+   "params": "voice_nomoney throttle=3.0s；error throttle=0.4s",
+   "source": "20062-20075 start_charge"
+  },
+  {
+   "id": "round-def",
+   "name": "一轮的定义与档位",
+   "kind": "player-visible",
+   "behavior": "顶栏「每轮N次」按钮（默认 50）打开「每轮游戏次数设定」弹窗，可选 20次/50次/100次 + 最近完成的轮次列表。一「轮」= max_plays 局。",
+   "trigger": "点 round_btn → _show_round_settings",
+   "params": "max_plays ∈ {20,50,100}；默认 50",
+   "source": "13311 / 13868 round_btn / 20792 _show_round_settings"
+  },
+  {
+   "id": "round-count",
+   "name": "一局的定义（哪些算一局）",
+   "kind": "silent-invariant",
+   "behavior": "一局 = 一次有效发射：plays += 1 且 round_plays += 1。哑火不是一局（不扣不计）；彩蛋（球落回竖井）把 plays 与 round_plays 各退 1（不占轮次额度，与哑火口径一致）。HUD 显示「累计N投M中(P%)」，M 只在该格倍率 > 0 时 +1。",
+   "trigger": "launch / settle",
+   "params": "—",
+   "source": "20137-20138 / 20155-20156（彩蛋退回） / 19784-19789 _refresh_stats"
+  },
+  {
+   "id": "round-end",
+   "name": "打满一轮：弹窗 + 语音 + 自动重置",
+   "kind": "player-visible",
+   "behavior": "round_plays >= max_plays 时，再按发射（start_charge）或下一发 park_ball 都会弹「本轮游戏结束」弹窗（文案：本轮游戏 %d 次已结束 / 剩余 %d 个弹珠 / 弹珠数量已调整到1000个 / 欢迎你再次挑战），同时把 {plays, balance, time} 追加进轮次历史（上限 100）、锁住 HUD、播 voice_round_end_{20|50|100} 再逐字念当前余额（number_voice_names）再 voice_round_suffix。点「确定」才 reset_balance(notify=False)（余额回 1000、计数清零）并关窗。_round_end_shown 防重复弹。",
+   "trigger": "start_charge / park_ball 的 round_plays >= max_plays 分支",
+   "params": "历史上限 100 条；_round_end_shown 一次性闸",
+   "source": "20073-20075 / 20369-20370 / 20747-20790 _show_round_end / 20735 _play_round_end_voice"
+  },
+  {
+   "id": "round-catchup",
+   "name": "打满一轮时被杀 → 启动即静默重置",
+   "kind": "silent-invariant",
+   "behavior": "_load_config 末尾若读回的 round_plays >= max_plays 就置 _auto_reset_on_start；__init__ 在 _build_ui **之后**（要等控件存在）调 reset_balance(notify=False)——不出声、不 toast，直接把余额设回 1000、plays/hits/round_plays 清零并写盘 ⇒ 打满未点确定就杀进程 = 白送一次满血重置。",
+   "trigger": "冷启动 _load_config → __init__",
+   "params": "notify=False（静默）",
+   "source": "20604-20605 / 13322 / 13354-13355 / 20031"
+  },
+  {
+   "id": "reset-btn",
+   "name": "「重置」按钮语义",
+   "kind": "player-visible",
+   "behavior": "点「重置」：强制中断当前 charging/flying/misfire/landing 回 ready；余额 = 1000、plays/hits/round_plays = 0、_round_end_shown = False、解锁 HUD、播 cash；notify=True 时清掉旧 toast、弹「弹珠数量已调整到1000个」+ 播 voice_reset_progress。它同时是彩蛋锁的逃生口（_easter_hold 会被 launch 清掉）。",
+   "trigger": "点 reset_btn / 探针",
+   "params": "voice_reset_progress throttle=1.5",
+   "source": "20031-20060 reset_balance"
+  },
+  {
+   "id": "maxplays-reset",
+   "name": "改每轮次数 = 立即清盘",
+   "kind": "player-visible",
+   "behavior": "_set_max_plays(val)：与当前相同直接 return；否则 max_plays=val、按钮文字改「每轮N次」、余额 = 1000、plays/hits/round_plays = 0、_round_end_shown = False、toast「每轮已设定为N次」+ 播 voice_round_set_{20|50|100} + 存盘。（玩家中途换轮次档 = 进度全清，这是明写的设计。）",
+   "trigger": "轮次设定弹窗里点 20/50/100",
+   "params": "—",
+   "source": "20859-20882"
+  },
+  {
+   "id": "config-file",
+   "name": "设定存档：文件位置与 9 个字段",
+   "kind": "silent-invariant",
+   "behavior": "路径 = user_data_dir（Android 应用私有目录；桌面退回 tempfile.gettempdir()）/ plinko_config.json。字段正好 9 个：max_plays, rtp_target, bet, balance, round_plays, plays, hits, fps_cap_setting, power_grain。触发点：set_bet / set_rtp / reset_balance / _set_max_plays / power_grain 切换 / 每次结算（settle 的中奖与未中两个分支都写）。sound_mode **不进配置**（每次启动恒为 on）。",
+   "trigger": "见上各调用点 + settle",
+   "params": "文件名 plinko_config.json",
+   "source": "20554 _config_path / 20607-20620 _save_config / 20165、20302（settle）"
+  },
+  {
+   "id": "config-atomic",
+   "name": "落盘：工作线程 + 单槽最新赢 + 原子替换",
+   "kind": "silent-invariant",
+   "behavior": "_save_config 把 (cfg, path) 交给 _cfg_post → 全局只保留最新一份（后写覆盖先写，无队列无去重，配置是状态不是流水账）→ 工作线程写临时文件 path+'.tmp' 再 os.replace 原子替换 ⇒ 写一半被杀不会留下半个 JSON（老写法 open(path,'w') 是先截断再写，那一刻被杀就文件损坏、下次启动读不出来 = 进度清零）。建不起线程才退回主线程同步 open+json.dump。写失败静默 pass。切后台 on_pause 调 _cfg_flush（超时 1.0s，绝不长等）。",
+   "trigger": "每次 _save_config / on_pause",
+   "params": "_cfg_flush timeout=1.0s；临时文件后缀 '.tmp'",
+   "source": "11166-11241 _cfg_worker/_cfg_post/_cfg_flush / 22108-22119 on_pause"
+  },
+  {
+   "id": "load-whitelist",
+   "name": "读档白名单（逐字段独立校验）",
+   "kind": "silent-invariant",
+   "behavior": "只接受：max_plays ∈ (20,50,100)；rtp_target ∈ _regular_rtp()（排除隐藏档）；bet ∈ PRESETS；balance 为数字且 >= 0；0 <= round_plays <= max_plays；plays/hits 为 int 且 >= 0；fps_cap_setting ∈ FPS_CAP_OPTIONS；power_grain ∈ POWER_GRAINS。任何一条不符就**保持该字段的默认值**（不报错、不迁移）。老存档里的 voice/sfx 两个旧键被自然忽略。",
+   "trigger": "冷启动",
+   "params": "白名单全部从真源派生（_regular_rtp / PRESETS / POWER_GRAINS），不手抄",
+   "source": "20565-20603 _load_config"
+  },
+  {
+   "id": "load-order",
+   "name": "读档顺序依赖",
+   "kind": "silent-invariant",
+   "behavior": "max_plays 必须先于 round_plays 读（round_plays 的上界校验用的是刚读进来的 max_plays）；_load_config 又在 _build_ui 之前跑，而 _boards/self.multipliers 早在它之前就按默认 0.80 建好了 ⇒ __init__ 必须在 _build_ui 之后补调 set_bet/set_rtp 把按钮高亮与盘面同步到读回的档。set_rtp 自身又要求 state == 'ready' 才动手。",
+   "trigger": "冷启动",
+   "params": "—",
+   "source": "20572-20589 / 13298-13299 / 13361-13362"
+  },
+  {
+   "id": "round-history",
+   "name": "轮次历史存档",
+   "kind": "player-visible",
+   "behavior": "每轮结束追加 {plays, balance, time} 进轮次历史，文件 plinko_round_history.json（同目录），存/读都只留最近 100 条；轮次设定弹窗里倒序列出「第N轮  每轮M次  剩 B 个弹珠」。",
+   "trigger": "_show_round_end",
+   "params": "上限 100 条",
+   "source": "20466-20493 / 20753-20760 / 20828-20841"
+  },
+  {
+   "id": "easter-payout",
+   "name": "彩蛋（球落回竖井）按 ×2 结算",
+   "kind": "player-visible",
+   "behavior": "球落点 x > FIELD_R(459)（掉回右侧发射竖井）⇒ 置 _easter_egg；结算时 balance += 2×bet、plays -= 1、round_plays -= 1（与哑火一致不计一局）、存盘、播装杯（2 颗）、弹「弹珠返回发射槽」弹窗（含「本局按 ×2 结算，返还 %d 个弹珠」）、播 voice_easter_{1|10|50|100}，点确定才解锁 park_ball。跑分期间账务照走但不弹窗（且必须走 _easter_finish 解锁，不许只 return —— 否则永久软锁）。",
+   "trigger": "settle 且 _easter_egg=True（判定在 landing 分支）",
+   "params": "返还 2×bet（净赚 bet）；FIELD_R=459；落点目标 PLUNGER_X=487",
+   "source": "21290-21302 / 20151-20180 settle / 20400-20456 _show_easter_popup"
+  },
+  {
+   "id": "win-voice-payout",
+   "name": "中奖语音按「赔付额」取 clip",
+   "kind": "silent-invariant",
+   "behavior": "语音档下播 voice_win{payout}（非语音档按倍率分 7 档播 win0..win6）；payout = bet×m 的全部可能取值只有 18 个：2,3,5,10,20,30,50,100,150,200,250,300,500,1000,2000,2500,5000,10000（4 投注档 × 7 倍率 = 28 个组合全落在其中），android/voice/ 里正好有这 18 个 wav。**若改投注档或倍率表使 payout 落到这 18 个之外，语音会静默缺失（不报错、不回落）**。",
+   "trigger": "装杯全部落定的回调 _on_settled → _play_win_voice",
+   "params": "voice_win{2,3,5,10,20,30,50,100,150,200,250,300,500,1000,2000,2500,5000,10000}",
+   "source": "20923-20936 _play_win_voice / android/voice/（61 个 wav）"
+  },
+  {
+   "id": "bench-accounting",
+   "name": "跑分期间的账务快照 / 盘面钉死",
+   "kind": "silent-invariant",
+   "behavior": "跑分开始 _bench_counters_begin：余额**重置成 1000**（玩家点名要求），而 plays/hits/round_plays 只「记下再放回」（_bench_snap），不归零（那是玩家真实累计）；跑分结束 _bench_counters_end 把三项放回、并把余额**再重置一次**成 1000（幂等，快照用完置 None）。盘面另被钉死：第 i 发把 9 格全填 BENCH_BOARD[i]=(5,10,20,50,100)，碰撞随机流换成按球号派生的 BENCH_SEED 流；跑分前 _bench_save_board、结束还原（不还原的话跑完 9 个槽会全挂 x100）。",
+   "trigger": "长按标题 3s → 跑分菜单 → 开始测试",
+   "params": "BENCH_BOARD=(5,10,20,50,100)；BENCH_SEED=20260914；START_BEADS=1000",
+   "source": "15795-15847 / 16140-16150 / 15890 _bench_save_board / 20350-20352"
+  },
+  {
+   "id": "ctrl-lock",
+   "name": "输入锁与账务（防扣成负数 / 防切一半）",
+   "kind": "silent-invariant",
+   "behavior": "charging / flying / landing / 装杯期间 _controls_enabled=False：on_touch_down 直接 return True 吞掉 HUD 触摸（档位、投注、重置、轮次按钮全点不动），但 **on_touch_up 不挡**（发射必须在松手时送达），Popup 是 Window 子控件不受锁影响。变灰只写 background_color 染色（绝不写 disabled/.color —— 那是每发球 12 次字形重排）。set_rtp 自己再兜一道 state != 'ready' 直接 return（否则高亮跳了、盘面没跳，这一发按旧档赔付），_ask_unlock_rtp 也要求 ready。",
+   "trigger": "_set_controls_enabled(False) 在 launch/start_charge 等处的调用",
+   "params": "BTN_OFF_DIM 变灰系数",
+   "source": "13270 / 14094-14138 _set_controls_enabled / 14140 on_touch_down / 20014 set_rtp / 19921 _ask_unlock_rtp"
+  },
+  {
+   "id": "stats-lbl",
+   "name": "累计投/中统计行",
+   "kind": "player-visible",
+   "behavior": "「累计N投M中(P%)」，P = 100×hits/plays（plays=0 时为 0）。为省一次字形重排，settle 里用 Clock.schedule_once 延后 0.20s 才刷新（别改成 0 —— 下一帧仍在落袋窗口里；也别挪进 _reveal_win）。",
+   "trigger": "发射 / 结算(+0.2s) / 重置 / 跑分还原",
+   "params": "延迟 0.20s",
+   "source": "19784-19789 _refresh_stats / 20194"
+  },
+  {
+   "id": "board-no-target",
+   "name": "无引导 / 无预定槽（账务口径的前提）",
+   "kind": "silent-invariant",
+   "behavior": "结算槽 = 物理落格（球心 x 换算格号，夹 0..8），没有 choose_target / 预演修订 / min-max 保底 ⇒ 「盘面数学期望」就是真实 RTP 的唯一来源。卡死兜底（位置不动超 MAX_FALL_SEC）也用**物理槽**强制结算，不会另挑一格；落袋即终态（槽号与球心 x 此后不许变）。",
+   "trigger": "settle / 卡死兜底",
+   "params": "MAX_FALL_SEC=4.0；STALL_MAX_RETRY=10",
+   "source": "21282-21289 / 21319-21321"
+  }
+ ],
+ "constants": [
+  {
+   "name": "RTP_TIERS",
+   "value": "(('80%',0.80),('120%',1.20),('200%',2.00),('360%',3.60))",
+   "meaning": "常驻返奖档位（可持久化）"
+  },
+  {
+   "name": "RTP_HIDDEN",
+   "value": "(('1000%',10.0),('2000%',20.0),('5000%',50.0))",
+   "meaning": "隐藏档（长按解锁、不持久化）"
+  },
+  {
+   "name": "RTP_UNLOCK_HOLD",
+   "value": "3.0",
+   "meaning": "长按「期望返还比例」解锁隐藏档弹窗的秒数（原 5.0）"
+  },
+  {
+   "name": "MAX_REROLL",
+   "value": "2",
+   "meaning": "坏盘最多重抽次数（共生成 3 盘，最后一盘无条件收）"
+  },
+  {
+   "name": "CEIL_THRESHOLD",
+   "value": "5",
+   "meaning": "高倍率起点：>=x5 都算「高」"
+  },
+  {
+   "name": "NUM_SLOTS",
+   "value": "9",
+   "meaning": "底部倍率槽数量（RTP 分母）"
+  },
+  {
+   "name": "START_BEADS",
+   "value": "1000",
+   "meaning": "起始弹珠数 / 各种重置后的值"
+  },
+  {
+   "name": "PRESETS",
+   "value": "[1, 10, 50, 100]",
+   "meaning": "四个投注档"
+  },
+  {
+   "name": "DEFAULT_BET",
+   "value": "10",
+   "meaning": "默认投注档"
+  },
+  {
+   "name": "BET_COLORS",
+   "value": "{1:'#39c98a',10:'#4da8ff',50:'#e0533b',100:'#a335ee'}",
+   "meaning": "各投注档的装杯球色（未知档回退金球）"
+  },
+  {
+   "name": "COL_x",
+   "value": "{2:'#1e8a5a',3:'#3d8bfd',5:'#e0533b',10:'#9e1f30',20:'#a335ee',50:'#c88800',100:'#ff8c00'}",
+   "meaning": "槽位底色的倍率→色映射"
+  },
+  {
+   "name": "MISFIRE_POWER",
+   "value": "0.15",
+   "meaning": "哑火阈值：低于此值球飞不出竖井，不扣珠/不计局/不换盘面"
+  },
+  {
+   "name": "MAX_FALL_SEC",
+   "value": "4.0",
+   "meaning": "卡死兜底（位置不动超此秒数强制按物理槽结算）"
+  },
+  {
+   "name": "K_DIST",
+   "value": "0.80{2:.8507,3:.1493} 1.20{3:.7761,4:.2239} 2.00{3:.25,4:.5,5:.25} 3.60{6:.10,7:.70,8:.20} 10/20/50{9:1.0}",
+   "meaning": "每档有奖格数 k 的分布（概率和须=1）"
+  },
+  {
+   "name": "VALUE_SHAPE",
+   "value": "0.80=1.20={3:.556,5:.289,10:.122,20:.033}; 2.00=3.60={3:.50,5:.27,10:.12,20:.06,50:.033,100:.017}; 10.0={5:17,10:12,20:8,50:5,100:3}; 20.0={5:10,10:20,20:32,50:26,100:12}; 50.0={20:20,50:40,100:40}",
+   "meaning": "非 x2 部分的相对权重（整数也可，_shape_of 归一化）"
+  },
+  {
+   "name": "VALUE_DIST (解出值)",
+   "value": "0.80: x2=0.725778; 1.20: 0.443256; 2.00: 0.430556; 3.60: 0.439122; 10.0: 0.563636; 20.0: 0.435737; 50.0: 0.225806",
+   "meaning": "x2 权重由 _solve_p2 反解，不手写"
+  },
+  {
+   "name": "REROLL_DEAD",
+   "value": "{10.0, 20.0, 50.0}",
+   "meaning": "坏盘判据恒真的档 ⇒ 只掷一遍（跳过两次空转）"
+  },
+  {
+   "name": "_ref (中奖率门禁)",
+   "value": "{0.80:24.15, 1.20:35.67, 2.00:43.37, 3.60:78.52, 10.0:100.00, 20.0:100.00, 50.0:100.00}",
+   "meaning": "selftest 的每档中奖率参考值（回归门禁 ±1.5pp）"
+  },
+  {
+   "name": "BENCH_BOARD / BENCH_SEED",
+   "value": "(5,10,20,50,100) / 20260914",
+   "meaning": "跑分钉死的盘面（每发全场同倍率）与随机种子"
+  },
+  {
+   "name": "max_plays",
+   "value": "20 / 50 / 100（默认 50）",
+   "meaning": "每轮局数上限（= 事实上的防沉迷闸）"
+  },
+  {
+   "name": "_cfg_flush timeout",
+   "value": "1.0",
+   "meaning": "切后台等待设定落盘的最长秒数"
+  },
+  {
+   "name": "CUP_TRIGGER_DELAY",
+   "value": "0.15",
+   "meaning": "落容器演出相对 settle 的延后（账务不动，只动演出）"
+  },
+  {
+   "name": "结算大字字号",
+   "value": "sp(48) 中奖 / sp(36) 未中",
+   "meaning": "『+N』与『未中』的字号"
+  }
+ ],
+ "gotchas": [
+  "坏盘判据只有一处真源 _is_bad_board()：解析期望 _effective_rtp 与实际重抽 roll_multipliers 必须共用它。历史上是互补的两处写法（c2*5>=k*4 or ch>=2 / n2*5<k*4 and nh<2），改了其中一处 RTP 就静默分家。",
+  "x2 权重 p2 绝不许手写/手抄：它是 _solve_p2 二分反解出来的。写死 p2 等于把「改 K_DIST 或 VALUE_SHAPE 自动重新配平」这条保证拆掉，且顶层 assert 只验最终 RTP，验不出你是不是手抄的。",
+  "档位清单只能有一份。_boards 初始化与 park_ball 重刷曾经各抄了一份，加隐藏档时漏改一处 → 切到 2000%/5000% 再发射就 self._boards[rtp_target] KeyError 闪退（v0.6.47 线上事故）。现在统一走 _all_rtp()。",
+  "读档白名单必须派生、不许手抄：rtp_target 走 _regular_rtp()（从 RTP_TIERS 派生），这是「隐藏档不持久化」的实现点。抄成硬编码清单 = 与 v0.6.47 同款形状的事故。",
+  "读档顺序有依赖：max_plays 必须先于 round_plays 读（round_plays 的上界校验用 self.max_plays）。反过来写会让 round_plays 的合法性判断用错上界。",
+  "_load_config 跑在 _build_ui 之前，而 _boards/multipliers 在那之前已按默认 0.80 建好 ⇒ __init__ 必须在 _build_ui 后补调 set_bet/set_rtp 把按钮与盘面同步。漏掉这一步 = 界面上高亮的档和实际赔付的盘面不一致。",
+  "set_rtp 的 state != 'ready' 守卫必须放在最前面（连 rtp_target 都不能先写）。先写 rtp_target 就已经「切了一半」：高亮跳新档、9 个槽还是旧档，这一发按旧档赔付。",
+  "扣注必须在 launch() 里（power >= MISFIRE_POWER 分支之后），不能在 start_charge 里：蓄力期扣钱会让「按住不放」反复收费，而哑火不扣珠是明写的规则。",
+  "start_charge 里余额检查必须排在轮次上限检查之前（两个条件同时成立时玩家该看到「钱不够」）。",
+  "存档落盘必须走 临时文件 + os.replace：老写法 open(path,'w') 先截断再写，那一刻被杀就是文件损坏 → 下次启动白名单读不出来 → 余额/进度静默清零。",
+  "存档写只能保留最新一份（单槽 + Event，后写覆盖先写），不要做队列/去重：配置是「当前状态」不是流水账，落盘落后于状态本身就是设计。",
+  "settle 里每次球落定都要 _save_config（中奖/未中两个分支都要）—— 账务一秒都不许挪。中途被杀不能吞奖励，所以演出可以延后、账务与写盘不行。",
+  "settle 里统计文字（_refresh_stats）必须延后 0.20s：那一帧还有灯/槽闪/音效/余额/揭晓，直接写文字 = 一次字形重排（真机 4~7ms）。但也别改成 0（下一帧仍在落袋窗口里）。",
+  "落袋即终态：landing 分支在第一次触地时就把 vx 清零并把结算推到 settle(i)，此后槽号与球心 x 不许再变。清 vx 时只清横速、保留 vy（连 vy 一起清会把落地弹跳抹平）。",
+  "输入锁只挡 on_touch_down、不挡 on_touch_up：发射靠松手那条路（fire_btn.on_release → launch）送出去，两边都挡球就永远发不出去。",
+  "变灰按钮只能写 background_color，绝不能写 btn.disabled 或 .color —— Kivy 把颜色烘进纹理，12 个按钮 = 12 次文字重排 = 那一帧 12~21ms（1% Low 头号来源）。",
+  "隐藏档弹窗是 Window 的直接子控件，输入锁拦不住它上面的按钮 ⇒ 必须自己判 state == 'ready' 才开，并且要防重入（_rtp_popup 非空直接 return）。",
+  "彩蛋被拦掉（跑分期间）时必须走 _easter_finish 解锁，不能只 return —— 只 return 会让 _easter_hold 永远不放，玩家只能杀进程（永久软锁）。",
+  "改投注档或倍率表后必须核对 voice_win{payout} 的 18 个取值仍然覆盖全部 bet×m 组合：缺 clip 是静默缺失，不报错也不回落。",
+  "跑分必须保存/还原盘面（_bench_save_board）与 plays/hits/round_plays 快照，否则跑完 9 个槽全挂 x100（玩家报过「都是*100 这个明显不合理」），且玩家的累计投/中被测试那 5 发撑大。",
+  "改 K_DIST 或 VALUE_SHAPE 后，selftest 的 _ref 中奖率参考值必须同步改 —— 它红了正是它存在的意义（2026-09-10 300%→360% 只改了档名没动有格数，中奖率卡在 65.6%，玩家察觉不到换档）。",
+  "别用 E[K]/9 估中奖率：坏盘重抽对 k 有偏，3.60 档名义 78.89% vs 实测 78.52%，偏高约 1pp。只有 MC 算得准。",
+  "隐藏档（1000/2000/5000%）的坏盘判据恒真 ⇒ 必须只掷一遍（REROLL_DEAD），否则每盘白掷 3 遍取第 3 遍（分布等价，纯浪费）。",
+  "跑分期间照常播装杯（玩家定案）：代价是采样窗口从 ~1.5s 拉到 ~15~20s，平均帧率偏低 —— 这是明确接受的取舍，别把它「优化」掉。",
+  "结算槽没有 choose_target / 保底修正，卡死兜底也只能用物理槽（球心 x 换算），不许另挑一格 —— 一旦引入目的性引导，盘面数学期望就不再等于真实 RTP。"
+ ],
+ "notes": "已真读代码 + 真跑验证。任务给的行号区间 2845~2919 与现版错位约 215 行：那一段现在是音效层（SR/SFX_VOICES…），盘面配平的真实位置是 **2631~2843**（_pick 2631 / MAX_REROLL+CEIL_THRESHOLD 2647-2648 / VALUE_SHAPE 2650 / K_DIST 2684 / _shape_of 2709 / _line_color 2719 / _is_bad_board 2734 / _effective_rtp 2745 / _solve_p2 2774 / VALUE_DIST+assert 2788-2798 / _reroll_dead 2801 / REROLL_DEAD 2823 / roll_multipliers 2826）。\\n\\n四档中奖率已核实，出处是 **android/main.py:7152 的 `_ref`**（selftest 的回归门禁，判据在 7199 行 ±1.5pp，注释 7140-7146 明确写着「_ref 里写的是每档应该等于多少，这是回归门禁不是推导」）：{0.80: 24.15, 1.20: 35.67, 2.00: 43.37, 3.60: 78.52, 10/20/50: 100.00}。我把 2631~2843 逐字抽出来在本地跑 MC 复核（20000 盘 → 24.154/35.707/43.512/78.557；400000 盘 → 24.133/35.679/43.393/78.573），与 _ref 逐档吻合（最大差 0.14pp，在 MC 噪声 0.012~0.06pp 的 2~3σ 内，且远小于 ±1.5pp 门禁）。同一次复核实测：REROLL_DEAD={10.0,20.0,50.0}；解得 p2 = 0.725778/0.443256/0.430556/0.439122/0.563636/0.435737/0.225806；所有档位的「每格返还」= 档位（0.7995/1.1993/1.9980/3.5947/9.9860/20.01/49.97，均在噪声内）；三个隐藏档中奖率恒 100%（K_DIST={9:1.0}）。另外做了代数核对：`_effective_rtp` 的闭式 e_sum + (P+P²)(e_sum−E_bad) 恒等于真实三重抽过程的 (1−P³)E_good + P³E_bad —— 即闭式修正精确、不是近似（40 万盘 MC 与闭式差 ≤3e-3，噪声内）。\\n\\n隐藏档的「必中 + 均值锁定」是硬约束：每格均值 = RTP×9/E[K]，K 恒 9 ⇒ E[倍率] ≡ 档位（10/20/50），所以 x2 占比不是自由参数（实测 56.4% / 43.6% / 22.6%），想多给大倍率只能多加 x2。5000% 故意不放 x5/x10（掺小倍率反而要把 p2 抬到 0.4+，大奖更少见）。\\n\\n「防沉迷」在本实现里**没有同名特性**（全文件搜 防沉/未成年/健康/时长限制 零命中）：它就是 max_plays(20/50/100) 的轮次闸 + 打满弹窗 + 强制回 1000 的自动重置；杀进程躲避会因 _auto_reset_on_start 在下次启动白名单读取时静默重置（进度不留）。\\n\\n发现的注释与代码不符一处（不影响行为，重写时别照抄）：main.py:12367 注释写「隐藏档 5000% 时 '+500000' 会比屏幕还宽」，但结算大字 = bet×m，最大值是 100×100 = 10000（10673 行自己写着「最长串 '+10000'」，我按 VALUE_DIST 枚举确认 m 最大 100、bet 最大 100）⇒ '+500000' 是陈旧注释。",
+ "subsystem_extra_unused": "",
+ "uncovered": [
+  "持久化文件 plinko_bench_history.json / plinko_hp_history.json 的字段与语义没盘（非账务，属跑分/功耗子系统）；本次只盘了 plinko_config.json 与 plinko_round_history.json。",
+  "power_grain 与 fps_cap_setting 的取值域（POWER_GRAINS / FPS_CAP_OPTIONS 的具体档位）只在白名单处读到符号，没展开取值（属性能设置子系统）。",
+  "Sfx.play(name, gain, throttle) 对一个不存在的 clip 名（例如 payout 落在 18 个 voice_win* 之外的）具体是静默丢弃还是记日志，没查实现（属音效后端子系统）—— 但「不会回落成通用语音」这一点是从 _play_win_voice 的写法直接读出的。",
+  "_pick 的「概率和必须=1」只在 VALUE_DIST/K_DIST 上有顶层 assert 兜底；文件里是否还有其它调用点（概率和不一定为 1）没穷举。",
+  "结算/揭晓/装杯的时序常数（REVEAL_DELAY=0.4、CUP_TRIGGER_DELAY=0.15、HOLD_BASE=0.6、RESULT_FADE=0.25、FX_MAX_SEC=9.0、SPAWN_*、_land_hold=0.7/0.3、expected_sec）只在「账务何时发生、何时不许被吞」这个切面上记了，没有逐个盘（属中奖演出子系统）。",
+  "桌面版 plinko.py 的同名逻辑是否与 android/main.py 逐字一致没对照（本次只以 android 版为参考实现）。",
+  "余额显示动画删除后的 display_balance/_anim_* 平滑逻辑细节（_anim_start_time 到目标的过渡曲线）没有逐行读，只确认了取整口径与「不滚动」这一结论。",
+  "fx_probe.py 里与账务相关的探针判据（如「绝不软锁」「彩蛋不吞账」）没逐条读，只在 smoke 与 selftest 里看到了形状。"
+ ]
+}

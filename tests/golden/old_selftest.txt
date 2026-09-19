@@ -1,0 +1,75 @@
+[[1;32mINFO[0m   ] [Logger      ] Record log in C:\Users\liangpan\.kivy\logs\kivy_26-09-18_95.txt
+[[1;32mINFO[0m   ] [deps        ] Successfully imported "kivy_deps.angle" 0.4.0
+[[1;32mINFO[0m   ] [deps        ] Successfully imported "kivy_deps.glew" 0.3.1
+[[1;32mINFO[0m   ] [deps        ] Successfully imported "kivy_deps.sdl2" 0.8.0
+[[1;32mINFO[0m   ] [Kivy        ] v2.3.1
+[[1;32mINFO[0m   ] [Kivy        ] Installed at "C:\Program Files\Python311\Lib\site-packages\kivy\__init__.py"
+[[1;32mINFO[0m   ] [Python      ] v3.11.4 (tags/v3.11.4:d2340ef, Jun  7 2023, 05:45:37) [MSC v.1934 64 bit (AMD64)]
+[[1;32mINFO[0m   ] [Python      ] Interpreter at "C:\Program Files\Python311\python.exe"
+[[1;32mINFO[0m   ] [Logger      ] Purge log fired. Processing...
+[[1;32mINFO[0m   ] [Logger      ] Purge finished!
+[[1;32mINFO[0m   ] [Factory     ] 195 symbols loaded
+[[1;32mINFO[0m   ] [Image       ] Providers: img_tex, img_dds, img_sdl2, img_pil (img_ffpyplayer ignored)
+[[1;32mINFO[0m   ] [Text        ] Provider: sdl2
+[[1;32mINFO[0m   ] [Window      ] Provider: sdl2
+[[1;32mINFO[0m   ] [GL          ] Using the "OpenGL" graphics system
+[[1;32mINFO[0m   ] [GL          ] GLEW initialization succeeded
+[[1;32mINFO[0m   ] [GL          ] Backend used <glew>
+[[1;32mINFO[0m   ] [GL          ] OpenGL version <b'4.6.0 NVIDIA 610.88'>
+[[1;32mINFO[0m   ] [GL          ] OpenGL vendor <b'NVIDIA Corporation'>
+[[1;32mINFO[0m   ] [GL          ] OpenGL renderer <b'NVIDIA GeForce RTX 4070/PCIe/SSE2'>
+[[1;32mINFO[0m   ] [GL          ] OpenGL parsed version: 4, 6
+[[1;32mINFO[0m   ] [GL          ] Shading version <b'4.60 NVIDIA'>
+[[1;32mINFO[0m   ] [GL          ] Texture max size <32768>
+[[1;32mINFO[0m   ] [GL          ] Texture max units <32>
+[[1;32mINFO[0m   ] [Window      ] auto add sdl2 input provider
+[[1;32mINFO[0m   ] [Window      ] virtual keyboard not allowed, single mode, not docked
+== 返还率精确性(均匀落格盘面期望) ==
+  档位 0.80 -> 实测 RTP 0.796  OK
+  档位 1.20 -> 实测 RTP 1.190  OK
+  档位 2.00 -> 实测 RTP 2.005  OK
+  档位 3.60 -> 实测 RTP 3.635  OK
+== 每档 中奖率 / 返还倍率 ==
+  80%    中奖率  24.15%   返还倍率  0.8003 (档位 0.8000, 允差 ±0.0119)   空军 0 盘   OK
+  120%   中奖率  35.69%   返还倍率  1.1992 (档位 1.2000, 允差 ±0.0134)   空军 0 盘   OK
+  200%   中奖率  43.50%   返还倍率  1.9935 (档位 2.0000, 允差 ±0.0566)   空军 0 盘   OK
+  360%   中奖率  78.56%   返还倍率  3.6066 (档位 3.6000, 允差 ±0.0813)   空军 0 盘   OK
+  1000%  中奖率 100.00%   返还倍率 10.0300 (档位 10.0000, 允差 ±0.1787)   空军 0 盘   OK
+  2000%  中奖率 100.00%   返还倍率 19.9768 (档位 20.0000, 允差 ±0.2536)   空军 0 盘   OK
+  5000%  中奖率 100.00%   返还倍率 50.1195 (档位 50.0000, 允差 ±0.3564)   空军 0 盘   OK
+== 被动飞行(升到顶->越顶入场->落袋 & 不卡死) ==
+  升过通道顶失败: 0/1500   越顶入场失败: 0/1500   卡死: 0
+== 落袋终态(落袋后再推进 30 步, 槽号与球心 x 不许变) ==
+  落袋后槽号/位置变了: 0/300  OK
+== 落袋时仍在下落(地板不吃掉真实下落速度) ==
+  落袋时不在下落: 0/300  OK
+== 落地必弹(保底撞击速度换算的 apex) ==
+  最低 apex 10.4px (>=10 才看得见)   最高 apex 24.2px (<=45 且球顶不越隔板顶)  OK
+== 哑火(发射了但升不过隔墙顶) ==
+  apex y 区间 208~528 (隔墙顶 160, 越过即失败)   最长归位 136/180 帧
+  越顶泄漏: 0/500   横向漂移: 0/500   未归位: 0/500
+== 下落节奏(弹珠机手感: 碰钉轻快弹开) ==
+  行穿行 p50=0.20s (须>=0.15)   碰钉减速比 p50=0.69 (须0.45~0.80, 轻快弹开)
+  滞留帧 443 (须<=30/发, 摩擦后槽口慢速落袋为正常)
+== 转向平滑(弧面缓动带球) ==
+  碰弧面帧方向角突变 p50=12° (须<=15, 一帧横移=玩家投诉的荒谬感)
+== 蓄力观感区分度(竖直时序必须不变) ==
+  力度  15% (u=0.00): 冲顶 x 中位 407   撞钉 10 次   首钉 88 帧   转向 64 帧 @y62   空中折角 3.1°(Δ0.2°)
+  力度  50% (u=0.41): 冲顶 x 中位 363   撞钉 10 次   首钉 94 帧   转向 66 帧 @y35   空中折角 3.1°(Δ0.2°)
+  力度 100% (u=1.00): 冲顶 x 中位 363   撞钉 10 次   首钉 85 帧   转向 61 帧 @y24   空中折角 3.1°(Δ0.2°)
+  飞高区分(弱→满 apex y 差): -63 px  OK (>=10 满蓄明显飞更高; 首钉x跨度 78 px, 冲顶x跨度 44 px)
+  首钉时刻: OK (须恒在 75~110 帧, 否则飞行音与画面脱节)
+  转向(顶部碰撞音触发): OK (须每发都有且恒在 50~65 帧)  转向高度跨度 39 px OK
+  空中折角(无碰撞段, 弧面接触帧豁免): 单帧最大 3.1°  OK (须 <=4;
+           相邻帧折角差最大 0.2°  OK (须 <=1; 均匀平滑, 无阶跃)
+== 碰撞事件覆盖率(音效触发源) ==
+  撞钉       有事件 100.0%   过音量阈值 100.0%
+  天花板      有事件  19.5%   过音量阈值  17.4%
+  撞墙       有事件  31.3%   过音量阈值  30.7%
+  撞隔板      有事件  34.3%   过音量阈值  33.9%
+  导流弧   接触率 100.0%   (静音事件位: 每次有效发射都必须接触弧面,
+           这是'转向都发生在导流槽上'的量化——没经过导流槽就转向 = 违规)
+  天花板撞击率 19.5% (2号弹射器生效, 已不再是失败门禁)
+== 音效库体检 ==
+  音效数: 41   异常: 无(削波/直流/爆音/静音 全部通过)
+结果: OK

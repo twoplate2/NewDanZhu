@@ -1,0 +1,871 @@
+{
+ "subsystem": "Kivy 界面基础设施 + 两个自绘曲线控件（android/main.py 10156~11388 / 11388~13263）",
+ "features": [
+  {
+   "id": "ui-hud-layout",
+   "name": "HUD 五行全宽布局 + 6 级字号层级",
+   "kind": "player-visible",
+   "behavior": "整个游戏界面是纵向 BoxLayout 的 5 行全宽结构（无右侧面板、无历史行）：[顶栏 标题+喇叭+状态] → [返还率 RTP 三档左对齐] → [投入弹珠单位左对齐] → [游戏区全宽] → [信息行] → [底行 重置—长距距—力度+蓄力发射]。行高全部是 dp 常量：顶栏 44、返还率行 44、投入行 44、信息行 26、底行 64。字号分 6 级：Hero 48sp（中奖大字，未中 36sp，按屏宽占比设计不跟场景缩）、Key 18sp（余额金色主数字+顶栏标题）、Act 16sp（全部按钮）、Body 14sp（正文/统计/力度）、Aux 13sp（状态栏/“投入弹珠单位”/“返还率”）。场景内文字（槽位倍率/落袋浮字）不用 sp、用逻辑 px（fs = max(12, int(20*s))，手机上≈11sp），跟盘面一起缩放。",
+   "trigger": "App 启动建界面；窗口尺寸变化时 _fit_width/_apply_sizes 重算",
+   "params": "H_TOP=44 H_RTP=44 H_BETS=44 H_INFO=26 H_BOTTOM=64；Hero 48sp/36sp；Key 18sp；Act 16sp；Body 14sp；Aux 13sp；场景字 int(20*s) 且下限 12",
+   "source": "android/main.py:10156-10172 行（文件头注释 + H_* 常量）；配套 20939+ `_apply_sizes`、13405 `_fit_width`"
+  },
+  {
+   "id": "ui-fit-width-scale",
+   "name": "内容列宽度与两级缩放因子（_font_scale / _ui_scale）",
+   "kind": "player-visible",
+   "behavior": "内容最大宽度 = 让 520:660 场景恰好填满可用高度；窄屏（手机竖屏）直接铺满宽度，宽屏（16:10 桌面）内容列居中、两侧留深色边。uv = us² 让横向边距在窄屏更激进地收缩，把垂直空间还给游戏区。_ui_scale = min(1, vh/dp(680))，_font_scale = min(1, width/dp(360))，所有基准字号 = sp(N) * _font_scale * _ui_scale。竖屏/横屏布局走同一套，因为尺寸吃的是 _veq()（等效竖屏窗口）。",
+   "trigger": "窗口尺寸变化（含横竖切换）",
+   "params": "_ui_scale = min(1.0, vh/dp(680))；_font_scale = min(1.0, width/dp(360))；scaled_fixed = dp(44+44+44+26+64)*us + dp(10)*5*us² + dp(12)*us；want = avail_h*(CW/CH) + dp(8)",
+   "source": "android/main.py:13405-13418 `_fit_width`；20939-20983 `_apply_sizes`（us² 衰减、间距 dp(10)*uv、底部留白 dp(12)）"
+  },
+  {
+   "id": "ui-veq",
+   "name": "等效竖屏窗口尺寸 _veq()",
+   "kind": "player-visible",
+   "behavior": "所有布局计算一律吃“等效竖屏窗口”= (短边, 长边)；物理窗口只用来算旋转。竖屏时 = 物理窗口（行为与没有 LandLayer 完全一致）。横屏反旋转时 = 短边×长边，于是横拿时画面构图与竖拿时一模一样。",
+   "trigger": "任何需要窗口尺寸的布局/弹窗计算",
+   "params": "w,h = Window.width, Window.height；return (w,h) if w<=h else (h,w)",
+   "source": "android/main.py:13398-13403 `RootWidget._veq`"
+  },
+  {
+   "id": "land-device-wide",
+   "name": "屏幕比例分流：仅 16:9 及更宽的屏才允许横屏旋转",
+   "kind": "player-visible",
+   "behavior": "用 Display.getRealSize() 的物理分辨率（含系统栏、不随旋转变）算 短边/长边；≥ 9/16 判为宽屏（平板类，允许四方向旋转）；更瘦长的手机（18:9/20:5.9）锁竖屏（正竖+倒竖），不进横屏——瘦长机横拿时系统会多出一条横向状态栏压在旋转画面上、显示直接坏掉。桌面/读不到时按宽屏处理（保持原有行为）。开机量一次后缓存，之后不再变。",
+   "trigger": "首次调用 _device_is_wide()（启动期）",
+   "params": "_DEVICE_WIDE_MIN = 9.0/16.0；缓存 _device_wide_cache；异常时 aspect=1.0 ⇒ 判宽屏",
+   "source": "android/main.py:11394-11416 `_device_is_wide`"
+  },
+  {
+   "id": "land-angle",
+   "name": "横屏反旋转角 _land_angle()",
+   "kind": "player-visible",
+   "behavior": "读 Display.getRotation()：rot==3（ROTATION_270）→ -90，其余（含 ROTATION_90 与读不到）→ +90。角度是按“抵消系统转屏”选的，让画面在屏幕上的构图与竖拿时完全一致（Kivy Rotate 逆时针为正）。真机上若发现扭头方向不对/画面倒置，只需交换这两个映射。",
+   "trigger": "apply_orientation() 每次窗口尺寸变化",
+   "params": "getRotation()==3 → -90；else → +90；异常 → +90",
+   "source": "android/main.py:11418-11430 `_land_angle`"
+  },
+  {
+   "id": "land-layer",
+   "name": "LandLayer：整棵树按等效竖屏布局后整体旋转铺满横屏",
+   "kind": "player-visible",
+   "behavior": "Android 12L+ 大屏锁竖屏会被 letterbox/ZUI 塞进半屏兼容盒，所以干脆放开方向（fullSensor 四方向），横拿时系统给全屏横窗；本层把整棵 UI 树按“等效竖屏窗口”（短边×长边）布局后整体旋转 90° 铺满横屏。实现：FloatLayout + canvas.before 里 PushMatrix + Rotate(axis=(0,0,1))，canvas.after 里 PopMatrix；Rotate.origin = (w/2, h/2)；_anchor（App.build 塞进来的 AnchorLayout）横屏时 size=(h,w)、center=self.center。启用条件：(w>h) and (platform=='android' or '--landscape' in sys.argv) and _device_is_wide()。竖屏时 angle=0 且层尺寸=窗口，零回归。",
+   "trigger": "窗口尺寸变化 → layer.apply_orientation()（由 RootWidget._frame 的窗口尺寸轮询驱动）",
+   "params": "angle=_land_angle() if land else 0；_anchor.size=(h,w) if land else (w,h)；层 pos=(0,0)、size=(w,h)",
+   "source": "android/main.py:11436-11470 `LandLayer.__init__` / `apply_orientation`；调用点 21211、21872-21906"
+  },
+  {
+   "id": "land-toeq",
+   "name": "触摸坐标逆旋转 _to_eq / _to_win（等效坐标换算）",
+   "kind": "silent-invariant",
+   "behavior": "物理窗口坐标 ↔ 等效竖屏坐标，绕窗口中心做旋转的逆/正变换：angle==90 时逆变换为 (cx+dy, cy-dx)、-90 时为 (cx-dy, cy+dx)（正变换反过来）。**只做逆旋转，绝不能再减 anchor.pos** —— anchor 是普通 AnchorLayout，不是 RelativeLayout，Kivy 单一 window 坐标系下整棵树的 pos 数值本来就是“等效竖屏物理坐标”。多减一次会把所有控件的点击判定区平移出屏幕（横屏 1740x1000 时偏移 (370,-370)），症状 = 横屏所有按钮点不到、竖屏正常。",
+   "trigger": "每次触摸事件、每次 to_local/to_parent 调用",
+   "params": "cx,cy = Window.width/2, Window.height/2；angle==0 时恒等返回；角度只可能是 0/90/-90",
+   "source": "android/main.py:11472-11516 `_to_eq` / `_to_win` / `to_local` / `to_parent`"
+  },
+  {
+   "id": "land-touch-dispatch",
+   "name": "触摸逆旋转派发 _pass_touch（按钮能点中的唯一原因）",
+   "kind": "silent-invariant",
+   "behavior": "on_touch_down/move/up 三处都走 _pass_touch：angle==0 直接转发；否则 touch.push() → touch.apply_transform_2d(self._to_eq) → 调父类 → touch.pop()。**必须用 apply_transform_2d，不能写 touch.pos = ...**：pos 只是普通元组属性，直接赋值不改 x/y，而 ButtonBehavior.on_touch_down 判点击用的是 collide_point(touch.x, touch.y)，拿到的还是物理坐标。另覆写 to_local/to_parent（EventLoop 的 grab 派发依赖 to_local；Widget.to_window 沿祖先链调 to_parent）。不覆写 to_local 的症状：按钮按下有反馈、抬起无动作（always_release 默认 False 直接吞掉 on_release）。",
+   "trigger": "任何触摸事件进入 LandLayer",
+   "params": "apply_transform_2d 会变换 x/y/pos/ox/oy/px/py 全部",
+   "source": "android/main.py:11472-11538 `to_local` / `to_parent` / `_pass_touch` / `on_touch_*`"
+  },
+  {
+   "id": "rotpopup-host",
+   "name": "RotPopup：挂旋转层的弹窗",
+   "kind": "player-visible",
+   "behavior": "Kivy 2.3 ModalView.open() 硬编码挂 Window，本类照抄其 open/_real_remove_widget 把宿主换成旋转层，于是横屏时弹窗随层旋转、坐标系统一为等效竖屏窗口。竖屏（angle==0 或拿不到层）回落原生行为。pos_hint 默认 {'center_x':0.5,'center_y':0.5} 交给 FloatLayout；bind on_resize/on_keyboard + fbind center/size 到 _align_center，转屏时自动跟随。返回键走 RootWidget._on_key_down 原路径（层无 on_resize/on_keyboard 事件，bind 静默无害）。",
+   "trigger": "任何弹窗 open()；angle==0 时走 super()",
+   "params": "self._anim_duration 默认；animation 可关（kwargs['animation']）",
+   "source": "android/main.py:11540-11625 `RotPopup`"
+  },
+  {
+   "id": "rotpopup-fps-refresh",
+   "name": "弹窗切换后重申高刷新率",
+   "kind": "player-visible",
+   "behavior": "自适应刷新率设备会把静态 Modal 降回 60Hz，所以每次弹窗 open 与 on_dismiss 都调 _apply_fps_cap()，并且在 open 后 0.35 秒再补一次（Popup 的淡入/淡出在下一小段时间才真正提交到 Surface）。非 Android 直接 return。",
+   "trigger": "RotPopup.open()（_arm_high_refresh）与 on_dismiss",
+   "params": "补投延迟 0.35s；bind on_dismiss 只绑一次（_high_refresh_bound）",
+   "source": "android/main.py:11547-11566 `_reassert_high_refresh` / `_arm_high_refresh`"
+  },
+  {
+   "id": "rotpopup-gate",
+   "name": "_popup_gate：维护“现在开着几个弹窗” _POPUP_N",
+   "kind": "silent-invariant",
+   "behavior": "给字体钉子用（弹窗开着时不许钉）：open 时 +1、dismiss 时 -1，用**每实例一个去重开关 `_gate_on`** 而不是直接加减——因为 open() 有几条早退分支（已开着/竖屏回落），直接加减会重复计数。计数偏了钉子就会静默地要么全禁要么全放。**必须挂在 dismiss 上而不是 `_real_remove_widget`**：转屏/被动移除那条路绕开它，挂错地方计数永不归零 ⇒ 钉子被永久静默禁用。",
+   "trigger": "RotPopup.open / dismiss",
+   "params": "_POPUP_N[0] = max(0, _POPUP_N[0] ± 1)",
+   "source": "android/main.py:11568-11582 `_popup_gate`；11584-11625 open/dismiss"
+  },
+  {
+   "id": "popup-size",
+   "name": "弹窗宽高必须按等效竖屏窗口算绝对 dp 值",
+   "kind": "silent-invariant",
+   "behavior": "_popup(hint_w, h_dp) 统一建弹窗：宽 = hint_w * _veq()[0]、高 = min(dp(h_dp), vh*0.92)，都要 size_hint=(None,None) + 绝对值。**不能用 size_hint**：size_hint 取父容器原始宽高，而设备横拿时窗口是横的 ⇒ 弹窗比界面宽 60~80%（实测 960x540 下界面宽 540/弹窗 806；1740x1000 下 1000/1462），这就是“设备横屏时启动游戏、一开设置窗口宽度就是错的”的根因。title_align 默认给 'center'（Kivy 默认 'left'，不改则标题贴左、与严格居中的主标题栏不一致）。",
+   "trigger": "每个弹窗的创建点",
+   "params": "width = hint_w * vw；height = min(dp(h_dp), vh*0.92)；title_align 默认 'center'",
+   "source": "android/main.py:13589-13609 `_popup`"
+  },
+  {
+   "id": "popup-width-adapt",
+   "name": "弹窗内固定宽块按可用宽度等比放大（平板适配）",
+   "kind": "player-visible",
+   "behavior": "两个历史记录弹窗的表格原是固定 288dp、只缩不放，平板（等效竖屏窗口 792dp、弹窗 760dp）上缩在中间、两边各空 236dp。现在按“撑满弹窗可用宽度”等比放大，上限 _TW_GROW_MAX 防它变成巨无霸（Y700 算出来约 2.5 ⇒ 夹到 1.6；手机算出来 1.0 不触发）。门槛用 Android sw600dp 惯例：等效竖屏窗口宽 > 600dp 才算平板，≤600dp 仍只收缩 min(1.0, ...)（360dp 小屏靠它防 size_hint_x=None 的子控件飘出弹窗）。两处调用点必须共用这一个口径。",
+   "trigger": "两个历史记录弹窗构建时",
+   "params": "_TW_GROW_MAX = 1.6；_avail = _vw*0.96 - dp(38)；_vw<=dp(600) → min(1.0, avail/base_w)；否则 min(1.6, avail/base_w)",
+   "source": "android/main.py:10173-10177（_TW_GROW_MAX）；13566-13587 `_fit_w`"
+  },
+  {
+   "id": "popup-content-fit",
+   "name": "弹窗高度按内容真实需要的高度定（_popup_fit_content）",
+   "kind": "player-visible",
+   "behavior": "开完之后把弹窗高度改成内容真实需要的高度，上限 vh*0.96。非内容区（标题栏+分隔条+外壳内边距）**按结构直接算**而不是 popup.height - content.height（同 tick 里 content.h 还是旧值，会把 chrome 算成 14 而不是 44，导致彩蛋弹窗分隔线压在标题上、跑分菜单顶上留大块空白）。装不下时**不能就这么封顶**——Kivy 不裁剪控件，多出的那截会被 BoxLayout 摆到弹窗外面（实测标题整行飘到屏幕外、玩家看到“字飘在游戏画面上”）；做法是把自动撑高的标签按比例压低字号（k ≥ 0.55），下一帧再收敛，并写 _auto_cap 封顶（宁可少显示两行也不飘出去）。",
+   "trigger": "每个弹窗 open() 之后",
+   "params": "上限 _cap = vh*0.96；字号系数 _k = max(0.55, min(1.0, (_tot-_over)/_tot))；下限字号 max(6.0, _b*_k)；chrome 由 grid.padding + 非 container 孩子高度求和",
+   "source": "android/main.py:13644-13710 `_popup_fit_content`"
+  },
+  {
+   "id": "fit-scales",
+   "name": "单行自适应字号：两段固定阶梯（挑放大得下的最大档）",
+   "kind": "player-visible",
+   "behavior": "fit_font_size(text, base_fs, avail_w, bold) 返回**绝对字号 px**。逻辑：遍历 FIT_SCALES(1.0→0.70, 6 档) 再遍历 FIT_FINE(0.66→0.42, 7 档)，第一个 text_px 量出来 ≤ avail_w 的档即返回；13 档全放不下就给地板档 base*FIT_HARD_FLOOR(=0.42)——宁可小一点，也绝不折行/不溢出（Kivy 的 Label 只有“折行”和“溢出”两种行为，没有“缩到放得下”这一档）。空文字/avail_w≤1/base_fs≤0 直接原样返回 base_fs。",
+   "trigger": "任何单行标签的字号决策（_fit1 / _fit_uniform / _fit_buttons_uniform / big_result_text / center_toast）",
+   "params": "FIT_SCALES=(1.0,0.94,0.88,0.82,0.76,0.70)；FIT_FINE=(0.66,0.62,0.58,0.54,0.50,0.46,0.42)；FIT_HARD_FLOOR=0.42",
+   "source": "android/main.py:10244-10268（常量）；10442-10478 `fit_font_size` / `_fit_font_size_slow`"
+  },
+  {
+   "id": "fit-no-bisect",
+   "name": "第二段阶梯绝不许改回二分（结构性约束）",
+   "kind": "silent-invariant",
+   "behavior": "原来第二段是“在 [0.42, 0.70] 之间二分 6 次”。真机日志显示二分产出的 11 个字号（7.2800/7.7350/7.9625/8.0194/8.0762/8.1900/8.6450/8.8725/8.9862/9.0431）全都不在预热表里，而“开一个没开过的字号”在真机上是一次 40 毫秒级的字体表打开（`帧31 54.6ms[字号48.6(2次/1测)]`——**只量了 1 回就烧掉 42 毫秒**）。改成固定档后全 app 字号集合塌缩成“每个基准 × 这 13 个固定倍率”，预热表能一次全盖上。视觉代价：与二分最优解最多差 0.04×基准（基准 17px 时约 0.7px，基准 48 时 1.9px）。",
+   "trigger": "任何改 FIT_FINE 的改动",
+   "params": "二分版本已删除；_qfs 的 0.5px 量化网格（_FIT_GRID）也已停用（真机 sp(N) 非整数，量化后与预热表对不上，反而每次冷开字形表，CPU 吞吐掉约 6%）",
+   "source": "android/main.py:10245-10265（FIT_FINE 上方大段证据）；10427-10439 `_qfs`（已停用，保留函数）"
+  },
+  {
+   "id": "fit-cache",
+   "name": "两级结果缓存（_FIT_SIZE_PX / _FIT_PX）与上限清空",
+   "kind": "silent-invariant",
+   "behavior": "fit_font_size 是纯函数，结果缓存在 _FIT_SIZE_PX，键 = (text, round(base_fs,2), round(avail_w,1), bold)，超过 256 项整体 clear。text_px（量一段文字在字号 fs 下的单行宽度 px）结果缓存在 _FIT_PX，键 = (text, round(fs,2), bold)，超过 512 项整体 clear（余额那类数字会一直变，别让缓存无限长）。实测依据：_fit1 是 _frame 里最大单块开销（45 秒累计 1.06 秒），而 _install_fit 把 _fit1 绑在 text 和 width 两条路上——宽度变化那条文字根本没变却在重算整个阶梯；实测 _fit1 每帧被调 ~4.5 次，真正变了文字的只有余额那一格。",
+   "trigger": "每次 fit_font_size / text_px 调用",
+   "params": "_FIT_SIZE_PX 上限 256 → clear()；_FIT_PX 上限 512 → clear()；_SLOT_TXT_TEX 上限 64 → clear()",
+   "source": "android/main.py:10400-10413；10449-10457"
+  },
+  {
+   "id": "textpx-force",
+   "name": "text_px 的 force=True 必须能绕过自己的缓存",
+   "kind": "silent-invariant",
+   "behavior": "force=True 跳过 _FIT_PX 的缓存读，只给启动预热用。为什么必须有它：预热那句 text_px(...) 一旦命中本函数缓存，就**不建 CoreLabel、不开字体**，预热白做**且不报错**——日志读法早就记着“=否 ⇒ 预热那一句被 text_px 自己的缓存挡掉了”，但因为没人能从画面上看出来一直没修。**预热要的就是“真的开一次字体”**，所以它必须能绕过自己的缓存。",
+   "trigger": "启动预热链（prebake_step）、_glyph_bake 的门禁③、跑分日志",
+   "params": "force=False 默认；预热那一步用 0.02 秒间隔而不是 0.05（实测真机一次只要约 1.4ms，26ms 那个数不成立）",
+   "source": "android/main.py:10309-10315；10380-10403"
+  },
+  {
+   "id": "fit-ledger",
+   "name": "字体缓存账本：_FS_OPEN / _FS_COLD_CNT / _FIT_HIST",
+   "kind": "dev-tool",
+   "behavior": "记下每次真的开了一个 fontid：_FS_OPEN 按开启先后存 (序号, 字号, bold, 调用方/文案前 10 字)，只留最近 _FS_OPEN_MAX=300 条；_FS_OPEN_SET 去重后 = 开过的**不同** fontid 数。_FS_COLD_CNT 是 `fontid -> [冷开次数, 最后一次调用方]`，把 P 从“采样”变成“普查”（原来只有 _COLD_FS 留最慢 5 条，本身是采样，定不了“该钉几个 fontid”）。_FIT_HIST 统计「本帧冷开了几次 → 这种帧出现了多少次」，回答“一帧到底会不会开十几个”。",
+   "trigger": "text_px 缓存未命中的那一格（= “冷测量”的定义）",
+   "params": "_FS_OPEN_MAX = 300（超出 del [0]）；_FIT_HIST 键 = 本帧冷开次数",
+   "source": "android/main.py:10270-10302；10334-10352"
+  },
+  {
+   "id": "fit-mute",
+   "name": "账本静音窗口（测量动作不许污染被测对象）",
+   "kind": "silent-invariant",
+   "behavior": "玩家要导出日志就得打开「帧率曲线」弹窗并按「保存日志」，而那个弹窗**自己的标题**走 _fit_line → 一次走满 13 档阶梯 → 一口气开 12~13 个 fontid ⇒ 保存日志这个动作把日志里印的计数撑大 12。所以面板构建期间（含紧随其后跨好几帧的布局收敛）暂停记账：time.time() < _FS_MUTE_UNTIL[0] 时只 _FS_MUTED_N[0] += 1，不写 _FS_OPEN。**被跳过的次数照记并必须印进日志**——本仓库栽过太多次“没印”被读成“没发生”。",
+   "trigger": "_show_fps_curve 入口写 _FS_MUTE_UNTIL[0] = time.time() + _FS_MUTE_SEC",
+   "params": "_FS_MUTE_SEC = 1.5 秒；_FS_MUTED_N 为跳过计数",
+   "source": "android/main.py:10280-10291；10337-10338（静音分支）；调用点 18366-18374"
+  },
+  {
+   "id": "fit-cold-fs",
+   "name": "冷字号榜 _COLD_FS（最慢 5 条，带标签与基准）",
+   "kind": "dev-tool",
+   "behavior": "冷测量的单价单独记：只留最慢的 5 次，连**是哪个标签、哪个字号、粗不粗、离最近同 bold 预热档差多少、预热时量过没有、基准是多少、账本下标是多少**一起。光有一个毫秒数没法决定怎么修（漏烘某一档 vs 某个标签的基准压根没进表 vs 被 Kivy 的 64 项 LRU 挤掉了，三种病三种修法）。第 9 位是当时的账本下标，给日志回溯“这次冷开之前最近开过哪些字号”用。",
+   "trigger": "text_px 冷测量耗时 ≥ COLD_FS_MIN_MS",
+   "params": "COLD_FS_MIN_MS = 3.0（热字号一次是 0.02~1.5ms）；排序后 del _COLD_FS[5:]；_COLD_FS_BASE/_COLD_FS_TAG 记基准与调用方",
+   "source": "android/main.py:10377-10399；4519-4563（_COLD_FS / _COLD_FS_TAG / _COLD_FS_BASE / COLD_FS_MIN_MS / _FONT_WARM_ALL / _WARM_DID）"
+  },
+  {
+   "id": "fit-pin-fontid",
+   "name": "字体钉子 _pin_fontid（防被 Kivy 的 64 项 LRU 挤掉）",
+   "kind": "dev-tool",
+   "behavior": "同一个字号反复被冷开 ⇒ 说明它一直被淘汰队列挤出去。此刻 refresh() 刚把它插回 order 尾部，正是摘掉它的最佳时机；摘掉之后 dict 里那份再也不会被 del，它不再复冷。门槛 _PIN_AFTER=3（从 2 抬上来：真机一份 5.4 分钟日志 93 个字号/307 次冷开/复冷过的 54 个，而名额只有 24 —— 按“谁先复冷谁占坑”会分给一大堆只复冷 2 次的，真正的慢性病 57.24B×53 / 39.16×31 / 45.19B×28 反而排不上）。**弹窗开着时不钉**（_POPUP_N>0 走 _PIN_POPUP_SKIP 计数）：把全部 13 个弹窗开一遍会新开出 42 个游戏里根本不会出现的字号，其中 19 个当场够到钉子门槛 ⇒ 点一遍设置界面 79% 的钉子预算就废了。计数与跳过**都必须印进日志，不许静默**。",
+   "trigger": "text_px 冷测量且 _prev_n >= _PIN_AFTER-1",
+   "params": "_PIN_MAX = 24（每个 fontid 约 0.88MB，24 个 ≈ +21MB，按 RSS 预算倒推）；_PIN_AFTER = 3；_PIN_POPUP_SKIP 计数；_PIN_STAT / _PIN_WHERE / _PIN_CAND 进日志",
+   "source": "android/main.py:10322-10374；4700-4729（_PIN_* 常量与说明）"
+  },
+  {
+   "id": "fit1-reentry",
+   "name": "_fit1 的重入闸与基准/内缩记忆",
+   "kind": "silent-invariant",
+   "behavior": "把控件 w 的字号调到“当前文字恰好一行放得下”的最大档，返回实际字号。**重入闸 _fit_busy 是必须的**：本函数会写 font_size，而 font_size 变 → texture_size 变，绑了 texture_size 的地方（弹窗里自动撑高的行）会再回调回来，没有闸就是死循环。闸门之上早退的不算（那不是活，是防重入）。记 _fit_base（这一档布局的基准字号，由 _apply_sizes 按 sp(N)*_font_scale*_ui_scale 算出来传进来）与 _fit_inset（内缩量，必须在控件上记住——否则“布局重排”和“文字变化”两条路会算出两个字号，同一个按钮一会儿大一会儿小）。avail = max(1.0, w.width - pad[0] - pad[2] - inset)；**只在 |font_size - fs| > 0.01 时才写**。只改字号、不改宽度。",
+   "trigger": "_install_fit 绑在 text/width 上的回调；各赋值点显式调用",
+   "params": "重入闸 _fit_busy；_fit_base / _fit_inset 记忆；写入门槛 0.01；_FRAME_FIT[0] 记“真的叫了一次”",
+   "source": "android/main.py:13427-13471 `RootWidget._fit1`"
+  },
+  {
+   "id": "fit-install",
+   "name": "_install_fit：文字一变就重挑字号",
+   "kind": "silent-invariant",
+   "behavior": "给单行控件挂钩子：w.bind(text=_go, width=_go)，两个都绑。挂在 text 上而不是在 20 个赋值点各调一次——那样迟早漏掉一个，而漏掉的表现就是“某个状态又折行了”，只有截图才看得见。宽度也要绑：布局重排后可用宽变了，必须重挑。用 _fit_installed 去重防重复安装；安装时把 _fit_base 记成当前 font_size。",
+   "trigger": "控件创建时（_build_ui / 各弹窗构建）",
+   "params": "_fit_installed 去重标记；_fit_base = float(w.font_size)",
+   "source": "android/main.py:13542-13556 `_install_fit`；调用点 13889 / 13980 / 14001 / 15440 / 19959"
+  },
+  {
+   "id": "fit-uniform",
+   "name": "_fit_uniform / _fit_buttons_uniform：一组同格式共用一个字号",
+   "kind": "player-visible",
+   "behavior": "逐行各自 _fit1 会得出好几个字号（实测跑分历史 12 行里出现 34.0/31.96/30.0 三种），同一个列表里字号参差玩家一眼就发现“同一个 log 为什么不一样”。做法：按组里**最宽**那条算档、全体照用；宽度落定后（以及转屏时）自动重算（bind width）。按钮版还要额外扣掉左右内缩 inset。**度量用的 bold 取“组里只要有一个粗体就按粗体量”**——原来用最宽那条自己的 bold，而最宽那条会换人 ⇒ 同一组今天用粗体量、明天用细体量，导致预热表烘不到，真机上每次撞上没烘过的组合就是一次 21.7/16.7 毫秒的冷字体表打开；改成保守口径后这一组只会用到 bold=True 那套字号，而它一定在预热表里（零预热成本）。",
+   "trigger": "弹窗列表/按钮排构建时；宽度变化时",
+   "params": "avail = min(组内各控件宽度)（按钮版再 -inset）；_bd = any(bold)；写入门槛 0.01；_COLD_FS_TAG 记 “同类行 xN”/“同类钮 xN”",
+   "source": "android/main.py:13473-13540 `_fit_uniform` / `_fit_buttons_uniform`"
+  },
+  {
+   "id": "fit-line-vs-auto",
+   "name": "_fit_line / _auto_h：弹窗单行缩字号 vs 多行撑高度",
+   "kind": "silent-invariant",
+   "behavior": "弹窗/正文里的**单行**标签走 _fit_line：自动挑字号保证一行（装不下就缩，绝不折行）。与 _mk_label 那条路分开写——那条绑的是 size→text_size（两维都给），这里**必须只给宽度、高度留 None**，否则 Kivy 会把文字排版进一个固定高度里，折行后的第二行就画不出来（定高裁切）。**多行**正文走 _auto_h：绑 width→text_size=(w.width, None)（不是绑 size，绑 size 会死循环），再把 texture_size[1]（排版后的真实高度）写回 height，高度跟着真实排版走。_auto_cap 由 _popup_fit_content 在装不下时写进来。",
+   "trigger": "弹窗内容构建",
+   "params": "_auto_h：_h = max(h0, texture_size[1] + extra)，有 _auto_cap 则 min(_h, _cap)；_auto_base 记基准字号",
+   "source": "android/main.py:13611-13642 `_fit_line` / `_auto_h`"
+  },
+  {
+   "id": "fit-brk",
+   "name": "自适应字号与各子步骤的耗时包装（跑分归因）",
+   "kind": "dev-tool",
+   "behavior": "_brk_wrap 把几个大头包成计时子步骤：板面（GameArea.tick_draw）、重掷（RootWidget.park_ball）、字号（RootWidget._fit1）、装杯（WinPileFX._redraw）、发射/自动发/起蓄/槽面。_FRAME_FIT = [本帧 _fit1 真正调了几次, 本帧 text_px 冷测量了几回]：光有毫秒分不清两种病（“叫了 1 次、量了 12 回”= 一次 _fit1 走完阶梯且每回都是冷字号 ⇒ 该收敛字号集合；“叫了 20 次、量了 20 回”= 一帧里好几个标签同时换字 ⇒ 该错峰/合并）。tick_draw 内部再细分出「板·球」「板·钉闪」两格，因为真机 `板面` 单帧最大 7.4ms 而平时只 1~3ms，尖峰不在 _redraw 里。",
+   "trigger": "跑分采样期（平时只是一次字典读改写）",
+   "params": "_BRK_KEYS = ('板面','重掷','字号','装杯')；包装点见 21836-21853",
+   "source": "android/main.py:4497-4515（_FRAME_BRK/_BRK_KEYS/_FRAME_FIT）；5957-5970 `_brk_add`/`_brk_wrap`；12523-12584（板·球/板·钉闪）；21836-21853"
+  },
+  {
+   "id": "glyph-atlas",
+   "name": "预烘字形图集（白色字形 + 画布染色）——当前 _GLYPH_ON=False",
+   "kind": "silent-invariant",
+   "behavior": "把“Kivy 文字光栅化”换成“预烘字形图集 + 画布染色”：**零 texture_update、零填纹**。病根证据（v0.7.42 真机日志）：所有慢于 12.7 毫秒的帧全部带文字重建，最慢 4 帧主线程 17.0~17.6ms 而 _frame 自算只 3.5~4.1 ⇒ 中间约 13ms 全在文字上，最大一笔是 CoreLabel._texture_fill（9.2~10.9ms）；反事实重算：把这笔拿掉 1%Low 从 98.3 → 109~112。烘成白色之后，彩色大字与黑影子**共用同一批贴图**，只差画布上那一条 Color。仅覆盖字符集 _GLYPH_CHARS = \"0123456789+\"，含空格/斜杠的串与“未中”必须退回 Label。**当前总开关是 False**：卡在一个没能解释的 1 像素差（GlyphLabel 那块字的顶边 AA 多出恰好一行，墨迹 36→37 行，底边行号不变），本工程规矩是“每一个差异像素都要能解释”。",
+   "trigger": "_glyph_rec / _glyph_quads；预热由 _glyph_warm_step 分帧驱动",
+   "params": "_GLYPH_CHARS=\"0123456789+\"；_GLYPH_ON=False；_GLYPH_FONT=\"Roboto\"；_GLYPH_MAX_KEYS=8；_GLYPH_MAX_CHARS=12（最长串 +10000）；_GLYPH_MAX_CHARS 个 Rectangle 预建",
+   "source": "android/main.py:10637-10675（总说明与常量）；10678-10838；11945-11983（GlyphLabel 类头）"
+  },
+  {
+   "id": "glyph-bake-gates",
+   "name": "_glyph_bake 的三道门禁（任何一步不过整档作废）",
+   "kind": "silent-invariant",
+   "behavior": "① 每个字形 bind() 之后必须数得出 alpha>8 的像素——refresh() 只量宽高、bind() 才触发第二趟真光栅化，漏了它的症状是**图集全空、画面没字、而且不报错**；② 11 个字的高度必须完全一致（否则“同一条基线”假设不成立，拼出来会歪）；③ 逐字宽相加 == text_px 整串量（force=True，不能省：_FIT_PX 的 key 含 text，命中的话这一句什么都不做）。另有一条独立门禁：拿 \"0\"/\"8\"/\"+2\"/\"+10000\"/\"273300\"/\"1234567890\" 几个真串再验一遍逐字和 == 整串宽。**11 个字必须当一整串烘一次、再按 advance 切，绝不可以一个字一个 CoreLabel 地烘**——逐像素对照实测：单独烘出来的字形竖直落点比“在整串里”高半个像素（SDL 次像素定位，不是坐标算错，平移 ±2 行扫过一遍 0 偏移最优），整块字差 704 个像素。",
+   "trigger": "_glyph_warm_step 每次烘一档（一帧只烘一档，11 次字形表 = 一记长帧）",
+   "params": "alpha 阈值 > 8；门禁串 6 个；_GLYPH_MAX_KEYS=8 上限（FIFO 淘汰 _GLYPH_ORDER）；_GLYPH_HIT/_GLYPH_MISS 记账（收益归零是静默的）",
+   "source": "android/main.py:10684-10747 `_glyph_bake`；10750-10838"
+  },
+  {
+   "id": "glyph-label",
+   "name": "GlyphLabel 控件：每条 Rectangle 贴一个预烘字形",
+   "kind": "player-visible",
+   "behavior": "不是 Label 子类（故意的）：不碰 style.kv 里那条 Rectangle(texture=self.texture)（texture=None 时会画一块实心色块），也不碰全局的 Label.texture_update 补丁。属性 text/font_size/bold 任一变化都走 _glyph_sync；_glyph_place 摆位；_degrade() 在图集没这一档（或出现字符集外的字）时挂一个普通 Label 当孩子、行为与旧版一致，而且**不撤回到图集**（一个标签一局里要么一直走图集、要么一直走老路）。_glyph_alpha0 = 控件基色 alpha（阴影基色是 (0,0,0,0.6) ⇒ 淡出必须乘 0.6）。fit_box=True 时像 HUD 那样排在“控件矩形”里（余额用，halign='left'、valign='middle'）。",
+   "trigger": "big_result_text 中奖大字（走图集时才用）",
+   "params": "最多 _GLYPH_MAX_CHARS=12 条 Rectangle；padding=[0,0,0,0]（_fit1 会读它）",
+   "source": "android/main.py:11945-12096 `GlyphLabel`"
+  },
+  {
+   "id": "glyph-place-trap",
+   "name": "_glyph_place 的两个坐标陷阱",
+   "kind": "silent-invariant",
+   "behavior": "① **必须从 x/y/width/height 现算中心，不能读 self.center**：Widget.center 是 ReferenceListProperty(center_x, center_y)，而 center_x/center_y 是 cache=True 的 AliasProperty；给 w.center=(a,b) 赋值时先设 center_x 再设 center_y，设 center_x 那一下就会派发 pos ⇒ 回调在 center_y 还没设之前跑了一次，等 center_y 真设好时别名缓存还没失效，回调读到的仍是旧值 ⇒ 只有 x 跟着动、y 永远停在初始化那次（症状：字画在屏幕左下角）。读主属性就没有这层缓存。坐标照抄 style.kv 那条 Rectangle 的算法 **用 int() 截断、不是 math.floor**（负数方向两者不同）。② **_glyph_sync 才还原画布颜色，_glyph_place 绝不碰 _gcol**：淡出会改它的 alpha，在 _glyph_place 里重置会让中奖大字**永不淡出**（而那是每帧都在摆位的路径）。",
+   "trigger": "pos/size/text/font_size/bold 任一变化",
+   "params": "_x0/_y0 用 int(center - size/2) 口径；居中时可见矩形 = 逐字宽之和 × 字高",
+   "source": "android/main.py:12033-12096 `_glyph_sync` / `_glyph_place`"
+  },
+  {
+   "id": "fx-fade",
+   "name": "_fx_fade_set / _fade_set / _lbl_canvas_color：零重建淡出",
+   "kind": "silent-invariant",
+   "behavior": "Kivy 把颜色烘进字形纹理（画布里那条 Color 实测恒为 (1,1,1,1)），所以写 label.color 就等于重测字形 + 重光栅化整段文字 + 重建纹理 + 上传（真机实测 4~7ms）。改画布那条 Color 的 rgba 只是一次 uniform 写入，**零重建**（实测 texture_update 计数为 0，且截图确认像素真的变淡了）。_lbl_canvas_color 在 lbl.canvas.children 里找第一条 Color，拿不到就返回 None，调用方**必须退回写 label.color + alpha 量化，绝不静默不淡出**。_fx_fade_set 比 _fade_set 多乘一个**基色 alpha**：图集把阴影的 0.6 搬到了画布上，_fade_set 只写 alpha 会把 0.6 覆盖成 0.5 ⇒ 阴影在淡出段比基线更黑；普通 Label 没有 _glyph_alpha0 默认 1.0 ⇒ 与改动前完全一致。_set_lbl_tint 走同一条路给标签染色（_TINT_DIM 由 _tint_from 逐通道算，不能拍一个 0.5）。",
+   "trigger": "中奖大字/飘字淡出；_set_controls_enabled 每次回 ready 改 3 个标签颜色",
+   "params": "_TINT_BRIGHT=(1,1,1,1)；_TINT_DIM=_tint_from(COL_TEXT, COL_GRAY, 0.6)；_tint_from 逐通道 target/baked",
+   "source": "android/main.py:10841-10850；12708-12784"
+  },
+  {
+   "id": "gamearea-scene",
+   "name": "GameArea：520×660 逻辑场景（y 向下）等比缩放居中",
+   "kind": "player-visible",
+   "behavior": "逻辑坐标系沿用 tkinter 版：CW=520、CH=660、y 向下。绘制时 s = min(w/CW, h/CH) 等比缩放居中：_ox = x + (w - CW*s)/2，_oyt = y + (h + CH*s)/2。_rect/_circle 把逻辑矩形/圆换成 Kivy 的 pos/size（y 翻向上）；_px/_py 单点换算。静态元素（墙/钉/槽/弧）只在尺寸变化或换盘面时重绘；球/力度条/柱塞每帧只改 pos。**子控件的 canvas 是绝对（窗口）坐标、父级不做平移**——这是本工程坐标系的核心坑，所以下面所有“横向减 self.x”都是 bug（竖屏 x=0 掩盖了它，横屏反旋转时 x=370 会让大字偏左 370px）。",
+   "trigger": "尺寸/位置变化 → _redraw；每帧 → tick_draw",
+   "params": "CW=520 CH=660 WALL=12 FLOOR=648 NUM_SLOTS=9 SLOT_W=FIELD_W/9 SLOT_H=32 SLOT_TOP=616 FIELD_L=12 RIGHT_INNER=508 LANE_L=466 PEG_R=6 BALL_R=9",
+   "source": "android/main.py:12099-12177 `GameArea.__init__` / `_rect` / `_circle` / `_px` / `_py`"
+  },
+  {
+   "id": "gamearea-redraw",
+   "name": "_redraw：全量重画整块板面（约 345 条画布指令）",
+   "kind": "player-visible",
+   "behavior": "canvas.clear() 后按固定顺序重建：底色矩形 → 场区巷 → 全部墙（底墙的**绘制**上沿下移到球的新下沿 FLOOR + BALL_R*(BALL_VIEW-1) = 3.6px，球才“坐在地面上”而非陷进去；只改绘制，物理层底墙在 physics_step 里被显式跳过）→ 发射区导流弧（Line width = max(1.0, 3.5*s)）→ 钉阵（每颗独立 Color+Ellipse，支持单颗受击高亮/形变）→ 槽隔板 → 9 个倍率槽（RoundedRectangle radius = 6*s）→ 9 个槽倍率文字（全部 9 个都建，空的用 size=(0,0) 藏起来，这样条数固定才能在原地更新）→ 投中指示灯（9 个 Ellipse，半径 5，y = SLOT_TOP - 9）→ 力度条底槽 + 哑火红线（ty = SLOT_TOP - 8 - MISFIRE_POWER*200）→ 弹簧凹槽 + 3 条弹簧横线 → 球（PushMatrix + Rotate + 程序化贴图 Rectangle + PopMatrix）。最后 _restack_overlays() + _place_bench_badge() + tick_draw()。**尺寸真变了才清特效**（否则 park_ball 重掷盘面会把中奖大字一起杀了）。",
+   "trigger": "尺寸/位置变化；换盘面；首帧",
+   "params": "s = min(w/CW, h/CH)；槽圆角 max(1.0, 6*s)；弧线宽 max(1.0, 3.5*s)；球矩形边 = 2*BALL_R*BALL_VIEW*s",
+   "source": "android/main.py:12228-12348 `_redraw`；12139-12159 `_restack_overlays`"
+  },
+  {
+   "id": "restack-overlays",
+   "name": "_restack_overlays：canvas.clear() 后必须重挂子控件画布",
+   "kind": "silent-invariant",
+   "behavior": "self.canvas.clear() 会**把子控件的 canvas 一起摘掉**——子控件的 canvas 是 add_widget 时挂进父 canvas 的，clear 一视同仁。不重挂的话每次换盘面（park_ball）或尺寸变化，杯子和中奖大字就整个从屏幕上消失，而它们的 canvas.children 看起来完全正常（指令都在，只是没挂在渲染树上）。实测判据：self.canvas.indexof(w.canvas) 返回 -1 = 已被摘掉。重挂顺序固定为「板面 < 中奖杯 < 中奖大字（+ 跑分提示牌）」，靠追加次序保证（Kivy 按 children 逆序绘制，后加的画在上面）。",
+   "trigger": "_redraw 末尾；show_bench_badge 末尾",
+   "params": "chain = [win_fx] + 各 effect 的 ws + [bench_badge]",
+   "source": "android/main.py:12139-12159 `_restack_overlays`"
+  },
+  {
+   "id": "update-slots",
+   "name": "_update_slots：只更新倍率槽颜色与文字（增量，不清画布）",
+   "kind": "player-visible",
+   "behavior": "盘面几何没变、只有倍率变了（球落定后重掷盘面）时走这条路：原地改 9 个槽 Color 与倍率文字 Color，按 m>0 换文字贴图（走 _SLOT_TXT_TEX 缓存）或 size=(0,0) 藏起空槽。真机实测整块 _redraw 里的「重掷」一段是 9.2/7.6 毫秒，而它落在球落定那一帧上，是最慢三帧里的头号子步骤。**结构对不上（首帧/刚改过尺寸/槽数变了）就退回完整 _redraw()，绝不半更新**（守卫：三张表长度都 == NUM_SLOTS）。同时做两件与 _redraw 同义的事：清 _pulse（重掷后槽位白闪作废）、熄灭全部投中指示灯（漏掉这条会让灯每局点亮一格、从不熄灭，几局下来槽上攒出一片红绿点——玩家报过）。",
+   "trigger": "park_ball(reroll=True)",
+   "params": "fs = max(12, int(20*self._s))；cy = (SLOT_TOP+FLOOR)/2；结构守卫 = 三张表长度都 == NUM_SLOTS",
+   "source": "android/main.py:12179-12226 `_update_slots`"
+  },
+  {
+   "id": "tick-draw",
+   "name": "tick_draw：每帧只更新动态元素",
+   "kind": "player-visible",
+   "behavior": "每帧：① win_fx.tick()（**必须在 _ball_e is None 早退之前**，否则画布还没建好的那几帧中奖演出不推进、起播时间被白白拖后）；② 球——受击压扁（squash 沿法线缩/切向胀，渐回正圆，每帧 +50% 残差），球自转（_ball_rot.angle = degrees(spin % 2π)，origin = 球心），消费物理层 peg_flash 信号；③ 钉子受击高亮——60ms 电光金 #ffe500 + 240ms 渐回 COL_PEG + 半径微扩 1.2x，总时长 0.30s；④ 力度条填充（top = SLOT_TOP-8 - power*200；power<MISFIRE_POWER 时填充色变 COL_FIRE）；⑤ 弹簧——蓄力时跟随 g.power，释放后阻尼振荡回弹（k=120, damp=3.2, 用 FIXED_DT 积分，过冲下限 -0.25 ≈ 11px），Z 字形三条线，颜色哑火红 / 正常灰蓝→金黄（10 档颗粒度，power_u 映射）；⑥ 槽位白闪（0.30s 内槽色置 (1,1,1)）；⑦ 特效推进（浮字/大字）。",
+   "trigger": "Clock.schedule_interval(_frame_timed, FRAME_TICK_DT) → 每帧",
+   "params": "钉子高亮：flash=(1.0,0.898,0.0) 前 0.06s，后 0.24s 线性回色；scale 1.2→1.0；弹簧 bar_top = PLUNGER_Y + BALL_VIS_R，bar_bot = bar_top + 9 + sp*45；白闪 0.30s",
+   "source": "android/main.py:12514-12706 `tick_draw`"
+  },
+  {
+   "id": "big-result-text",
+   "name": "中奖大字（big_result_text）",
+   "kind": "player-visible",
+   "behavior": "画布中央大字：中奖文案 \"+%d\" % payout、颜色 = slot_color(m)、基准 sp(48)；未中文案 \"未中\"、色 = COL_FIRE、基准 sp(36)。基准字号**必须过 sp()**（Label(font_size=48) 是裸物理像素，桌面 density=1 正好，手机 density 2.5~3 时只剩 16~19sp 比旁边 18sp 的余额数字还小）。再过 fit_font_size(text, size, max(80.0, width*0.94), True) 防隐藏档 5000% 时 \"+500000\" 比屏幕还宽。阴影 = 同字号 (0,0,0,0.6)，偏移 (2,-2)。**缩放入场走 GPU Scale，绝不逐帧写 font_size**（font_size 属 _font_properties，每次赋值触发重新测量+光栅化+重建纹理+上传；桌面实测一次中奖 1.8s 要重测 ~110 次 × 2 个 Label，占全部文字重建的 65%）。",
+   "trigger": "settle 中奖/未中",
+   "params": "BIG_TEXT_LIFE=1.8s；缩放 1.0→1.2（前 50%）→1.0（后 50%）；alpha 从 p=0.55 起线性淡出；上浮 38px/s；alpha 量化 BIG_TEXT_ALPHA_STEPS=20；cy 逻辑 = CH/2-80（未中）或 TEXT_CY_WIN=150（中奖）",
+   "source": "android/main.py:12351-12434 `big_result_text`；12669-12706（tick_draw 里的特效推进）"
+  },
+  {
+   "id": "big-text-scale-trap",
+   "name": "中奖大字的 Scale 必须 PopMatrix 夹住",
+   "kind": "silent-invariant",
+   "behavior": "Kivy 的 Scale/Rotate 是**持久变换**：一进画布指令流就管到“下一次被改”为止，不会自动弹栈。而本项目的子控件画布是绝对（窗口）坐标、父级不做平移 ⇒ 挂在 GameArea 子控件 canvas.before 上的 Scale 会**泄漏给它之后画的每一个控件**（也就是 HUD 五行）。实测症状：大字活着的那 1.8s 里底部“信息行+底行”被按 sc 缩放位移（sc 峰值 1.2 时往下推 ~80px），整块推出窗口、看起来就是凭空消失；大字一撤那两行又回来——玩家录像里“飞行结束后下面的文字和按钮不见了”就是它。夹住之后缩放只作用于这个 Label 自己的绘制。另：_pop_sc.origin 必须在**写完 center 之后**取当前中心（大字一边缩放一边上浮，锚点不跟就会看到“绕着一个飘走的点放大”）。",
+   "trigger": "big_result_text 每次创建 main/shadow 时",
+   "params": "canvas.before: PushMatrix + Scale(origin=center, x=1, y=1)；canvas.after: PopMatrix；每帧 _ps.origin = _lb.center; _ps.x = _ps.y = sc",
+   "source": "android/main.py:12399-12415；12703-12706"
+  },
+  {
+   "id": "toast",
+   "name": "画布中央警示飘字（center_toast）",
+   "kind": "player-visible",
+   "behavior": "如“余额不足”“弹珠数量已调整到1000个”的两行警示飘字：上浮 + 淡出。**老 toast 未消失前不再弹新的**（连点发射会瞬间叠一排）。创建即摆位到中央——默认 pos=(0,0) 是 GameArea 左下角（=重置按钮附近），下一帧才被 tick_draw 摆位，连点时会在那里闪出“第二个提示”。字号同样过 fit_font_size(text, sp(size), max(80.0, width*0.94), True)（实测 360dp + 1.3 倍系统字体时一条 408px 的字在 360px 屏上左右各被切 24px）。",
+   "trigger": "余额不足 / 弹珠数量调整等",
+   "params": "默认 size=26(sp)、life=2.0s；上浮 20px/s；前 65% 实色、后 35% 淡出；cy = CH/2 - 40",
+   "source": "android/main.py:12440-12469 `center_toast`；12648-12668（推进与淡出）"
+  },
+  {
+   "id": "bench-badge",
+   "name": "跑分提示牌（盘面中心的红字）",
+   "kind": "dev-tool",
+   "behavior": "跑分期间在盘面中心显示一行大号红字（sp(20)、bold、halign=center、valign=middle），**不置灰、不加遮挡底板**。文案里的换行 \\n 替换成 “　·　” 显示成一行。文字真变了才 texture_update（一次 refresh 要重排文字）。它与 RootWidget.canvas.after 里那块黑屏白字是两个不同的东西：黑屏矩形盖住整棵子树，会把这个 badge 一起盖掉，所以黑屏上的白字只能自己另画一层 CoreLabel。",
+   "trigger": "跑分各阶段 show_bench_badge(text)；结束时 hide_bench_badge()",
+   "params": "font_size = sp(20)；badge.center = (_px(CW/2), _py(CH/2) - self.y)",
+   "source": "android/main.py:12471-12503 `show_bench_badge` / `hide_bench_badge` / `_place_bench_badge`"
+  },
+  {
+   "id": "lamps-pulse",
+   "name": "投中指示灯与槽位白闪",
+   "kind": "player-visible",
+   "behavior": "槽上 9 个小圆点表示“这一格有没有命中”：结算时 set_lamp(i, hex) 变中奖绿/未中红，#243250（COL_LAMP_OFF）为熄灭。换盘面（_redraw 重建 _lamp_cols，或 _update_slots 调 lamps_off()）时全部熄灭——**这条漏掉过一次**：灯本来就只在 _redraw 重建时被顺手重置，park_ball 从整块 _redraw 换成增量 _update_slots 之后这层遮盖没了 ⇒ 灯每局点亮一格、从不熄灭。槽位白闪 pulse_slot(i) 让槽底变纯白 0.30 秒。",
+   "trigger": "settle 结算；换盘面",
+   "params": "灯半径 5、y = SLOT_TOP - 9；COL_LAMP_OFF = \"#243250\"；白闪 0.30s",
+   "source": "android/main.py:12311-12317（建灯）；12436-12438 `pulse_slot`；12505-12511 `set_lamp` / `lamps_off`；12631-12639（白闪推进）"
+  },
+  {
+   "id": "slot-tex-cache",
+   "name": "槽位倍率贴图缓存与配色",
+   "kind": "silent-invariant",
+   "behavior": "slot_text_tex(m, fs) 把 \"x%d\" 的 CoreLabel 贴图缓存起来：一次重掷最多 9 个槽 ⇒ 9 次完整文字光栅化，而它落在**球落定后那一帧**（真机面板连出两版都指向这一帧：“最慢三帧 36 毫秒(待机·自算8.1)”），桌面实测 park_ball 中位 1.9ms 其中画布重建 1.2ms。倍率取值只有 2/3/5/10/20/50/100 几种，建一次就够。**缓存键必须带字号 fs**：它跟着 s（画布缩放）走，转屏/改窗口时字号会变，那时要重建。上限 64 清空。槽色 slot_color(m)：m<=0 → \"#2a3550\"，否则查 COL_x，查不到 → \"#1e8a5a\"。槽字色 slot_txt(m)：m>=100 → 黑字 \"#0b1220\"（×100 深橙底白字对比 2.3 太低会糊），其余白字。",
+   "trigger": "_redraw / _update_slots",
+   "params": "_SLOT_TXT_TEX 上限 64 → clear()；键 = (int(m), int(fs))；font_name=\"Roboto\"、bold=True",
+   "source": "android/main.py:10190-10229；10206-10223"
+  },
+  {
+   "id": "ball-texture",
+   "name": "球体程序化径向渐变贴图",
+   "kind": "player-visible",
+   "behavior": "纯 Python 生成一张 128×128 RGBA 球贴图（零依赖，对应 tkinter 版 PIL 渐变）：径向 9 段色标（254,240,138）→…→（36,16,2），外圈是金色向深金/褐金的细暗边而不是纯黑描边（在深色盘面、弹簧槽与钉阵前更清楚）。边缘 3% 半径羽化抗锯齿。猫眼色带：焦糖色（178,108,22）、角度 -32°、中心线偏离圆心 0.08*d、眼睛形（中间宽两端尖），参数再乘 _BALL_BAND_W=0.66 与 _BALL_BAND_S=0.76。**高光已删**（用户要求只保留焦糖色带）。mag/min filter = linear。生成后缓存在 _BALL_TEX，全局只建一次。",
+   "trigger": "首次 GameArea._redraw 构建球矩形时",
+   "params": "_BALL_TEX_PX=128；_BALL_RIM_K=0.74；band_w = 0.09*d*0.66；strength = 0.44*0.76；羽化阈值 dist>0.97",
+   "source": "android/main.py:10178-10188（BALL_VIEW/_BALL_TEX_PX）；10480-10557 `ball_texture`"
+  },
+  {
+   "id": "curves-stage-strip",
+   "name": "阶段条与图例（帧率曲线下方的“当时在演什么”）",
+   "kind": "dev-tool",
+   "behavior": "每一帧“游戏当时在干什么”画成一条与曲线**同一根时间轴对齐**的色带，这样“哪几帧在掉”和“那几帧在演什么”是上下对着看的，不用再去对表格。取色表 STAGE_ORDER=(\"飞行\",\"装杯\",\"落袋\",\"蓄力\",\"哑火\",\"待机\") 与 STAGE_COLORS 一一对应（蓝=主玩法 / 金=中奖演出 / 绿=落袋 / 砖红=玩家在按 / 灰=哑火 / 浅灰蓝=待机）。**名字必须与 RootWidget._bench_tag() 的返回值逐字一致**——那张表是唯一真源，对不上会退化成灰色。按连续同标签合并成段再画（34.5 秒 5600 帧铺在 300~700px 上是 8~19 帧/像素，逐帧画会画出一大堆亚像素矩形）。图例只列这一轮真出现过的阶段，按可用宽度折行。",
+   "trigger": "FpsCurve._draw",
+   "params": "阶段带高 dp(7.0)；图例色块 dp(6)、字 sp(10)；每项宽 = dp(6)+dp(3)+len(名)*dp(10)+dp(6)+dp(7)",
+   "source": "android/main.py:11628-11641（STAGE_ORDER/STAGE_COLORS）；11752-11772 `_legend_rows`；11872-11943；取色真源 16033 `_bench_tag`"
+  },
+  {
+   "id": "fpscurve",
+   "name": "FpsCurve：跑分逐帧提交曲线",
+   "kind": "dev-tool",
+   "behavior": "横轴每一点是一个窗口；纵轴是帧率（固定 0~max(120, 设备请求档)，跨轮次可直接比较，每 30 一条网格线）。**必须降采样**：每 _grp = ceil(总帧数 ÷ 横轴像素数) 帧合成一个点，取这 _grp 帧里**最慢**的那一帧换算成 fps（1000/gap）。不降采样会糊成一块实心（165Hz 设备 5263 帧 / 785 像素 = 每列 7 帧，纵向跨度中位 9fps ≈ 16 像素，逐帧折线自己跟自己交叉）。取“最慢”而不是平均/中位是**刻意保守**：一次两帧的卡顿在平均里会被十几帧好帧稀释（实测那台平均 164.9 就把 5 次长卡顿吃干净了，1%Low 却留着 122），代价是曲线整体比体感偏低——这个取舍是玩家点名要的。**也别再回到“抖动带+中线”画法**：带子上沿会跟着追赶帧（两帧只隔 8.7ms 那种）冲到图表顶，比真卡顿还抢眼。",
+   "trigger": "跑分结束后点「帧率曲线」；历史「详情」里点曲线",
+   "params": "pads: pad_l=dp(32) pad_r=dp(8) pad_t=dp(18)，pad_b 按内容算；_nb = max(1, int(pw))；_grp = max(1, ceil(len/_nb))；尾组不满一组也算一个点；控件高 dp(276)",
+   "source": "android/main.py:11643-11943（含 11714 ZOOM_PER_FRAME_PX、11787-11930 `_draw`）；调用点 18354；对照弹窗 18360-18422"
+  },
+  {
+   "id": "fpscurve-linewidth",
+   "name": "折线线宽必须 1.0（半宽 + 65535 顶点上限）",
+   "kind": "silent-invariant",
+   "behavior": "Kivy 的 Line(width=W) 画出来是 **2W** 宽（四边形两侧各按 w 偏移；只有 width == 1.0 才走 build_legacy() 的 GL_LINES，那才是真 1 像素）。一直写 1.15 ⇒ 实际 2.3 像素 + joint=\"round\" 给每个顶点补一个扇形 ⇒ 整条曲线糊成实心块（按截图逐行直方图量的：真机带内 99% 像素全暗 / 桌面 98.1% 正好是纯曲线色）。**还有更硬的上限**：width != 1.0 时 build_extended 给每个点生成 14 个顶点，顶点号写进 unsigned short 索引数组，> 65535 就静默回绕（没有异常也没有守卫；65535 那道守卫只长在 Mesh 上）。5265 点 ⇒ 73706 顶点，超 11%；实测把长条滚到最右端那一段曲线整段不见（带内墨迹 0.9%）。⇒ **点数上千的折线一律 width=1.0**。",
+   "trigger": "任何改 line_w 的改动",
+   "params": "FpsCurve 默认 line_w=1.0（放大图与弹窗小图都吃它）；SpeedCurve 自己的 _draw 里硬编码 width=1.0（两个旋钮，改一处不连带另一处）；ZOOM_PER_FRAME_PX=2.0",
+   "source": "android/main.py:11685-11713（注释证据）；11729-11737；11863-11870；13090-13095"
+  },
+  {
+   "id": "fpscurve-xaxis",
+   "name": "两种横轴口径：按真实累计时长 vs 按帧序号",
+   "kind": "dev-tool",
+   "behavior": "默认（小图）按**累计真实时间**定位 —— 一个 200 毫秒的长卡顿在横轴上占的宽度是真实的，不会被压扁。frame_spaced=True（放大图）按**帧序号均分** —— “每帧占 N 像素”才真的成立（默认口径下逐帧间距其实是 N*(本帧间隔/平均间隔)，实测中位 2.000 / p5~p95 = 1.861~2.132 但最小 0.505 / 最大 6.927）。收益是“把逐帧点距钉成恒 2 像素”（相邻两帧能直接比），**不是**“整条曲线会挪很多”（两种口径的累计位置差全程 ≤1.5 帧 = 3.0 像素 @2px）。代价（有意为之）：长卡顿不再占更宽的横轴。**阶段条必须跟着一起切口径**，否则宽图上的阶段条会比曲线整体错位。",
+   "trigger": "小图（默认）与放大图（frame_spaced=True）",
+   "params": "frame_spaced 默认 False；放大图宽 = max(dp(600), len(gaps)*FpsCurve.ZOOM_PER_FRAME_PX + dp(40))；ScrollView 高 dp(292)、do_scroll_y=False",
+   "source": "android/main.py:11660-11673（说明）；11849-11861；11877-11920；放大约 18282-18351"
+  },
+  {
+   "id": "fpscurve-zoom",
+   "name": "点一下曲线 = 放大成可左右拖的长条图",
+   "kind": "player-visible",
+   "behavior": "FpsCurve.on_touch_down 在 collide_point 之后再吃下事件（否则会连弹窗里别处的触摸一起吞掉——它是 Window 级观察者链上的一环），调 _on_zoom(self) 回调。回调由调用方给（本控件是纯绘制件，不认识弹窗那套）。放大图**不带 on_zoom**（免得点一下又套一层弹窗）。放大图不用超采样、不建离屏纹理——把控件拉宽，“每点合并几帧”自动变小。放大图下方的说明文案**不写“1:1”也别写“每 N 帧一个点”**（前者是错的：每帧占 2 像素，多的 1 像素是给两条线留的空隙；后者是算出来的数，与实际绘制的 _grp 可能差 1）。",
+   "trigger": "点小曲线本体",
+   "params": "文案：“本图每若干帧合一个点、取最慢的那帧（看着比实际差）· 点一下看每一帧的原始值”（玩家逐字定的）；放大图弹窗 _popup(0.96, 430)",
+   "source": "android/main.py:11744-11750；18282-18422"
+  },
+  {
+   "id": "speedcurve",
+   "name": "SpeedCurve：CPU 高压的三条成绩曲线（成绩/频率/功率）",
+   "kind": "dev-tool",
+   "behavior": "CPU 高压那 300 多个逐秒样本的曲线，点额外按钮显示。与 FpsCurve **分开写是故意的**：那张的纵轴是帧率且带一条上限参考线，这张的纵轴是步/秒，硬套得把值取倒数、纵轴变成“越快越靠下”。纵轴刻度印**轴的上界/中点/下界**（不是数据极值——上下各留白 + 向外取整到友好刻度后的值），与图下那行“最低/最高”**不再是同一个数**（那行印的仍是真实数据的极值，两者相差一个留白，这是有意的）。画法是深底（COL_BTN_OFF @ 0.55）+ 浅色刻度字（**不能沿用 FpsCurve._label 写死的深灰**，那是配它的浅底的）。刻度字 sp(10)、COL_SUB。三条曲线只换标题/单位/“一个点代表什么”，不碰轴。",
+   "trigger": "CPU 高压结果弹窗 / 历史详情里的「成绩曲线」「频率曲线」「功率曲线」按钮",
+   "params": "控件高 dp(240)；pad_l=dp(46)、单轴 pad_r=dp(8)、双轴 dp(38)、pad_t=dp(8)、pad_b=dp(18)；单位只有功率曲线能传（12.20W = 36px 与最宽的 102000 一样宽）",
+   "source": "android/main.py:12923-13124；调用点 19057 `_show_hp_curve`"
+  },
+  {
+   "id": "speedcurve-axis",
+   "name": "纵轴取整规则（_curve_axis_range + _axis_nice_step）",
+   "kind": "dev-tool",
+   "behavior": "规则（2026-09-17 从 _draw 里原样搬出来，一个数都没动，搬出来是为了双轴图的右轴也走同一套——两边各写一份必然漂移）：① 常规——下限 = 最小值 − max(跨度×5%, |最小值|×2%)，上限同理向上留；② 常数（跨度为 0）——上下各留 max(|值|×5%, 最小展示范围/2)；③ 最后**向外**取整到友好刻度（1/2/5 × 10^k）；④ 最低点不贴底（至少留 5% 图高）；⑤ 本指标不可能为负时轴不画到 0 以下；⑥ 极端退化时兜底 hi = lo + 1.0（防除零）。这套规则被 temp/_curveaxis.py 的 A1~A10 逐条钉着，要改必须重跑那个探针。",
+   "trigger": "SpeedCurve._draw",
+   "params": "Y_PAD_FRAC=0.05；Y_PAD_VAL_MIN=0.02；Y_FLAT_FRAC=0.05；Y_FLAT_MIN_RANGE=2000.0；Y_TICK_FRAC=0.01；Y_MIN_GAP_FRAC=0.05；_axis_nice_step 的档 = (1.0, 2.0, 5.0)×10^k",
+   "source": "android/main.py:12846-12860 `_axis_nice_step`；12887-12920 `_curve_axis_range`；12949-12955（系数）；13037-13052"
+  },
+  {
+   "id": "speedcurve-dual",
+   "name": "SpeedCurve 的双轴能力（阀值/热度）与按秒横轴",
+   "kind": "dev-tool",
+   "behavior": "传了 vals2 就变双轴图（右轴 = vals2，颜色 COL_FIRE——“热是红的”）。**双轴必须按秒画横轴**：两条序列长度本来就不同（功率 ~1790 / 温度 ~359），按下标画会把它们错开一大截；vals 的时刻由 dt（网格宽）× 下标推出来，vals2 的时刻必须由 times2 **显式给出**（温度那条是非等距的，广播限流会让某些整秒读失败）。vals 里的 None = 那一格没读到 ⇒ **跳过该点**（线在缺口处直连），**不要插 0**（那会画出一条掉到底的假线）。两条里任意一条不足两点 ⇒ 退回单轴（右边不画）。**目前没有调用点**（玩家 2026-09-17 第二轮去掉了温度曲线，只汇报温度不画图），能力留着没删。",
+   "trigger": "传 vals2+times2 时",
+   "params": "双轴时右轴 pad_r 加宽到 dp(38)；value_decimals2 默认 1；_dual 判据 = len(_v2)>=2 and len(_px)>=2",
+   "source": "android/main.py:12957-13002；13048-13076；13102-13115"
+  },
+  {
+   "id": "med5",
+   "name": "_med5：功率曲线画图前每 5 点取中位（只给画曲线用）",
+   "kind": "silent-invariant",
+   "behavior": "每 5 个点（不重叠）一组取中位数。为什么是 5、而且是**结构决定**的：底层电量计约 0.96 秒才刷新一次，我们按 5Hz 采样 ⇒ 一个真实读数必然连续占约 4~6 格；于是“只占 1~2 格”的值在结构上就不可能是真读数（那是采样侧毛刺）。5 点一组的无损门槛恰好是 3 格——正好把 1~2 格的滤掉、把完整占 5 格的保留。用**中位数**而不是均值：均值/截尾均值会造出没测到过的值（实测 8.8/10.4/8.7，原始数据里根本没有）。组内 None 先剔掉再取中位，整组都是 None 则返回 None。**⚠️ 只给“画曲线”用**——统计（平均/最低/最高）与导出的 txt 一律走**原始序列**（滤波会改 max，实测单点尖峰 11.87 → 3.9，差 3 倍，而“最高功率”是机器的能力指标）。",
+   "trigger": "构建功率曲线的数据时",
+   "params": "_k=5；组内排序后取 _w[len(_w)//2]；整组 None → None",
+   "source": "android/main.py:12863-12884 `_med5`"
+  },
+  {
+   "id": "fps-info-axis",
+   "name": "曲线探针接口（_ax / _ax2 / _series）",
+   "kind": "dev-tool",
+   "behavior": "把**最终真正画上去**的那组轴范围、两条线的颜色/点数/小数位记在控件上（SpeedCurve._ax / _ax2 / _series），供探针断言——而不是在探针里把算法重抄一遍（本仓库的规矩：复制品只会测它自己）。另：_show_hp_curve 双轴不能在这里过滤 None（功率那条的时刻按原下标×dt 推，过滤一个点会让它后面所有点左移一格，实测温度末点从 357.8s 变成 321s）。",
+   "trigger": "SpeedCurve._draw",
+   "params": "_ax=(lo,hi)；_ax2=((lo2,hi2) if _dual else None)；_series=[(\"left\", COL_BALL, 点数, 小数位), (\"right\", COL_FIRE, ...)]",
+   "source": "android/main.py:13039-13052；13121-13124；19088-19094"
+  },
+  {
+   "id": "sysui-two-modes",
+   "name": "系统栏两档（非沉浸 / 真全屏）",
+   "kind": "player-visible",
+   "behavior": "玩家 2026-09-16 分两次定案：平时（玩游戏/看面板）要**非沉浸**（能看到顶部状态栏）；做物理验算/CPU 高压黑屏时（含不高压那一档）要**真全屏**。所以是两档、由黑屏的开/关切换：_SYSUI_MODE[0]=False → 一个标志都不设（就是 v0.5.1 之前的老做法）；True → 那 6 位（FULLSCREEN|HIDE_NAVIGATION|IMMERSIVE_STICKY|LAYOUT_FULLSCREEN|LAYOUT_HIDE_NAVIGATION|LAYOUT_STABLE）。**别再把它写成常量**：两档都是玩家点名的需求。切档必须“立刻生效一次”（不能只改标志等下一个 2.5 秒的周期重申，否则黑屏都撤了还全屏着最多 2.5 秒）。",
+   "trigger": "_show_bench_dim / _hide_bench_dim 调 _set_system_ui()；平时每 2.5 秒 _enter_immersive 重申（非沉浸档直接 return，什么都不设）",
+   "params": "_SYSUI_MODE=[False]；切档走 _guard_post(\"immerse\") 工作线程队列",
+   "source": "android/main.py:10592-10607；11015-11036 `_set_system_ui`；22007-22076 `PlinkoApp._immersive_task`；22077+ `_enter_immersive`"
+  },
+  {
+   "id": "wake-lock",
+   "name": "跑分期间屏幕常亮（FLAG_KEEP_SCREEN_ON）",
+   "kind": "player-visible",
+   "behavior": "玩家 2026-09-16 报：“跑分的过程中（包括 cpu 压力测试和那个 45s 测试等）都应该阻止屏幕进入黑屏（待机）休眠，现在没有阻止”。用**窗口标志**而不是 PowerManager.WakeLock：前者不需要权限（本工程 android.permissions 只声明了 VIBRATE），且随窗口可见性自动失效（切后台/退出就放行，不会泄漏成“一直亮着”）。**这不是体验优化，是正确性**：屏幕一灭安卓会暂停游戏、冻结 Clock ⇒ 6 分钟的高压测试会被打断，跑出来的成绩是假的。与系统栏两档**共用同一个 UI 线程任务**（ImmersiveTask），切一次只投一趟 JNI。⚠️ pyjnius 访问 Java 嵌套类必须写 `android.view.WindowManager$LayoutParams`，写成 `WindowManager.FLAG_KEEP_SCREEN_ON` 会抛异常并被吞掉（表现为黑屏/全屏正常但常亮失效）。",
+   "trigger": "_show_bench_dim / _hide_bench_dim 调 _set_keep_awake(on)",
+   "params": "_WAKE_MODE=[False]；addFlags/clearFlags(FLAG_KEEP_SCREEN_ON)",
+   "source": "android/main.py:10609-10623；11059-11078 `_set_keep_awake`；22026-22072（ImmersiveTask 里的防息屏段）"
+  },
+  {
+   "id": "bench-orient-lock",
+   "name": "跑分黑屏期间锁死屏幕方向（LOCKED=14）",
+   "kind": "player-visible",
+   "behavior": "玩家 2026-09-17：“黑屏 2 种跑分的时候禁止屏幕旋转，否则很容易出问题（现在会出现很诡异的问题，包括横屏转竖屏什么的）”。病根：原来宽屏设备只在横置（rot 1/3）时才重申、竖置时什么都不设 ⇒ 平板竖着跑分时方向完全敞开；而跑分是 360 秒的长过程，中途一转 LandLayer 要重排整棵树、_veq 跟着变、黑屏矩形/白字的位置全要重算，全发生在跑分线程满载的时候。用 **LOCKED(14, API 18+)** = 锁定**当前**方向、不随传感器变；**别用 NOSENSOR(5)**（它的语义是“用 manifest 声明的方向”，平板横竖都可能）。锁只覆盖黑屏那一段，平时照旧分流。与 _set_system_ui 逐字同款：改标志 + 立刻投一次。",
+   "trigger": "_show_bench_dim / _hide_bench_dim 调 _set_orient_lock(bool)",
+   "params": "_BENCH_ORIENT_LOCK=[False]；锁 = setRequestedOrientation(14)；宽屏横置重申 10 (FULL_SENSOR)；非宽屏 = 7 (SENSOR_PORTRAIT)",
+   "source": "android/main.py:10976-11013 `_guard_orient_now`；11039-11056 `_set_orient_lock`"
+  },
+  {
+   "id": "guard-thread",
+   "name": "方向守卫 / 沉浸重申搬出主线程",
+   "kind": "platform-glue",
+   "behavior": "这两条链原来**每 0.7 秒各在主线程跑一次**，而且是全 app 唯一的常驻周期性主线程 JNI。JNI/Binder 在本工程已实测是灾难级的慢（SoundPool.play() 单次 143.6ms、平均 53.5ms）⇒ 改法与发声/震动同策：主线程只投递（_guard_post(tag) → Queue(maxsize=16) → _guard_worker 消费），工作线程去付 IPC 的钱。**队列满就丢这一次**（两条链都是幂等的，丢一次毫无影响）；**建不起队列就退回同步调用**（= 今天的行为，绝不静默失效）。_guard_warm 启动期建线程 + 在主线程预热 ImmersiveTask 代理（那一步注册 Java 代理，不能留在工作线程）+ 热一次 autoclass 查表。判据：主线程那一档要接近 0，而工作线程那一档接手。",
+   "trigger": "每次方向/沉浸重申（平时每 2.5 秒、切档时立刻）",
+   "params": "_GUARD_Q 上限 16；_JNI_STAT = [主投递累计秒, 主单次最慢, 发起次数, 工作累计秒, 工作单次最慢, 工作失败次数, UI线程累计秒, UI线程次数, UI线程单次最慢]",
+   "source": "android/main.py:10966-11164（_GUARD_Q/_guard_orient_now/_guard_immersive_now/_guard_worker/_guard_warm/_guard_post）；_JNI_STAT 定义 10572-10590"
+  },
+  {
+   "id": "cfg-async-save",
+   "name": "设定落盘搬出主线程 + 原子替换",
+   "kind": "silent-invariant",
+   "behavior": "_save_config() 是 open + json.dump + close，**每球一次**（settle 里调），跑在主线程；安卓上这是一次阻塞的文件写（走 FUSE），而它落在“落袋”那一帧（同一帧还要做结算、排揭晓、槽位白闪）。改成：只保留最新一份（配置是“当前状态”不是流水账，中间态没有保留价值 ⇒ 一个格子 + 一个 Event 就够）、工作线程写盘。**落盘走临时文件 + os.replace 原子替换**——老写法 open(path,\"w\") 是先截断再写，那种时刻被杀就是文件损坏（下次启动读不出来，白名单一挡 = 进度清零）。这是顺带修的一个真 bug，不只是性能。切后台（on_pause）会 _cfg_flush 一次（超时 1.0 秒就放弃，绝不长等）。",
+   "trigger": "每球 settle；on_pause；退出前",
+   "params": "_CFG_PENDING 单格 + _CFG_EVT；tmp = path + \".tmp\" + os.replace；_cfg_flush(timeout=1.0)，轮询 sleep 0.005；_CFG_STAT=[累计秒, 单次最慢, 次数]",
+   "source": "android/main.py:11166-11242"
+  },
+  {
+   "id": "vibrate-thread",
+   "name": "震动工作线程与三种震动",
+   "kind": "player-visible",
+   "behavior": "① `_vibrate(ms, amp=255)` 单次震动（大奖/结算用），满振幅 255（DEFAULT_AMPLITUDE(-1) 约 50% 太弱）；API<26 退回 vibrate(ms)。② `_vibrate_double(ms=35, gap=40, amp=255)` 短促双震（彩蛋用，两下短脉冲，手机读作“发现惊喜”，区别于单次长震的大奖之感），走 VibrationEffect.createWaveform([0,ms,gap,ms],[0,amp,0,amp],-1)，失败退回单次 (ms*2+gap)。③ `_vibrate_tick(gain)` 装杯的**单次轻震**，时长/振幅跟着撞击强弱走：10~18ms / 振幅 80~220（刻意做得很短、也不算满——节流后是 10 次/秒，脉冲一长就糊成“持续嗡嗡”而不是“珠子一颗一颗落进杯子”；手机马达启动时间约 10~20ms 所以下限取 10ms）。它**不判时间、不计数**——节流只能有一处真源，就是调用点。",
+   "trigger": "settle / 彩蛋 settle / WinPileFX._bounce",
+   "params": "_vibrate_tick: g = clamp((gain-0.20)/0.55)；ms = round(10+8g)；amp = round(80+140g)；_VIB_Q 上限 32；平台非 android 直接 return",
+   "source": "android/main.py:11244-11261 `_vibrate_tick`；11280-11328 `_vibrate_double*`；10853-10964 `_vib_get`/`_vibrate_now`/`_vib_worker`/`_vib_warm`/`_vibrate`"
+  },
+  {
+   "id": "vib-warm-and-get",
+   "name": "震动预热与 Vibrator 代理缓存",
+   "kind": "silent-invariant",
+   "behavior": "① 工作线程原本是**第一次震动时才建**的，而第一次震动正好落在**第一次发射**那一刻（也就是跑分采样窗口里面）⇒ 那一帧要现付建线程 + 首次 JNI 的 AttachCurrentThread（安卓上可能几十毫秒）+ 首次 getSystemService。所以启动期 _vib_warm() 就建线程 + 预取代理。② **必须用 `Context.VIBRATOR_SERVICE` 字符串**——传 autoclass(\"android.os.Vibrator\") 那个 Class 对象在 pyjnius 下匹配不到 getSystemService(Class<T>) 重载，会静默失败（整段被 try/except 吞掉，表现为“权限也给了、代码也跑了，就是不震”）。③ 代理失效（Binder 断了）时 vibrate 会抛 ⇒ 那时把缓存清掉、下次重新取。④ **投递即返回，不等 IPC**。",
+   "trigger": "App 启动（_vib_warm）；每次震动（_vibrate）",
+   "params": "_VIB_PROXY 单元素 list 缓存；_VIB_STAT=[累计秒, 单次最慢秒, 最慢那次的描述]；_FRAME_PROBE[1] 在**发起**那一刻计数（工作线程不再属于某一帧）",
+   "source": "android/main.py:10559-10570；10853-10872 `_vib_get`；10914-10964 `_vib_warm`/`_vibrate`；10874-10911 `_vibrate_now`/`_vib_worker`"
+  },
+  {
+   "id": "number-voice",
+   "name": "整数 → 中文朗读语音名序列",
+   "kind": "player-visible",
+   "behavior": "把整数拆成一串语音文件名的队列（对标 Clac 项目方案）。例：1250 → ['voice_d_1','voice_u_1000','voice_d_2','voice_u_100','voice_d_5','voice_u_10']；20 → ['voice_d_2','voice_u_10']；2000 → ['voice_liang','voice_u_1000']；0 → ['voice_d_0']。中文读数规则：① 万位的 2 读“两”（两万）；② 千位的 2 也读“两”；③ 10~19 的十位不读“一十”（直接 voice_u_10）；④ 低位组（前面有万位）且无千位时，组前补“零”；⑤ 千位后百位空时，十位/个位前补“零”；⑥ 十位为空且（需要补零 或 有千位 或 有百位）时，个位前补“零”。",
+   "trigger": "余额/中奖金额语音播报",
+   "params": "万 = n//10000，余 = n%10000；_read_4digits(n, is_highest)；语音名 voice_d_N / voice_u_10^n / voice_liang",
+   "source": "android/main.py:11330-11384 `number_voice_names` / `_read_4digits`"
+  },
+  {
+   "id": "cup-trigger-delay",
+   "name": "落容器演出的触发延后 0.15 秒",
+   "kind": "player-visible",
+   "behavior": "用户 2026-09-11 给的规格：第 0 秒进倍率槽时**立即播声音**，但**第 0.15 秒才触发落容器事件**。所以动的不是任何声音、也不是球的运动，是 settle() 里那句 win_fx.play_win(...) 的**调用时刻**；演出内部的时间轴（WINDUP / 压暗 0.30 / 杯子 0.32 / 落珠 / 回味 / 退场）一律不动，于是整场只是起点后移 0.15s，总时长不变。",
+   "trigger": "settle() 中奖分支",
+   "params": "CUP_TRIGGER_DELAY = 0.15",
+   "source": "android/main.py:11264-11271"
+  },
+  {
+   "id": "build-time-fmt",
+   "name": "启动信息弹窗里的“制作时刻”格式",
+   "kind": "player-visible",
+   "behavior": "必须是 24 小时制（%H），玩家定稿——用 %I 会变成“下午 1:49”那种 12 小时制，跟其余界面的时间口径不一致（历史记录里也是 `%Y-%m-%d %H:%M`）。年月日写成**汉字**：`2026-09-11` 这种全数字写法在中文语境下容易被读反（有人按 日/月 读），带上「年月日」就没有歧义。fx_probe [13] 有功能性断言钉住这两条。",
+   "trigger": "隐藏弹窗（启动信息）构建",
+   "params": "BUILD_TIME_FMT = '%Y年%m月%d日 %H:%M'",
+   "source": "android/main.py:11273-11278"
+  },
+  {
+   "id": "version-titles",
+   "name": "版本号的唯一出现位置（标题）与三个标题函数",
+   "kind": "player-visible",
+   "behavior": "_app_version() 从两个来源取（都不在这里另抄一份常数）：安卓 = PackageManager 的 versionName（就是 buildozer.spec 的 version）；桌面 = 直接读 main.py 旁边的 buildozer.spec（出货打包用的就是同一个文件）。玩家要求“去掉其他地方的版本号”⇒ 版本号**全工程只在标题里出现一次**：启动信息弹窗标题 = “跳跳的弹珠机 vX.Y.Z”（游戏名与版本号之间留**一个空格**）；CPU 高压结果弹窗标题 = “CPU高压测试 vX.Y.Z”；普通跑分标题 = “画面帧率和性能测试”（不带版本号）。拿不到版本时退化成纯名字，**不留一个孤零零的 'v'**。",
+   "trigger": "各弹窗构建",
+   "params": "_app_version：安卓 getPackageInfo().versionName；桌面正则 `\\s*version\\s*=\\s*(\\S+)`",
+   "source": "android/main.py:12787-12843 `_app_version`/`_startup_title`/`_soc_result_title`；13127-13136 `_bench_result_title`"
+  },
+  {
+   "id": "bench-score-text",
+   "name": "成绩块正文（现场弹窗与历史详情共用一份）",
+   "kind": "dev-tool",
+   "behavior": "只有一份是硬要求（两处各写一份迟早脱钩）。入参 d 用**记录里的字段名**（bench_history 那套键），现场那条路先用同样的键组一个 dict 再传进来 ⇒ “刚跑完”和“翻历史”走**同一条渲染路径**。缺字段一律印「—」，**绝不拿别的字段回填**（老记录没有 render_10low / phys_mad 之类）。帧率块六值 vs 三值：老记录没有 10%Low/p99/p90 就退回三值版。高压那一行只在 sust_fps_windows 有正数时印。电池温度只在首末两值都有时才印一行（COL_BALL 金色，markup）。",
+   "trigger": "跑分结束的即时窗口 / 历史「详情」",
+   "params": "格式串里 %d/%s 的实参与占位符**必须一一对齐**（删掉「N 轮」前缀时实参也必须一起删，否则后面的数整体前移一格且不报错）；逐轮分数取前 20 个；秒两位小数、步数与次数一位小数",
+   "source": "android/main.py:13139-13261 `_bench_score_text`"
+  }
+ ],
+ "constants": [
+  {
+   "name": "H_TOP / H_RTP / H_BETS / H_INFO / H_BOTTOM",
+   "value": "44 / 44 / 44 / 26 / 64",
+   "meaning": "五行 HUD 的行高（dp）"
+  },
+  {
+   "name": "_TW_GROW_MAX",
+   "value": "1.6",
+   "meaning": "平板（sw600dp+）上弹窗内固定宽块的等比放大上限；手机上算出来 1.0 不触发，Y700 上约 2.5 ⇒ 夹到 1.6"
+  },
+  {
+   "name": "BALL_VIEW / BALL_VIS_R",
+   "value": "1.4 / BALL_R*1.4 = 12.6",
+   "meaning": "小球视觉放大倍数（仅渲染，碰撞半径 BALL_R=9 不动）；BALL_VIS_R 是所有“球该坐在上面”的绘制线的派生源"
+  },
+  {
+   "name": "_BALL_TEX_PX",
+   "value": "128",
+   "meaning": "飞行球贴图边长；只有一张，提高密度不增加每帧开销"
+  },
+  {
+   "name": "FIT_SCALES",
+   "value": "(1.0, 0.94, 0.88, 0.82, 0.76, 0.70)",
+   "meaning": "单行自适应字号第一段（6 档）"
+  },
+  {
+   "name": "FIT_FINE",
+   "value": "(0.66, 0.62, 0.58, 0.54, 0.50, 0.46, 0.42)",
+   "meaning": "第二段（7 档固定细分）；绝不能改回二分，二分产出的字号这辈子只用一次且每次都是 40ms 级冷字体表打开"
+  },
+  {
+   "name": "FIT_HARD_FLOOR",
+   "value": "0.42（= FIT_FINE[-1]）",
+   "meaning": "硬下限；只防“小到看不见”，不参与塞不塞得下的判断"
+  },
+  {
+   "name": "_FIT_GRID / _qfs",
+   "value": "0.5 / 已停用",
+   "meaning": "字号量化网格，2026-09-14 停用（真机 sp(N) 非整数，量化后与预热表对不上，反而每次冷开字形表，CPU 吞吐掉约 6%）"
+  },
+  {
+   "name": "_FIT_PX / _FIT_SIZE_PX / _SLOT_TXT_TEX 上限",
+   "value": "512 / 256 / 64",
+   "meaning": "三个缓存的清空阈值（超出整体 clear，防无限长）"
+  },
+  {
+   "name": "_FS_OPEN_MAX",
+   "value": "300",
+   "meaning": "字体缓存账本最多留最近多少次冷开"
+  },
+  {
+   "name": "_FS_MUTE_SEC",
+   "value": "1.5",
+   "meaning": "账本静音窗口长度（弹窗构建 + 异步布局收敛）；静音期间跳过的次数记在 _FS_MUTED_N 且必须印进日志"
+  },
+  {
+   "name": "COLD_FS_MIN_MS",
+   "value": "3.0",
+   "meaning": "多慢才算“冷字号”；热字号一次量出来 0.02~1.5ms"
+  },
+  {
+   "name": "_PIN_MAX / _PIN_AFTER",
+   "value": "24 / 3",
+   "meaning": "字体钉子名额（每个 fontid 约 0.88MB，24 个 ≈ +21MB）/ 第几次冷开才钉"
+  },
+  {
+   "name": "_GLYPH_CHARS / _GLYPH_ON",
+   "value": "\"0123456789+\" / False",
+   "meaning": "字形图集覆盖的字符集（含空格/斜杠的串与“未中”必须退回 Label）/ 总开关（暂时关着：卡在一个未解释的 1 像素差）"
+  },
+  {
+   "name": "_GLYPH_MAX_KEYS / _GLYPH_MAX_CHARS",
+   "value": "8 / 12",
+   "meaning": "图集最多缓存几档（实测只 2 档）/ 单个标签最多几条 Rectangle（最长串 +10000）"
+  },
+  {
+   "name": "_JNI_STAT",
+   "value": "[0.0,0.0,0,0.0,0.0,0,0.0,0,0.0]",
+   "meaning": "[主投递累计秒, 主单次最慢, 发起次数, 工作累计秒, 工作单次最慢, 工作失败次数, UI线程累计秒, UI线程次数, UI线程单次最慢]"
+  },
+  {
+   "name": "_SYSUI_MODE / _WAKE_MODE / _BENCH_ORIENT_LOCK",
+   "value": "[False] / [False] / [False]",
+   "meaning": "系统栏两档 / 屏幕常亮 / 跑分期间锁方向；三个都用单元素 list 跨线程（不是裸 bool）"
+  },
+  {
+   "name": "方向常数",
+   "value": "LOCKED=14, FULL_SENSOR=10, SENSOR_PORTRAIT=7",
+   "meaning": "跑分锁死当前方向 / 宽屏横置重申 / 瘦长手机锁竖屏"
+  },
+  {
+   "name": "_DEVICE_WIDE_MIN",
+   "value": "9.0/16.0",
+   "meaning": "短边/长边 ≥ 9:16 判为宽屏（平板类，允许四方向旋转）"
+  },
+  {
+   "name": "_guard/_vib/_cfg 队列上限",
+   "value": "16 / 32 / (单格+Event)",
+   "meaning": "守卫队列 / 震动队列 / 设定落盘只保留最新一份；满则丢这一次（幂等），建不起则退回同步调用"
+  },
+  {
+   "name": "_VIB_Q / _VIB_LOCK / _VIB_PROXY / _VIB_STAT",
+   "value": "None / Lock / [None] / [0.0,0.0,\"\"]",
+   "meaning": "震动队列 / 建队锁 / 缓存的 Vibrator 代理 / [累计秒, 单次最慢秒, 最慢那次的描述]"
+  },
+  {
+   "name": "_vibrate_tick 公式",
+   "value": "g=clamp((gain-0.20)/0.55)；ms=round(10+8g)；amp=round(80+140g)",
+   "meaning": "装杯轻震的时长 10~18ms / 振幅 80~220"
+  },
+  {
+   "name": "_vibrate_double 默认",
+   "value": "ms=35, gap=40, amp=255",
+   "meaning": "彩蛋双震；createWaveform([0,ms,gap,ms],[0,amp,0,amp],-1)，失败退回 ms*2+gap"
+  },
+  {
+   "name": "CUP_TRIGGER_DELAY",
+   "value": "0.15",
+   "meaning": "落容器事件的触发延后（声音仍在第 0 秒）；演出内部时间轴不动 ⇒ 整场起点后移、总时长不变"
+  },
+  {
+   "name": "BUILD_TIME_FMT",
+   "value": "'%Y年%m月%d日 %H:%M'",
+   "meaning": "隐藏弹窗“制作时刻”格式（24 小时制 + 汉字年月日）"
+  },
+  {
+   "name": "BIG_TEXT_LIFE / BIG_TEXT_ALPHA_STEPS",
+   "value": "1.8 / 20",
+   "meaning": "中奖大字生命（秒）/ alpha 量化档数（无画布 Color 时的兜底路径）"
+  },
+  {
+   "name": "TEXT_CY_WIN",
+   "value": "150.0",
+   "meaning": "中奖大字让位后的逻辑 cy（杯子占逻辑 y ≈264.6~578，大字要上浮 38px/s）"
+  },
+  {
+   "name": "STAGE_ORDER / STAGE_COLORS",
+   "value": "(\"飞行\",\"装杯\",\"落袋\",\"蓄力\",\"哑火\",\"待机\") / #3563d1 #f0b000 #39d98a #e0533b #5a6a8c #b9c3d6",
+   "meaning": "阶段条与图例的顺序与取色；名字必须与 RootWidget._bench_tag() 逐字一致"
+  },
+  {
+   "name": "FpsCurve.ZOOM_PER_FRAME_PX",
+   "value": "2.0",
+   "meaning": "放大图里每帧占多少像素（玩家 2026-09-17 第三次定案；这个旋钮他来回拧过六次：2→6→3→2→3→2）"
+  },
+  {
+   "name": "FpsCurve 默认 line_w",
+   "value": "1.0",
+   "meaning": "真 1 像素（Kivy 的 Line(width=W) 画出来是 2W）；width≠1.0 时点数上千还会撞 65535 顶点上限"
+  },
+  {
+   "name": "SpeedCurve 纵轴系数",
+   "value": "Y_PAD_FRAC=0.05, Y_PAD_VAL_MIN=0.02, Y_FLAT_FRAC=0.05, Y_FLAT_MIN_RANGE=2000.0, Y_TICK_FRAC=0.01, Y_MIN_GAP_FRAC=0.05",
+   "meaning": "上下留白 / 常数数据留白 / 友好刻度粒度 / 最低点离底保底；被 temp/_curveaxis.py 的 A1~A10 钉着"
+  },
+  {
+   "name": "_axis_nice_step 档位",
+   "value": "(1.0, 2.0, 5.0) × 10^k",
+   "meaning": "“友好的步长”抬到 1/2/5 × 10 的幂"
+  },
+  {
+   "name": "_med5 窗口",
+   "value": "_k = 5",
+   "meaning": "功率曲线画图前每 5 点一组取中位（底层电量计约 0.96s 刷新 × 5Hz 采样 ⇒ 真读数必占 4~6 格）"
+  },
+  {
+   "name": "曲线控件尺寸",
+   "value": "FpsCurve dp(276) / SpeedCurve dp(240) / 放大图 ScrollView dp(292)",
+   "meaning": "各曲线的默认高度"
+  },
+  {
+   "name": "SpeedCurve 边距",
+   "value": "pad_l=dp(46), pad_r=dp(8)/dp(38)(双轴), pad_t=dp(8), pad_b=dp(18)",
+   "meaning": "左 46dp 给纵轴刻度；双轴时右侧加宽到 38dp —— pad_l 一动不动（A10 拿 dp(46) 钉着左刻度文字位置）"
+  },
+  {
+   "name": "COL_*（UI 取色）",
+   "value": "COL_CANVAS=#0b1220 COL_WALL=#2b436e COL_LANE=#0e1830 COL_PEG=#7b8fad COL_BALL=#ffd451 COL_TEXT=#e8eefc COL_SUB=#8fa0c4 COL_BTN_OFF=#26324f COL_FIRE=#e0533b COL_GRAY=#5a6a8c COL_METER=#f0b000 COL_BUMPER=#4a6aa8 COL_LAMP_OFF=#243250",
+   "meaning": "整个 UI 与盘面的取色源；slot_color/slot_txt/阶段条/曲线都从这里取"
+  },
+  {
+   "name": "槽位配色",
+   "value": "空槽 #2a3550；查不到倍率的兜底 #1e8a5a；m>=100 字色 #0b1220（黑），其余 #ffffff",
+   "meaning": "slot_color / slot_txt"
+  },
+  {
+   "name": "盘面几何",
+   "value": "CW,CH=520,660 WALL=12 FLOOR=648 NUM_SLOTS=9 SLOT_H=32 SLOT_TOP=616 DIV_W=6 DIV_TOP=SLOT_TOP-10 FIELD_L=12 RIGHT_INNER=508 LANE_L=466 PEG_R=6 BALL_R=9",
+   "meaning": "GameArea 的逻辑坐标系（y 向下）"
+  },
+  {
+   "name": "MISFIRE_POWER / PLUNGER_Y / PLUNGER_X",
+   "value": "0.15 / FLOOR-BALL_R-2 = 637 / (LANE_L+RIGHT_INNER)/2 = 487",
+   "meaning": "哑火阈值（力度条红线位置 = SLOT_TOP-8-0.15*200）/ 发射槽井底位置"
+  },
+  {
+   "name": "FRAME_TICK_DT",
+   "value": "1.0 / FRAME_TICK_HZ(185)",
+   "meaning": "tick_draw / _frame_timed 的调度间隔"
+  },
+  {
+   "name": "_BALL_TEX 色标与猫眼带参数",
+   "value": "9 段色标 0.00→0.99；_BALL_RIM_K=0.74；_BALL_BAND_W=0.66；_BALL_BAND_S=0.76；_BALL_BAND_SPAN=0.92；band 角 -32°，off=0.08*d，band_w=0.09*d*0.66，strength=0.44*0.76",
+   "meaning": "球贴图的全部可调旋钮；调之前先出图（离线脚本 temp/facilitator/ab_render.py 能逐像素复现）"
+  }
+ ],
+ "gotchas": [
+  "LandLayer._to_eq 只做逆旋转，**绝不能再减 anchor.pos** —— anchor 是普通 AnchorLayout 不是 RelativeLayout，Kivy 单一 window 坐标系下整棵树的 pos 数值本来就是“等效竖屏物理坐标”。多减一次会把所有控件的点击判定区平移出屏幕（横屏 1740x1000 偏移 (370,-370)），症状 = 横屏所有按钮点不到、竖屏正常。",
+  "`_pass_touch` 必须用 `touch.apply_transform_2d`，**不能写 `touch.pos = ...`** —— pos 只是普通元组属性，直接赋值不改 x/y，而 ButtonBehavior 判点击用的是 collide_point(touch.x, touch.y)。",
+  "`to_local` / `to_parent` 必须覆写：EventLoop 的 grab 派发沿祖先链调 to_local（按钮 down 时 grab 自己，之后 move/up 直接派发给按钮本体）；不覆写则按钮按下有反馈、抬起无动作（always_release 默认 False 直接吞掉 on_release）。",
+  "`RotPopup._popup_gate` 的计数 **必须挂在 dismiss 上，不能挂在 `_real_remove_widget` 上** —— 转屏/被动移除那条路绕开它，挂错地方计数永不归零，钉子被永久静默禁用。去重必须用每实例的 `_gate_on` 开关（open 有几条早退分支，直接加减会重复计数）。",
+  "`_popup` 的宽高**必须按 `_veq()`（等效竖屏窗口）算绝对值**，不能用 size_hint —— size_hint 取父容器原始宽高，设备横拿时弹窗会比界面宽 60~80%（960x540 下 540/806；1740x1000 下 1000/1462）。",
+  "`_popup_fit_content` 的非内容区**不能**用 `popup.height - content.height` 反推 —— 同 tick 里 content.h 还是旧值，chrome 会算成 14 而不是 44（彩蛋弹窗分隔线压在标题字上、跑分菜单顶上留大块空白）。必须按结构算（grid.padding + 非 container 孩子高度）。",
+  "`_fit1` 的**重入闸 `_fit_busy` 不能省** —— 它写 font_size，而 font_size 变 → texture_size 变 → 绑了 texture_size 的自动撑高行会回调回来，没有闸就是死循环。",
+  "`_fit_inset` / `_fit_base` **必须记在控件上** —— 否则“布局重排”和“文字变化”两条路会算出两个字号，同一个按钮一会儿大一会儿小。",
+  "`_fit_uniform` / `_fit_buttons_uniform` 度量用的 bold 必须是“组里只要有一个粗体就按粗体量” —— 用“最宽那条自己的 bold”会让同一组今天用粗体量、明天用细体量，预热表烘不到，真机每次撞上没烘过的组合就是一次 21.7/16.7 毫秒的冷字体表打开。",
+  "`_fit_line` 给单行标签**只能给宽度、高度必须留 None**，否则 Kivy 把文字排版进固定高度里，折行后的第二行画不出来（v0.6.12/v0.6.20 栽过两次）。`_auto_h` 要绑 `width→text_size` 而**不是**绑 `size`（绑 size 会死循环）。",
+  "`text_px(force=True)` **必须能绕过自己的缓存** —— 否则预热那句一旦命中缓存就不建 CoreLabel、不开字体，预热白做且不报错（日志读法早就记着“=否 ⇒ 预热那一句被 text_px 自己的缓存挡掉了”）。",
+  "`FIT_FINE` **绝不能改回二分**：二分保证产出“这辈子只用一次”的字号，而在这个引擎里每个新字号都是一次冷字体表打开（真机 42 毫秒级的证据在 FIT_FINE 上方）。",
+  "`_qfs` 已停用（`_FIT_GRID=0.5` 是死常量）——真机 sp(N) 非整数，量化后与启动预热/布局烘出来的字号对不上，每次挑字号变成冷开字形表，CPU 吞吐掉约 6%；桌面测不出这个副作用（桌面 sp(48) 正好 = 48.0，量化是空操作），这正是它骗过人的地方。",
+  "背包里那三个缓存的**清空阈值**（_FIT_PX 512 / _FIT_SIZE_PX 256 / _SLOT_TXT_TEX 64）不能删 —— 余额那类数字会一直变。",
+  "`_FS_MUTE_UNTIL` 静音期间**必须照记被跳过的次数并印进日志** —— 本仓库栽过太多次“没印”被读成“没发生”。",
+  "`_SLOT_TXT_TEX` 的缓存键**必须带字号 fs** —— 它跟着 s（画布缩放）走，转屏/改窗口时字号会变，那时要重建。",
+  "`GameArea._restack_overlays` 不能省：`self.canvas.clear()` 会把子控件的 canvas 一起摘掉（子控件 canvas 是 add_widget 时挂进父 canvas 的），不重挂则每次换盘面/尺寸变化，杯子和中奖大字整个从屏幕上消失，而它们的 canvas.children 看起来完全正常。判据：`self.canvas.indexof(w.canvas)` 返回 -1 = 已被摘掉。",
+  "`_update_slots` 必须在末尾 `lamps_off()`：灯本来只在 `_redraw()` 重建 `_lamp_cols` 时被顺手重置，park_ball 从整块 _redraw 换成增量 _update_slots 之后这层遮盖没了 ⇒ 灯每局点亮一格、从不熄灭，几局下来槽上攒出一片红绿点。",
+  "`_update_slots` 结构对不上（首帧/刚改尺寸/槽数变了）**必须退回完整 `_redraw()`，绝不半更新**（守卫 = 三张表长度都 == NUM_SLOTS）。9 个槽的文字矩形**全都要建**（空的用 size=(0,0) 藏），只给非空槽建的话条数会变、没法原地更新。",
+  "中奖大字的 `Scale` **必须用 `canvas.before` PushMatrix + `canvas.after` PopMatrix 夹住** —— Kivy 的 Scale/Rotate 是持久变换，本项目子控件画布是绝对坐标、父级不做平移 ⇒ 会泄漏给之后画的 HUD 五行（实测把底部两行按 sc 缩放位移推出窗口，玩家录像里“飞行结束后下面的文字和按钮不见了”）。",
+  "中奖大字/飘字的**横向坐标绝不能再减 `self.x`** —— 那是 `_px()` 的返回值，已经是 Kivy 窗口绝对坐标（子控件 canvas 就是绝对坐标，父级不做平移）。竖屏 GameArea.x 恒为 0 掩盖了这个错，横屏反旋转时 x=370 会让大字偏左 370px（玩家报的“弹珠+xxx 在特殊情况下偏左很多”）。纵向的 `- self.y` 是历史遗留，本轮不动。",
+  "`GlyphLabel._glyph_place` **必须从 x/y/width/height 现算中心，不能读 `self.center`** —— center_x/center_y 是 cache=True 的 AliasProperty，给 center 赋值时先设 center_x 再设 center_y，回调会在 center_y 还没设之前跑一次且读到旧值 ⇒ 只有 x 跟着动、y 永远停在初始化那次。坐标截断用 `int()` 不是 `math.floor`（负数方向两者不同）。",
+  "`GlyphLabel._glyph_place` **绝不能碰 `_gcol`** —— 中奖大字每帧都在改 center（上浮），在那里重置颜色 = **永不淡出**。颜色只在 `_glyph_sync` 里还原。",
+  "`_glyph_bake` 的 11 个字**必须当一整串烘一次、再按 advance 切**，绝不一个字一个 CoreLabel 地烘（单独烘竖直落点高半个像素，整块字差 704 像素，是 SDL 次像素定位不是坐标算错）。三道门禁（每字形有 alpha>8 的像素 / 11 字高度完全一致 / 逐字宽相加 == 整串宽 force=True）任一步不过整档作废。",
+  "`_fx_fade_set` 与 `_fade_set` **不能混用**：前者多乘一个基色 alpha —— 图集把阴影的 0.6 搬到了画布上，用 `_fade_set` 会把 0.6 覆盖成 0.5 ⇒ 阴影在淡出段比基线更黑。",
+  "`_lbl_canvas_color` 拿不到画布 Color 时**必须退回写 `label.color` + alpha 量化**，绝不静默不淡出/不染色（那会变成“状态卡住时看不出按钮是暗的”）。",
+  "`_tint_from` **必须逐通道算 target/baked**，不能拍一个 0.5（三个通道比例不一样，用同一个数乘会偏色）。`_TINT_BRIGHT` / `_TINT_DIM` 必须排在 `_tint_from` 定义**之后**（它是模块级调用，放前面会 NameError，第一版就踩了）。",
+  "折线**点数上千一律 `width=1.0`** —— Kivy 的 `Line(width=W)` 画出来是 2W（半宽），且 width≠1.0 时每点 14 个顶点、顶点号写进 unsigned short，>65535 静默回绕（5265 点 = 73706 顶点，实测那一段曲线整段不见）。`joint=\"round\"` 还会给每个顶点补扇形把带子填实。",
+  "`FpsCurve._draw` 里的 **`if self._tags:` 闸不能删** —— 之前是裸着 `self._tags[_i]`，没传标签时直接 IndexError、**整张曲线一起没**，与 `__init__` 承诺的“标签长度对不上就当没有，曲线照画”正好相反（出货路径每次都给等长标签，所以线上从没撞到过）。",
+  "**判断“清不清楚”必须裁一小块按原尺寸看，不许看整张被缩放的图** —— 工具会把 15889px 宽的 PNG 缩到约 1000px 显示，3px 的曲线在眼里糊成一片，据此改成 6px 是误判。玩家在**原尺寸**下看。这个坑本会话踩了两次。",
+  "`SpeedCurve` 的纵轴刻度数字 = **轴的上界/中点/下界**，与图下那行「最低/最高」**不再是同一个数**（后者印真实数据极值）—— 这是有意的，别去“修”。`_curve_axis_range` 只做了搬迁、一个数都没动，要改必须重跑 temp/_curveaxis.py 的 A1~A10。",
+  "`_med5` **只给“画曲线”用**：统计（平均/最低/最高）与导出的 txt 一律走**原始序列**（滤波会改 max，实测单点尖峰 11.87 → 3.9，差 3 倍，而“最高功率”是机器的能力指标）。",
+  "`SpeedCurve` 的 `_txt` **不能沿用 `FpsCurve._label`** —— 那里写死深灰（配浅底），这张是深底，用深灰刻度根本看不见。",
+  "`_show_hp_curve` 里**不能把入参 `title` 覆盖成 Label** —— 会遮蔽字符串 `title`，切粒度时重开弹窗拼 `Label(text=<Label>)` ⇒ `ValueError: Label.text accept only str`（玩家 2026-09-18 报的崩溃）。",
+  "`_bench_score_text` 的 `%` 实参与占位符**必须一一对齐**：删掉「N 轮」前缀时实参也必须一起删，否则后面的数整体前移一格且**不报错**（`%s` 什么都吃得下）。",
+  "`_show_fps_curve` 里 **`_FS_MUTE_UNTIL` 必须设**（面板标题走 _fit_line 一次走满 13 档阶梯 = 一口气开 12~13 个 fontid，而玩家必须打开这个面板才能导出日志 ⇒ 测量动作污染被测对象）。",
+  "`_vibrate` / `_guard_post` / `_cfg_post` 的**“队列建不起来就退回同步调用”分支不能删** —— 那是“与改之前逐字相同的行为”，绝不静默失效（不震 / 不重申方向 / 设定不落盘）。",
+  "`_vib_get` **必须用 `Context.VIBRATOR_SERVICE` 字符串** —— 传 `autoclass(\"android.os.Vibrator\")` 那个 Class 对象在 pyjnius 下匹配不到 `getSystemService(Class<T>)` 重载，会静默失败（表现为“权限也给了、代码也跑了，就是不震”）。",
+  "`_immersive_task` 里的 **pyjnius 访问 Java 嵌套类必须写 `android.view.WindowManager$LayoutParams`** —— 取 `android.view.WindowManager.FLAG_KEEP_SCREEN_ON` 会抛异常并被本 Runnable 的保护层吞掉，表现为黑屏/全屏正常但常亮失效。",
+  "`_enter_immersive` 的形参 `*_` **必须保留** —— schedule_interval 回调会塞 dt 进来，零参签名在真机上启动 0.7s 即 TypeError 闪退（桌面测试测不出）。非沉浸档要直接 return（那一档该有的样子就是系统默认值，硬调一次只白花 UI 线程开销）。",
+  "`_set_system_ui` / `_set_keep_awake` / `_set_orient_lock` **必须“改标志 + 立刻投一次”**，不能只改标志等下一个 2.5 秒的周期重申 —— 否则系统栏会继续藏 2.5 秒 / 跑分开始后最多 2.5 秒仍可能息屏 / 那 2.5 秒里玩家转一下屏幕就出事。",
+  "`PlinkoApp._immersive_task()` 的**代理必须在主线程预热**（`_guard_warm` 里做）—— 在工作线程现造 PythonJavaClass 会注册 Java 代理，那是主线程的活。",
+  "`_vibrate_tick` **不判时间、不计数** —— 节流只能有一处真源（调用点 `WinPileFX._bounce` 里那次 sfx.play 的返回值），两边各判一次必然漂移，玩家就会出现“听到响但手上没感觉”（或反过来）。",
+  "`prebake_step` 里那句 `Clock.schedule_once(self.prebake_step, 0.02)` **绝不能被注释/替换挤掉** —— 挤掉则自链式预热走不下去、`_PREBAKE_DONE` 永不置真，表现是“启动预热 5.8 秒变 90 秒”，而**画面上什么都看不出来**。字体预热那一步用 0.02 秒间隔（不是其它步骤的 0.05）——真机实测一次只要约 1.4ms，0.05 会让 72 步白白占掉 3.6 秒。",
+  "字形预热必须排在**字号预热之后、球纹理之前**（球纹理单步真机 100~200 毫秒，别和它挤一帧），且**一次只烘一档**（一帧烘 11 个字形 = 一记自己造的长帧）。",
+  "`_read_4digits` / `number_voice_names` 的中文读数规则不能“顺手简化”：万位与千位的 2 读“两”、10~19 不读“一十”、低位组无千位时组前补“零”、千位后百位空时十位/个位前补“零”。",
+  "`_bench_result_title` **曾经被整段替换误删过一次**（用“从 `class SpeedCurve` 到 `def _bench_score_text`”两点之间的整段替换，而它正好夹在中间）——改这片区域时**先数一遍夹在中间的东西**。",
+  "`_vibrate_double` / `_vibrate` 的 `global _VIB_Q` 与 `_VIB_Q is False`（建不起来）两种状态都要处理，且 `_FRAME_PROBE[1] += 1` 记在**发起**那一刻（工作线程不再属于某一帧）。",
+  "`_JNI_STAT` 这一批跨线程标志**必须定义在模块级、且用单元素 list** —— 用它的人写的是裸名（裸名找模块全局，写成类属性会 NameError，本文件踩过一次）；`_SYSUI_MODE` / `_WAKE_MODE` / `_BENCH_ORIENT_LOCK` 统一口径是防以后有人改成裸变量 + global 语句时漏掉一处（那会变成“设了没生效”这种最难查的毛病）。"
+ ],
+ "uncovered": [
+  "**10637~10966 那一大段到底是什么**：它不是一个功能，是三块拼在一起的——① 10637-10664 是「预烘字形图集」的动机论证（白色字形 + 画布染色，把 Kivy 那句文字光栅化整条掐掉；真机日志逐帧重算的证据）；② 10665-10838 是字形图集机制本体（_glyph_key/_glyph_bake/_glyph_put/_glyph_rec/_glyph_quads/_glyph_keys_reachable/_glyph_warm_step）；③ 10841-10850 是 `_fx_fade_set`（图集路线的配套淡出）；④ 10853-10964 是震动三件套（_vib_get/_vibrate_now/_vib_worker/_vib_warm/_vibrate）——注意震动那一大段说明其实从 **10559** 就开始了（_VIB_Q/_VIB_LOCK/_VIB_PROXY/_VIB_STAT 定义在那里），10637 只是把它接在字形图集之后。",
+  "`_TEXEX_*`（4860-4940 的「整段文字纹理缓存」，_TEXEX_ON / _TEXEX_G / _TEXEX_FIELDS / _texupd_wrap / _tag_texupd）只是被本范围的注释反复引用（“与 _TEXEX_ON 同策”），我没有盘它本身。它是本子系统之外的第三套文字优化路线。",
+  "`_build_texwarm`（5055）与 `prebake_step`（9764，长在 WinPileFX 上）是**启动预热链的驱动器**，我只是从 `_glyph_warm_step` 的调用点和几段注释反推的；预热链的完整步骤顺序与 `_FONT_WARM_HUD` / `_FONT_WARM_SIZES` 的枚举过程（9887-10010）没有逐行盘完。",
+  "`_show_bench_dim` / `_hide_bench_dim` / `_relayout_bench_dim` / `_set_bench_msg`（14259-14340）是 `_SYSUI_MODE` / `_WAKE_MODE` / `_BENCH_ORIENT_LOCK` 三个标志的**唯一开关点**，也是黑屏矩形 + 白字（CoreLabel 纹理，不挂控件）的绘制处。我只读到 `_SYSUI_MODE` 那段的注释指过去，没有逐行盘那个函数。",
+  "`PlinkoApp.build` 里 LandLayer + AnchorLayout 的装配（21872-21933）、`_apply_orientation`（21944）与 `on_pause` 里的 `_apply_orientation()`（22127），以及窗口尺寸轮询驱动 `layer.apply_orientation()`（21211）的完整逻辑，我只看了 grep 命中行。",
+  "`_fit_width` / `_apply_sizes` / `_apply_row_budget`（13405 / 20939 / 20969）是**基准字号的来源**（sp(N) × _font_scale × _ui_scale）与顶栏/两条档位行的宽度预算反算，我只读了 _apply_sizes 与 _apply_row_budget 的前半段；行预算的完整公式与 `_reflow_row_budget` 没盘。",
+  "`_show_fps_curve`（18354）与 `_show_hp_curve`（19057）的弹窗 chrome（标题/说明文案/按钮/保存日志/粒度切换）只读了开头与关键的几条 goto 注释；`_fps_curve_zoom`（18282）的完整实现没读完。",
+  "`_hp_result_text` / 面板那批字段（render_*、sust_*、phys_*、battery_*）的采集侧（_on_flip、_bench_frames、_frame_timed）完全没盘 —— 那是“跑分与日志”子系统，不是本子系统。",
+  "`Sfx`（音效池）与 `WinPileFX`（中奖装杯演出）只作为本子系统控件的协作者出现（`self.sfx` / `self.win_fx`），内部一律没盘。",
+  "`_TW_GROW_MAX` 的两个调用点（两个历史记录弹窗）我只确认了 `_fit_w` 的口径，没有逐一核对它们在各自弹窗里算出来的实际缩放系数。",
+  "`FpsCurve` 的 65535 顶点上限我只拿到注释里的实测结论（5265 点 ⇒ 73706 顶点、超 11%），**没有在本机复现**那条“整段不见”的判据。"
+ ],
+ "notes": "盘点范围：android/main.py 10156~11388（Kivy UI 层头/public 段/单行自适应字号机器 10231~10637/预烘字形图集 10637~10838/震动线程 10559~10964/方向守卫与沉浸重申 10966~11164/设定落盘 11166~11242/语音与震动的收尾 11244~11384）与 11388~13263（横屏反旋转层 LandLayer/RotPopup/FpsCurve/GlyphLabel/GameArea/SpeedCurve/成绩正文）。\n\n**范围外但被本范围注释直接指名、我一并读了原文的锚点**（这些是重写时必须一起搬的接缝，行号是真的）：`_fit_width` 13405、`_fit1` 13427、`_install_fit` 13542、`_fit_w` 13566、`_popup` 13589、`_fit_line` 13611、`_popup_fit_content` 13644、`_apply_sizes` 20939、`_apply_row_budget` 20969、`PlinkoApp._immersive_task` 21986、`_enter_immersive` 22077、`_apply_fps_cap` 5894、`_bench_tag` 16033、`_show_fps_curve` 18354、`_fps_curve_zoom` 18282、`_show_hp_curve` 19057。\n\n**三条贯穿整个子系统的第一性原理**（不懂这三条就会重写出“看起来一样但一上真机就废”的版本）：\n1. **Kivy 的 Label 只有“折行”和“溢出”两种行为**，没有“缩到放得下”这一档，而本作 HUD 几乎每个位置都是定宽+定高 ⇒ 必须自己补上 Android 那套 autoSizeTextType（量宽度→挑固定档→重入闸）。所有字号决策都收口在 `fit_font_size` / `_fit1` / `_fit_uniform` 三个入口。\n2. **在这个引擎里每一个新字号都是一次冷字体表打开**（真机 40 毫秒级，桌面 26 毫秒）⇒ 字号集合必须塌缩成一个固定小集合（13 个固定倍率 × 有限个基准），并且要预热、要钉住（Kivy/SDL2 的字体缓存只有 64 项、按 LRU 淘汰，只要开过的不同字号数 > 64 淘汰就是必然的）。整套账本（_FS_OPEN / _FS_COLD_CNT / _COLD_FS / _PIN_* / _FIT_HIST）都是为这一条服务的。\n3. **子控件的 canvas 是绝对（窗口）坐标、父级不做平移** —— 这是本工程坐标系的总坑。它同时解释了：中奖大字横向多减 self.x 会偏一个 GameArea.x、Scale 不 PopMatrix 会泄漏给 HUD 五行、canvas.clear() 会摘掉子控件画布所以必须 _restack_overlays。横屏反旋转时 GameArea.x=370，竖屏时 x=0 —— **竖屏掩盖了大量横屏才暴露的坐标 bug**，重写时务必全程横竖两态对照。\n\n**“10637~10966 那一大段是什么”的直接答案**：是「预烘字形图集」（白色字形 + 画布染色，逐字贴图替代整段光栅化，目前 _GLYPH_ON=False 关着）+ 一个 `_fx_fade_set` 适配层 + 「震动三件套搬出主线程」。它前面从 10559 起是震动队列/代理/统计的定义，后面 10966 起才是方向守卫与沉浸重申 —— 那一段不是 UI 布局代码，是**性能账本与线程搬迁**。\n\n**给重写者的取舍提示**：本范围里真正“玩家可见”的是字号选择/布局/旋转/曲线呈现；而占篇幅最大的那批注释（字体账本、钉子、冷字号榜、_brk_wrap、_JNI_STAT、_FPS_INFO）**全部是开发工具/诊断**——重写时可以晚一点做，但 `_POPUP_N`（弹窗计数）与 `_FS_MUTE_UNTIL`（静音）这两个**同时被诊断与行为使用**（钉子开关、日志保真），删了会让“诊断死了但没有任何报错”。"
+}

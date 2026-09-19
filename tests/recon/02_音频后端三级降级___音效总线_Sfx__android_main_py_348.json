@@ -1,0 +1,652 @@
+{
+ "subsystem": "音频后端三级降级 + 音效总线 Sfx (android/main.py 3487-7112)",
+ "features": [
+  {
+   "id": "backends-degrade-chain",
+   "name": "后端三级降级链 open_output()",
+   "kind": "platform-glue",
+   "behavior": "按优先级选后端：android 且未强制 → _SoundPoolOut()；再试 _WaveOut()(winmm)；再试 _KivySoundOut()(SDL2)；全失败返回 None(=静音)。每一级失败都把 `(名字, 异常原文)` append 进 `_BACKEND_ERRORS`，供隐藏菜单面板打印「为什么降级」。环境变量 PLINKO_SFX_BACKEND=kivy|winmm|none 可在桌面强制指定(kivy 跳过 winmm、winmm 跳过 Kivy、none 直接返回 None)。",
+   "trigger": "Sfx.__init__ 里唯一一次调用(out 为 None 时 enabled 置 False)",
+   "source": "open_output 4450-4476, _BACKEND_ERRORS/_backend_error 4441-4448",
+   "params": "env=PLINKO_SFX_BACKEND; 值 none|kivy|winmm"
+  },
+  {
+   "id": "backends-two-modes",
+   "name": "两种后端接口模式 pcm / named",
+   "kind": "silent-invariant",
+   "behavior": "后端用 `mode` 属性声明自己是 'pcm'(winmm：Sfx 直接把缩放后的裸 PCM 送声卡，走 out.play_pcm) 还是 'named'(SoundPool/SoundLoader：音效先落盘成 WAV，按名字播，gain 就是音量，走 out.prime/out.play_named)。Sfx._bake 按 `getattr(self.out,'mode','pcm')` 分派到 _bake_pcm / _bake_named；Sfx.play 也按同一个属性分岔。",
+   "trigger": "烘焙与每次发声",
+   "source": "3487-3494(说明), _bake 6125-6139, play 6983-7009",
+   "params": "mode ∈ {'pcm','named'}"
+  },
+  {
+   "id": "soundpool-pools",
+   "name": "SoundPool 双池 / 每池 8 声道",
+   "kind": "platform-glue",
+   "behavior": "建 1 个 SoundPool(池1，装全部非语音音效)，SFX_POOL_SPLIT=True 时再建第 2 个(池2，只装名字以 'voice_' 开头的样本)。每个池 setMaxStreams(SFX_VOICES)=8，AudioAttributes 用 USAGE_GAME + CONTENT_TYPE_SONIFICATION。分池规则只有一处：`prime()` 里 `_use2 = (self._sp2 is not None) and name.startswith('voice_')`。构造走模块级唯一构造点 _mk_soundpool()(48k 对拍档复用)，Java 内部类优先用规范的 `Outer$Inner` 写法，失败才退回属性访问。",
+   "trigger": "Sfx.__init__ / _rebuild / replay_reset",
+   "source": "_mk_soundpool 3579-3607, _SoundPoolOut.__init__ 3642-3697, prime 3759-3781",
+   "params": "SFX_VOICES=8(每条池上限), SFX_POOL_SPLIT=True ⇒ 池1 40 个合成音 / 池2 61 条语音"
+  },
+  {
+   "id": "soundpool-worker",
+   "name": "发声工作线程(needs_worker)",
+   "kind": "silent-invariant",
+   "behavior": "只有 _SoundPoolOut 声明 needs_worker=True ⇒ Sfx 起一条 daemon 线程 _drain + `queue.Queue(maxsize=64)`。主线程只投递(_enqueue/put_nowait)，队列满就丢这一声，绝不阻塞。_backend_call 在同步路径与工作线程上共用，统计口径一致。winmm/Kivy 不开线程(winmm 实测 0.9ms/次；SDL 从工作线程调的安全性未验证)。",
+   "trigger": "Sfx.__init__ 6303-6075；每次 play",
+   "source": "needs_worker 3634-3640, Sfx.__init__ 6060-6075, _backend_call 6077-6095, _drain 6097-6123, _enqueue 7035-7040",
+   "params": "队列 maxsize=64；真机实测 SoundPool.play 单次最慢 143.6ms、50 次累计 2674ms"
+  },
+  {
+   "id": "route-receiver",
+   "name": "耳机插拔 → 整体重建池",
+   "kind": "player-visible",
+   "behavior": "注册 BroadcastReceiver 监听 ACTION_AUDIO_BECOMING_NOISY(拔耳机) 与 ACTION_HEADSET_PLUG(插耳机)，两者都回调 `_rebuild()`。ACTION_HEADSET_PLUG 是 sticky 广播：registerReceiver 会立刻回放当前状态，所以第一帧只记初值(self._plugged)绝不重建；只有状态真的 0↔1 变化才重建。receiver 存进 self._receiver 保活防 GC。取不到 jnius/类时 self._receiver=None，静默不装。",
+   "trigger": "插/拔耳机；App 启动时注册",
+   "source": "_register_noisy_receiver 3703-3757",
+   "params": "actions=ACTION_AUDIO_BECOMING_NOISY + ACTION_HEADSET_PLUG"
+  },
+  {
+   "id": "soundpool-rebuild",
+   "name": "_rebuild：重建池 + 按应到清单全部重 load",
+   "kind": "silent-invariant",
+   "behavior": "release 旧池 → 建新池 → **先挂新闸门再 prime** → 用 `list(self._paths.items())` **快照**遍历重新 prime(直接迭代会撞「字典在迭代中被改」RuntimeError 并被外层吞掉，导致闸门放行但后端没有 sid = 整局静默)。跑在 Android 主线程，所以只做重建+一轮对账、不做等待。重载失败只写一行日志(全文件往 Sfx._failed append 的只有冷路径合成循环与语音循环两处，这里没人重试)。rebuild_count 自增。",
+   "trigger": "receiver 回调(插/拔耳机)",
+   "source": "_rebuild 3837-3877",
+   "params": "重建后正常局 rebuild_count 应恒为 0"
+  },
+  {
+   "id": "replay-reset",
+   "name": "replay_reset：重放冷启动换池",
+   "kind": "dev-tool",
+   "behavior": "把两个池连同闸门**整个换新**、清空 `_paths`，但**不**按 _paths 重新 load(调用方紧接着跑一次真正的冷烘焙，会把 101 个样本重新 prime)。与 _rebuild 的区别就在这里。目的：让 `_ok_sids` 与已闩的闸门都归零，才量得出真实冷启动单价。",
+   "trigger": "隐藏菜单「重放冷启动」/ _gate_repair 的「一个都没就绪」分支",
+   "source": "replay_reset 3811-3835"
+  },
+  {
+   "id": "soundpool-play-named",
+   "name": "play_named 的返回值语义 = 「请求已受理」",
+   "kind": "silent-invariant",
+   "behavior": "先在池1 `_ids` 找名字，找不到再在池2 `_ids2` 找(语音)。找到就 `play(sid, g, g, 1, 0, 1.0)` 并**无论成败都返回 True**。play() 返回 0 时只记一笔 `_miss_play(name)`(计数 + _play_missed_last + 启动日志一行，带本次会话第几次 play 尝试与 t+ms)。语音播成功时把流号记进 `_voice_stream`。",
+   "trigger": "每次 named 路径发声",
+   "source": "play_named 4313-4337, _miss_play 4297-4311",
+   "params": "返回值 True = 受理；_play_missed/_play_total 只增不减"
+  },
+  {
+   "id": "stop-voice-cut",
+   "name": "stop_voice：只掐正在念的那一条语音流",
+   "kind": "player-visible",
+   "behavior": "读 `_voice_stream`(池内的流号)，非 0 才 `self._sp2.stop(流号)`，随后清零。撞钉/装杯/中奖那些流一个都不动。没播过 / 刚换过池 ⇒ 什么都不做，不是错误。",
+   "trigger": "Sfx.play 的语音互斥分支(_voice_cut → out.stop_voice)",
+   "source": "stop_voice 4339-4354, _voice_cut 6952-6963",
+   "params": "流号是**池内**编号 ⇒ _reset_pools / close 必须清零"
+  },
+  {
+   "id": "pools-pause-resume-close",
+   "name": "切后台/退出：两个池都要管",
+   "kind": "player-visible",
+   "behavior": "pause()/resume()/close() 一律走 `_each_pool()`：对 `self._sp` 与 `self._sp2` 各做一次 autoPause/autoResume/release，每个池各自 try。close 还要 unregisterReceiver、`_voice_stream=0`。**不把 _sp/_sp2 置 None**(play_named / probe_all 都在判 `is not None`，置 None 会变成路径分岔)。",
+   "trigger": "PlinkoApp.on_pause / on_resume / on_stop",
+   "source": "_each_pool 4356-4366, pause 4368-4374, resume 4376-4378, close 4380-4392, 调用点 22107-22137"
+  },
+  {
+   "id": "kivy-backend",
+   "name": "_KivySoundOut 桌面后备",
+   "kind": "platform-glue",
+   "behavior": "mode='named'，name='Kivy-SoundLoader'。prime 用 SoundLoader.load(path)，失败抛 RuntimeError；play_named 取对象、若 state=='play' 先 stop、设 volume=gain、play、异常返回 False。**有 loaded_count()**(缺了它 backend_count() 返回 None → 面板显示「未知」；2026-09-11 之前缺它的后果是悄悄退回闸门值、面板报一片 97/97 假绿)。**没有 probe_all / pause / resume / stop_voice / warm**。",
+   "trigger": "PC 上 SoundPool/winmm 都不可用时",
+   "source": "_KivySoundOut 4394-4439, loaded_count 4404-4412"
+  },
+  {
+   "id": "waveout-winmm",
+   "name": "_WaveOut：winmm 8 声道 pcm 后端",
+   "kind": "platform-glue",
+   "behavior": "ctypes 直调 winmm：waveOutOpen 开 8 条声道(每条 22050Hz/16bit/mono)，play_pcm 找一条 hdr 已 DONE 的声道写入，**全忙直接丢弃**(`drops += 1`)，绝不抢占(waveOutReset 要 10ms)。warm() 后台预开所有声道(避开 8.8ms/次的开设备卡顿)。`_winmm` 为 None(无声卡)时构造抛 OSError。name 属性报 `winmm(N声道)`。",
+   "trigger": "PC 默认后端；_bake_pcm 末尾调用 warm()",
+   "source": "_WaveOut 3392-3477, 导入与 waveOutGetNumDevs 检查 3360-3387",
+   "params": "voices=SFX_VOICES=8；丢帧计数 self.drops"
+  },
+  {
+   "id": "gate-java",
+   "name": "SoundGate：纯 Java 的样本就绪闸门",
+   "kind": "silent-invariant",
+   "behavior": "com.plinko.SoundGate 在构造时 setOnLoadCompleteListener(必须是**任何 load() 之前**)，把 status==0 的 sampleId 记进 ready、否则 failed++。expect(sid) 登记「我要等它」并记 firstExpectAt；allReady() 一旦为真是**闩锁的**(永不回退 —— 别改成实时重算，否则「闸门开了又关」)；readyMs() 从**第一个 load** 起算(不是从构造，否则冷启动会被烘焙时间淹没)；firstMissing() 返第一个未就绪的 sampleId(0 = 全就绪)。静态诊断：initCount/callbackTotal/callbackThreadName。",
+   "trigger": "每次 _attach_gates()；每个 prime() 调 _g.expect(sid)",
+   "source": "java/com/plinko/SoundGate.java 全文件(42-213)；Python 侧 _attach_gates 3906-3935"
+  },
+  {
+   "id": "gate-attach-order",
+   "name": "闸门必须先挂再 load；取不到一律静默置 None",
+   "kind": "silent-invariant",
+   "behavior": "_attach_gates() 给两个池各挂一个闸门。SFX_GATE=False 时直接返回(_gate_err='总开关 SFX_GATE = False')。取不到 jnius/com.plinko.SoundGate 或构造失败 ⇒ `_gate_err` 记原文、闸门置 None，**绝不抛、绝不降级后端**。回调是一次性的：漏掉的永远不来。",
+   "trigger": "__init__ / _rebuild / replay_reset 里、在任何 prime 之前",
+   "source": "_attach_gates 3906-3935, 调用点 3688/3827/3859；SFX_GATE 88"
+  },
+  {
+   "id": "gate-queries",
+   "name": "闸门查询族(gate_expected/ready_count/all_ready/ready_ms/first_missing/gate_info)",
+   "kind": "silent-invariant",
+   "behavior": "gate_expected/ready_count 对两个池求和；**gate_all_ready 要求两池各自 allReady 都为真**(差一个都不算)；gate_ready_ms 取两池里最晚那个的 readyMs，任一为 -1 就返回 -1；gate_first_missing 必须**带池序号**反查(两池 sampleId 各自从 1 编号)。gate_info() 打一行「本进程第 N 次 / 回调 M 条 线程=X / 就绪 a/b / 满编 Xms / 坏 N」。",
+   "trigger": "_await_ready 轮询、_gate_repair、启动日志",
+   "source": "_gates 3937-3940, gate_expected 3942-3947, gate_ready_count 3949-3953, gate_all_ready 3955-3963, gate_ready_ms 3965-3980, gate_first_missing 3982-4006, gate_info 4008-4035"
+  },
+  {
+   "id": "probe-serial",
+   "name": "老探针 _probe_serial(0 增益试播)",
+   "kind": "silent-invariant",
+   "behavior": "对每个 (池, sid) 调 `play(sid, 0.0, 0.0, 1, 0, 1.0)`；返回非 0 立刻 `stop(流号)`(别占满 maxStreams)。**返回 0 时补试一次**(B1：返回 0 也可能是「优先级低 / 没有空闲流」，此刻前面所有流都已 stop、池是空的，再返 0 才是真没解码完)。撞到第一个未就绪就 `break` **只停本池**(另一池照扫)。全程串行 ⇒「池里同时最多一条流」这个前提成立，B1 补试才有效。已确认过的 (池,sid) 进 `_ok_sids`，以后不再重扫(K5)。探针自身抛异常一律当「能播」放行。",
+   "trigger": "probe_all() 的分派(默认档 ((1,1), False))",
+   "source": "_probe_serial 4052-4146, probe_all 3884-3901, _probe_cfg 4037-4050",
+   "params": "对白读数：_probe_scan=从队首起连续就绪数 / _probe_played=真 play 次数 / _probe_stuck=第一个未就绪名字；上界 4 线程(超过池 maxStreams 会假阴性)"
+  },
+  {
+   "id": "probe-parallel",
+   "name": "_probe_parallel(每池 k 条线程，默认不启用)",
+   "kind": "dev-tool",
+   "behavior": "按池派 `_mode[池]` 条线程，各扫**下标连续**的一段。判据与串行同义：每段内 play 返回非 0；抛异常记 `_err` ⇒ 合并层按串行约定整轮放行。join 有 3.0 秒上限；槽位为 None(线程没起来)⇒ `_unverified=True` ⇒ **不放行**。每项仍补试一次(B1)。`_probe_gen` 代次守卫：拔耳机重建过就不回写 `_ok_sids`。",
+   "trigger": "只在 _probe_mode 显式设过 (k>1) 时(默认 (1,1) ⇒ 走串行)",
+   "source": "_probe_parallel 4148-4251, _probe_chunk 4253-4295"
+  },
+  {
+   "id": "gain-levels",
+   "name": "gain 量化 10 档 + 缩放 PCM 缓存",
+   "kind": "player-visible",
+   "behavior": "`lvl = int(round(clamp(SFX_MASTER * gain, 0.0, 1.0) * 10.0))`；lvl<=0 ⇒ 直接 return False(不发声)。pcm 后端按 (name, lvl) 缓存缩放后的 PCM(`_scale_pcm`)，lvl>=10 直接用原 PCM。named 后端把 `lvl/10.0` 当音量给后端。`play_prepare(name, gain)` 供预热。",
+   "trigger": "每次 play / play_prepare",
+   "source": "play 6990-7003, play_prepare 6943-6950, _scale_pcm 3479-3484",
+   "params": "SFX_MASTER=1.0；lvl ∈ 1..10；_bake_pcm 预热 (win0..6, lose, launch, riser, top0, top1) × gain {1.0, 0.9, 0.85}"
+  },
+  {
+   "id": "throttle-family",
+   "name": "节流键按族聚合",
+   "kind": "player-visible",
+   "behavior": "`_throttle_key(name)`：名字形如 `<族><数字>` 且族 ∈ (peg, wall, div, top) 时，**整族共用一个闸门**，返回族名；否则返回原名。计时器是 `self._last[键]`，`now - last < throttle` 就 return False。不同的调用点给不同 throttle：撞钉 0.08 / 天花板 0.22 / 墙与隔板 0.055 / 弧面 rail 0.05 / click 0.08 / error 0.4 / 各语音 0.5~3.0。",
+   "trigger": "play(name, gain, throttle>0)",
+   "source": "_throttle_key 5993-6006, play 6993-6997；各 throttle 值见 19800/20025/20059/20068/20070/20897/7049/7052/7054/7056/20453",
+   "params": "_VARIANT_FAMILIES=('peg','wall','div','top')；不给族键时 peg 是 6 倍放行(75 次/秒)"
+  },
+  {
+   "id": "voice-mutex",
+   "name": "全局语音互斥(族名规则 + 掐旧念新)",
+   "kind": "player-visible",
+   "behavior": "只有名字以 `voice_rtp_` / `voice_bet_` / `voice_mode_` 开头的语音走互斥。若 `now - _last_voice < _last_voice_len`(上一句的**真实时长**，不是写死的 3 秒)，就 `_voice_cut()` **掐掉旧的那条**再念新的(v0.8.65 之前是 `return False` 把新的丢掉，玩家报「1.5s 后选 320% 只播了 200% 那句」)。随后 `_last_voice = now`、`_last_voice_len = voice_duration(name)`。结果/轮次类语音(voice_win*/voice_round_*/number_voice_names/easter/nomoney/reset_progress)不走互斥。",
+   "trigger": "每次 play 的开头",
+   "source": "play 6969-6982",
+   "params": "族前缀 = voice_rtp_ / voice_bet_ / voice_mode_(voice_mode_* 两个 wav 已从仓库删除、不再加载也不播)"
+  },
+  {
+   "id": "play-guards-order",
+   "name": "play 的五道闸门顺序",
+   "kind": "silent-invariant",
+   "behavior": "① enabled ② 语音互斥(3 个族) ③ 已加载(pcm 查 bank / named 查 self.named，未加载 return False，启动后 ~350ms 内未烘完就静默) ④ gain 量化后 lvl<=0 ⑤ throttle。过了五道之后才 `_FRAME_PROBE[0] += 1`、`n_attempt += 1`、投递/同步调用。",
+   "trigger": "每次 play",
+   "source": "play 6965-7033"
+  },
+  {
+   "id": "play-return-contract",
+   "name": "play 返回值牵着震动，不许改成「后端说了算」",
+   "kind": "silent-invariant",
+   "behavior": "有工作线程时投递即 `return True`(与同步路径「后端受理了」同义)。这个返回值是 `WinPileFX._bounce` 里 `_vibrate_tick` 的唯一开关 —— 改成「异步还不知道成败就返回 False」会让装杯的震动**整段消失**。后端真没播成由 `_miss_play`/`n_missed` 计数，不改返回值。",
+   "trigger": "每次 play",
+   "source": "play 7010-7033, 消费点 WinPileFX._bounce 9400-9417"
+  },
+  {
+   "id": "impact-mapping",
+   "name": "impact(bit, sp)：碰撞事件 → 音效名/音量/节流",
+   "kind": "player-visible",
+   "behavior": "先过滤：`sp < SFX_MIN_SP[bit]` 不发声(EV_ARC 的下限是 1e9，即永远静音)。`t = clamp(sp / SFX_REF_SP[bit], 0, 1)`。EV_PEG → `peg%d`，idx = clamp(int(t*5.99) + _ARNG.randint(-1,1), 0, 5)，gain 0.30+0.70t，throttle 0.08。EV_CEIL → `rail`，gain 0.45+0.55t，throttle 0.22。EV_WALL → `wall{1 if t>0.5 else 0}`，gain 0.35+0.65t，throttle 0.055。EV_DIV → `div{...}` 同样。",
+   "trigger": "每渲染帧 _play_events 逐 bit 调用",
+   "source": "impact 7042-7057, 调用点 20885-20899",
+   "params": "SFX_MIN_SP={EV_PEG:45, EV_CEIL:60, EV_WALL:70, EV_DIV:45, EV_ARC:1e9}；SFX_REF_SP={EV_PEG:900, EV_CEIL:1300, EV_WALL:700, EV_DIV:700}；SFX_TOP_Y=30(低于此高度的撞墙/天花板事件不发闷咚，交给 top 音，不叠)"
+  },
+  {
+   "id": "top-apex",
+   "name": "top(y)：顶部转向音(不走 impact)",
+   "kind": "player-visible",
+   "behavior": "球冲到最高点转向时发声。`t = clamp((SFX_APEX_Y_LO - y) / (SFX_APEX_Y_LO - SFX_APEX_Y_HI), 0, 1)`，播 `top{1 if t>0.5 else 0}`，gain 0.62+0.38t，**无 throttle**。不按速率定音量是因为 apex 处法向速率≈0(会等于不发声)。",
+   "trigger": "帧循环里检测到 vy 由负转正 / 顶部事件",
+   "source": "top 7059-7063",
+   "params": "SFX_APEX_Y_LO=58.0(最弱有效蓄力转向高度) / SFX_APEX_Y_HI=22.0(满蓄力) / SFX_TOP_Y=30.0"
+  },
+  {
+   "id": "voice-duration",
+   "name": "voice_duration(name)：语音时长真源",
+   "kind": "silent-invariant",
+   "behavior": "pcm 后端：bank 里有 PCM ⇒ `len(pcm) / (SR * 2.0)`。named 后端：查 `_voice_files()` 的路径 ⇒ `(os.path.getsize(path) - 44) / (SR * 2.0)`(假设 44 字节 WAV 头)。都取不到 ⇒ **回落 0.15 秒**(典型单字约 200ms)。这是语音互斥与队列调度的唯一时长来源。",
+   "trigger": "Sfx.play 的互斥分支；_play_voice_sequence 每段",
+   "source": "voice_duration 7065-7078, 包装 _voice_duration 20717-20719",
+   "params": "SR=22050；回落值 0.15s"
+  },
+  {
+   "id": "voice-files-cache",
+   "name": "_voice_files()：目录列举缓存(只缓存非空结果)",
+   "kind": "silent-invariant",
+   "behavior": "扫 `_voice_dir()`(= main.py 同级的 voice/)下所有 .wav，返回 {名字(去 .wav): 路径}。**带缓存**：`_VOICE_FILES_CACHE[0]`。⚠️ **只缓存非空结果** —— 首次调用若目录还没解包出来(listdir 抛异常或空)，不能把空字典缓存住，那会让语音**永久静默失效**。目录运行期不变(语音是打包进来的)所以缓存安全。原写法每次调用一次 61 项 listdir + 重复算 63 次 _voice_dir()，而它挂在主线程上。",
+   "trigger": "voice_duration / _prime_voice / audio_detail / _bake_pcm",
+   "source": "_voice_dir 3536-3538, _VOICE_FILES_CACHE 3540, _voice_files 3543-3569"
+  },
+  {
+   "id": "voice-61-list",
+   "name": "61 条预录语音清单与命名规则",
+   "kind": "player-visible",
+   "behavior": "APK 内 voice/ 目录共 **61 个 wav**，由 tools/generate_voice.py 用 edge-tts 预录(22050Hz 16bit mono)。命名家族：① 数字朗读 `voice_d_0..9`(零..九) + `voice_u_10/u_100/u_1000/u_10000`(十/百/千/万) + `voice_liang`(两) ② 数字队列拼读 ③ 档位 `voice_bet_{1,10,50,100}` ④ 返还比例 `voice_rtp_{80,120,200,360,1000,2000,5000}` 与 `voice_rtp_hide_{1000,2000,5000}` ⑤ 中奖 `voice_win{2,3,5,10,20,30,50,100,150,200,250,300,500,1000,2000,2500,5000,10000}` ⑥ 轮次 `voice_round_end_{20,50,100}` + `voice_round_suffix` + `voice_round_set_{20,50,100}` ⑦ 彩蛋 `voice_easter_{1,10,50,100}` ⑧ 单条 `voice_nomoney` / `voice_reset_progress` / `voice_lose`(已录制**未接入**：只被注释引用，代码里没有 play)。",
+   "trigger": "打包时随 APK 一起带入；运行期 os.listdir 全量加载",
+   "source": "ls android/voice/*.wav(61 项)；文本与命名见 tools/generate_voice.py 36-111",
+   "params": "生成脚本按 key 名直接定文件名 ⇒ 名字规则 = 调用点拼串规则"
+  },
+  {
+   "id": "voice-number-compose",
+   "name": "number_voice_names(n)：整数 → 中文朗读队列",
+   "kind": "player-visible",
+   "behavior": "把整数拆成语音名列表，交给 _play_voice_sequence 逐段播。规则：万位=2 读 voice_liang；千位=2 读 voice_liang；need_zero 逻辑处理「零」的插入(如 105 → 一百零五)；10~19 的十位读 `voice_u_10` 不读「一十」。",
+   "trigger": "轮次结束播报 _play_round_end_voice",
+   "source": "number_voice_names 11330-11347, _read_4digits 11349-11384",
+   "params": "1250 → ['voice_d_1','voice_u_1000','voice_d_2','voice_u_100','voice_d_5','voice_u_10']；20 → ['voice_d_2','voice_u_10']；2000 → ['voice_liang','voice_u_1000']；0 → ['voice_d_0']"
+  },
+  {
+   "id": "voice-sequence-player",
+   "name": "_play_voice_sequence：按真实时长串联语音",
+   "kind": "player-visible",
+   "behavior": "对列表里每段：查 voice_duration，用 `Clock.schedule_once(..., delay)` 排一次 `sfx.play(name)`，`delay += dur + gap`。可选 on_done 在总时长后回调(用于解锁弹窗按钮)，并**返回总时长**供调用方设兜底定时器。这些段走的是**普通 play 路径**(不带 throttle)，所以数字朗读不会互相掐。",
+   "trigger": "_play_round_end_voice(轮次结束)",
+   "source": "_play_voice_sequence 20721-20733, _play_round_end_voice 20735-20745",
+   "params": "gap=0.005；_play_round_end_voice 在 sound_mode!='on' 时 3.0s 后直接回调 on_done"
+  },
+  {
+   "id": "win-voice-mapping",
+   "name": "中奖语音/琶音二选一",
+   "kind": "player-visible",
+   "behavior": "`_play_win_voice(m, payout)`：m<=0 直接返回。sound_mode=='on' ⇒ 只播 `voice_win%d % payout`(**语音与琶音同播会互相盖**)，否则按 m 分 7 档播 `win0..win6`(0:m<=2, 1:m<=3, 2:m<=5, 3:m<20, 4:m<50, 5:m<100, 6:其余)。挂点是「中奖玻璃杯全部落定那一刻」的回调，不是球刚进槽。",
+   "trigger": "settle 的 _on_settled 回调",
+   "source": "_play_win_voice 20923-20936；WIN_TIERS 3215-3224",
+   "params": "win 档位 = 7 档(WIN_TIERS 长度)；档位内容 (音序, 音间隔, 总长, 混响, 峰值, 低音支撑) 逐档递增"
+  },
+  {
+   "id": "other-play-sites",
+   "name": "其余播报挂点(发射/哑火/蓄力/入袋/UI)",
+   "kind": "player-visible",
+   "behavior": "哑火：`play('launch', SFX_MISFIRE_GAIN + (MAX-)*clamp(frozen_power/MISFIRE_POWER,0,1))`。成功发射：`play('launch', SFX_LAUNCH_GAIN + (MAX-)*power_u(frozen_power))`。蓄力：满蓄力首帧播一次 `charge_full`，之后每 CHARGE_HOLD_SEC 播 `charge_full` @CHARGE_HOLD_GAIN；未满时 `play('ratchet%d' % int(clamp(power,0,1)*5.99))`，间隔 = 0.25 - 0.18*power。入袋：`pocket`，若 m<=0 再 `lose` 0.9。弧面接触：`rail 0.18 throttle=0.05`。开机恢复档位/注额：click 与语音双双关(silent=True + click=False)。",
+   "trigger": "各交互/物理事件",
+   "source": "20101-20102(哑火), 20144-20145(发射), _play_charge_sound 20900-20915, _play_pocket_sound 20917-20921, 20897(rail)"
+  },
+  {
+   "id": "vib-worker",
+   "name": "震动工作线程 + 代理缓存 + 启动预热",
+   "kind": "platform-glue",
+   "behavior": "`_vibrate*` 投递到 `_VIB_Q`(queue maxsize=32) 后立即返回，绝不阻塞主线程；队列满就丢。`_vib_worker` 消费，识别两种形状：('d', ms, gap, amp)=双震，否则 (ms, amp)=单次。**建不起队列(`_VIB_Q is False`)就退回同步调用，绝不静默失震**。`_vib_get()` 缓存 Vibrator 代理，代理抛异常时清缓存下次重取。`_vib_warm()` 在启动期(prebake_step)建线程 + 预取服务，避开「第一次发射那一帧现付」把 1%Low 拉下去。",
+   "trigger": "_vibrate/_vibrate_double 首次调用；prebake_step 9813-9829",
+   "source": "_VIB_Q/_VIB_LOCK/_VIB_PROXY 10567-10570, _vib_get 10853-10871, _vibrate_now 10874-10895, _vib_worker 10898-10911, _vib_warm 10914-10936, _vibrate 10939-10964, _vibrate_double 11280-11328",
+   "params": "音频队列 maxsize=64 / 震动队列 maxsize=32；VibrationEffect.createOneShot(ms, amp) 满振幅 255；API<26 退回 vibrate(ms)"
+  },
+  {
+   "id": "vib-call-sites",
+   "name": "震动触发点与时长",
+   "kind": "player-visible",
+   "behavior": "① 哑火：`_vibrate(8)` ② 成功发射：`_vibrate(14)` ③ 彩蛋(球跳回发射槽)：`_vibrate_double(35)` 短促双震 ④ 中奖：按倍率分档 `_vibrate(300 if m>=100 else 220 if m>=50 else 150 if m>=20 else 110 if m>=10 else 75 if m>=5 else 45)` ⑤ 装杯逐颗落杯：`_vibrate_tick(gain)` = `_vibrate(10+8g, 80+140g)`，g=clamp((gain-0.20)/0.55, 0, 1)，即 **10~18ms / 振幅 80~220**。",
+   "trigger": "各自的事件点",
+   "source": "20103, 20146, 20160, 20287, 11244-11261(_vibrate_tick), 消费点 9417",
+   "params": "_vibrate_tick 的节流唯一真源 = 调用点 `sfx.play('bounce', ..., BOUNCE_THROTTLE)` 的返回值；BOUNCE_THROTTLE=0.10, BOUNCE_GAIN_BOOST=1.8, LO/HI=0.35/1.00"
+  },
+  {
+   "id": "mute-toggle",
+   "name": "声音开关(两态、静默切换、不持久化)",
+   "kind": "player-visible",
+   "behavior": "`SOUND_MODES = ('on','off')` 两态循环(原来的三态「音效已开(不播语音)」已删)。切换时**两个方向都不播任何提示音**(开也不播、关也不播，避免误触出声)。off 立即 `sfx.set_enabled(False)`(原来的 1 秒延迟与「反悔窗口」已删)。按钮文字「音效已开」/「音效已关」，底色绿/深(底色归 _restyle_buttons)。`_save_config()` 会写盘但 **`_load_config` 不读 sound_mode** —— 每次启动恒为「音效已开」。",
+   "trigger": "点静音按钮 toggle_mute",
+   "source": "SOUND_MODES 19738-19744, toggle_mute 19742-19767, _refresh_mute_btn 19769-19782, 不持久化 20570-20571 与 20603, 初始值 13302",
+   "params": "老存档里的 'voice'/'sfx' 两个旧值被自然忽略，不需要迁移代码"
+  },
+  {
+   "id": "set-enabled",
+   "name": "set_enabled：关时 pause_out，开时**不** resume",
+   "kind": "silent-invariant",
+   "behavior": "`set_enabled(on)`：`self.enabled = bool(on)`；只有 off 时调 `pause_out()`。⚠️ 开的时候**不能** autoResume —— 静音那一刻 autoPause() 会把正在播的流掐在半路，一 resume 就从半路接着播出来，症状是「连按音效开关会听到半句上一句提示音」。autoResume 只服务于「切后台回来」(on_resume → resume_out)。SoundPool.autoPause 只遍历已分配 channel，不挡后续 play() 新建 channel，所以不 resume 不影响取消静音后出声。",
+   "trigger": "toggle_mute；--nosound/demo",
+   "source": "set_enabled 7097-7110, pause_out 7086-7090, resume_out 7092-7095"
+  },
+  {
+   "id": "sfx-init",
+   "name": "Sfx.__init__：后端选择 + 烘焙线程启动",
+   "kind": "silent-invariant",
+   "behavior": "`Sfx(enabled=SOUND_ENABLED, sync=False)`。enabled=False 直接 return(没有 out)。out = open_output()，为 None ⇒ enabled=False 并 return。有 needs_worker 就起发声线程。sync=True 在主线程烘(_bake)，否则起 daemon 线程。字段：bank/named/baked/_baked_at/ready_ms/_audio_ready/_expected/_n_bank/_failed/_retry_wait/_retry_rounds/cached/_scaled/_last/_last_voice/_last_voice_len。",
+   "trigger": "PlinkoApp.build 21869 / 13268 兜底",
+   "source": "__init__ 6013-6075",
+   "params": "_retry_wait=0.6s, _retry_rounds=12(≈7s)"
+  },
+  {
+   "id": "bake-thread",
+   "name": "_bake：烘焙收工后必须放行",
+   "kind": "silent-invariant",
+   "behavior": "计时并记启动日志，按 mode 分派 _bake_pcm/_bake_named，**任何异常都吞掉**；随后 `self.baked = True`(**放在 except 之后** —— 烘失败了也要放行，否则加载页永不消失=软锁)、记 `_baked_at`、最后调 `_await_ready()`。",
+   "trigger": "Sfx.__init__ 起的线程 / sync=True",
+   "source": "_bake 6125-6139"
+  },
+  {
+   "id": "bake-pcm",
+   "name": "_bake_pcm：PC 走 winmm，整体赋值",
+   "kind": "platform-glue",
+   "behavior": "`self.bank = bake_bank()`(整体引用切换，读侧只会看到空或全量)。**在并入语音之前**取 `len(self.bank)` 记 `_n_bank`，`_expected = _n_bank + len(_voice_files())`。然后把 61 条语音的 wav 读成裸 PCM 并入同一个 bank(winmm 同路径可播，读失败 continue)。再对 (win0..6, lose, launch, riser, top0, top1) × gain {1.0,0.9,0.85} 调 play_prepare 预热音量档。最后若后端有 warm() 就调(预开声道)。**不写磁盘缓存 ⇒ cached 恒为 False ⇒ PC 上永远显示「冷启动」。**",
+   "trigger": "_bake 分派",
+   "source": "_bake_pcm 6759-6782"
+  },
+  {
+   "id": "bake-named-cold",
+   "name": "_bake_named 冷路径：边合成边落盘边加载",
+   "kind": "silent-invariant",
+   "behavior": "缓存未命中 ⇒ `_wav_wipe(d)` 清掉目录里所有 .wav/.tmp/stamp ⇒ 遍历 `iter_bank()`：`name == 'flight'` 跳过(flight 音效已移除，但 iter_bank 必须保留它，因为顺序即音色)；`n_bank += 1`(**从数据源数，与加载成功几个无关**)；`_wav_write(path, pcm)` 原子写(.tmp + os.replace)后 `out.prime(name, path)`；失败 append 进 `_failed` 继续；成功 `named.add(name)` 并记一行 `name:字节数`。收尾把 stamp 写成 `指纹\n名字:大小…`，`time.sleep(0.5)` 给解码线程时间，再 `_retry_failed()`。",
+   "trigger": "Sfx._bake",
+   "source": "_bake_named 6784-6825",
+   "params": "sleep(0.5) 不可退回「调大」—— 救不了已经返回 0 的那批(永久失败)"
+  },
+  {
+   "id": "bake-named-hot",
+   "name": "_bake_named 热路径：命中缓存直接加载",
+   "kind": "silent-invariant",
+   "behavior": "`_load_cached(d, stamp, tag)` 为真 ⇒ `self.cached = True`，记「缓存命中 = 热启动」，`_prime_voice()`(语音每次重载、不进 stamp)，`_expected = _n_bank + n_voice`，`_retry_failed()`(缓存命中也可能有个别没加载上)。",
+   "trigger": "Sfx._bake",
+   "source": "_bake_named 6790-6799"
+  },
+  {
+   "id": "load-cached-verify",
+   "name": "_load_cached：逐个核对字节数 + 原地重试一次(B2)",
+   "kind": "silent-invariant",
+   "behavior": "读 stamp：第一行必须**逐字等于** tag，否则 False；正文逐行 `名字:大小`，名字或大小非数字 ⇒ False；`flight` 跳过；`os.path.getsize(path) != int(size)` ⇒ False(只查存在性的话，被截断的 WAV 会被当成有效缓存永久加载失败)。全过之后 `_n_bank = len(want)`，逐个 prime + `named.add`。⚠️ prime 失败时**先原地重试一次**，两次都失败才 `return False`(原来一次失败就 return False ⇒ 上层 _wav_wipe 把 40 个缓存 WAV 全删掉再整库重合成 3.7 秒 —— 一次偶发 load 失败代价被放大成「热启动变冷启动」)。",
+   "trigger": "热启动",
+   "source": "_load_cached 6888-6941"
+  },
+  {
+   "id": "prime-voice",
+   "name": "_prime_voice：语音每次启动重新加载",
+   "kind": "silent-invariant",
+   "behavior": "对 `_voice_files()` 里每条直接 `out.prime(name, path)`(APK 内原文件)，**不落缓存、不进 stamp 指纹** ⇒ 语音文件更新即生效。每条打一行启动日志(名字 / load() 提交耗时 / 字节数)。失败 append 进 `_failed`。返回语音条数(满编数要用它 —— 它是数据源，不是「加载成功几个」)。",
+   "trigger": "_bake_named 两条路径都会调",
+   "source": "_prime_voice 6866-6886"
+  },
+  {
+   "id": "retry-failed",
+   "name": "_retry_failed：后台重试加载失败的样本",
+   "kind": "silent-invariant",
+   "behavior": "`todo, self._failed = self._failed, []`(第一行就搬空 —— 所以面板/日志不能靠 _failed 看历史，要看 `_load_failed_total`)。起 daemon 线程，**最多 _retry_rounds=12 轮、每轮 sleep _retry_wait=0.6s**(≈7s)，每轮对剩下每个 prime + named.add，全成功就 return。管的是「load() 当场返回 0、样本从来没进过池」那一类 —— 闸门永远等不到它，必须重试。",
+   "trigger": "冷路径收尾 / 热路径 / _gate_repair",
+   "source": "_retry_failed 6827-6864",
+   "params": "_retry_rounds=12, _retry_wait=0.6s"
+  },
+  {
+   "id": "await-ready",
+   "name": "_await_ready：闸门优先 + 探针兜底 + 6 秒硬超时",
+   "kind": "player-visible",
+   "behavior": "没有 probe_all 的后端(winmm/Kivy) ⇒ 立刻 `_audio_ready=True` 不等。否则：`_g_use` 取决于 gate_all_ready 存在 + gate_expected>0 + 档位不是 off。闸门分支先跑，**有进展就给闸门续命**(ready_count 变了就 `_g_deadline = now + SFX_GATE_FIRST_SEC`)，停住不动才 `_gate_repair()` 一次并 `_g_use=False` 转老探针。老探针每次 `probe()` 一轮、轮间隔**按实测速率自适应**(起手 0.15，之后 `eta*0.3` 夹在 0.03~0.20 秒)。循环条件恒挂 `SFX_READY_TIMEOUT=6.0`。收尾无论走哪支都 `_audio_ready = True`(绝不软锁，项目红线)。记录 `_ready_winner` = 闸门/探针/超时、`ready_ms`、`_gate_open_ms`、`_probe_open_ms`，并把每轮 `(t_ms, 连续就绪数, 是否全过)` append 进 `_PROBE_TRACE`。",
+   "trigger": "Sfx._bake 的最后一步",
+   "source": "_await_ready 6247-6488",
+   "params": "SFX_READY_TIMEOUT=6.0, SFX_GATE_FIRST_SEC=1.5, SFX_READY_POLL=0.15(自适应范围 0.03~0.20)；闸门查询间隔固定 sleep(0.02)"
+  },
+  {
+   "id": "gate-repair",
+   "name": "_gate_repair：闸门到点没开的修复阶梯(只跑一轮)",
+   "kind": "silent-invariant",
+   "behavior": "① 点名：调 out.gate_first_missing() 拿到 (池序号, 名字) 并记 `_gate_missing_name` ② 把它丢进重试队列：从 `out._paths` 取路径 append 进 `_failed` 再 `_retry_failed()`(后台重试 N 轮，不阻塞放行) ③ 若 `gate_ready_count()==0`(回调那条路像死了) 且本进程没重建过 ⇒ `_gate_rebuilt_once=True`，`out.replay_reset()` 换新池+新闸门+清应到清单，再按快照把全部样本重新 prime。**绝不重新合成资源**。",
+   "trigger": "闸门 1.5 秒没进展且 _g_repaired 还是 False",
+   "source": "_gate_repair 6184-6245"
+  },
+  {
+   "id": "sfx-loading-veil",
+   "name": "加载页摘页判据 audio_ready / baked",
+   "kind": "player-visible",
+   "behavior": "`audio_ready()` = `(not enabled) or _audio_ready` —— 音效关了(没什么可等) 或 烘完且探到真能播。`baked` 单独作为加载页「完成」的判据(比 audio_ready 早)，实验档用 `_arm_busy` 挂标志防止玩家在手快时点开一个还没有结果的详情弹窗。",
+   "trigger": "_LoadVeil / _frame 每帧",
+   "source": "audio_ready 6180-6182, _arm_busy 6464/6481"
+  },
+  {
+   "id": "sfx-close",
+   "name": "Sfx.close / pause_out / resume_out",
+   "kind": "platform-glue",
+   "behavior": "close：out.close() 后 `self.out=None`、`self.enabled=False`。pause_out/resume_out 用 getattr 探 out.pause/out.resume，没有就静默跳过(winmm 无暂停概念、Kivy 后端没实现)。",
+   "trigger": "PlinkoApp.on_stop / on_pause / on_resume",
+   "source": "close 7080-7084, pause_out 7086-7090, resume_out 7092-7095"
+  },
+  {
+   "id": "cache-dir-and-tag",
+   "name": "缓存目录 / 指纹 / 原子写 / 清理",
+   "kind": "silent-invariant",
+   "behavior": "`_sfx_cache_dir()`：android 用 `App.get_running_app().user_data_dir`(取不到退 tempfile.gettempdir())，其它平台直接 tempdir；子目录名 `plinko_sfx`，makedirs(exist_ok=True)。`_sfx_code_tag()` = `'%d.%d.%d.%d' % (SFX_SEED, SR, int(mtime), size)`，取自 `os.path.abspath(__file__)` —— 音效配方改了 main.py 就变，旧 WAV 整目录作废；取不到 stat 返回 `'%d.%d.nofile'`。`_wav_write` 原子写(.tmp + os.replace)。`_wav_wipe` 删所有 .wav/.tmp/stamp。",
+   "trigger": "冷/热启动",
+   "source": "_sfx_cache_dir 3495-3509, _sfx_code_tag 3511-3519, _wav_write 3521-3526, _wav_wipe 3528-3534"
+  },
+  {
+   "id": "iter-bank-order",
+   "name": "iter_bank：顺序即音色(41 项，named 端丢 flight 得 40)",
+   "kind": "silent-invariant",
+   "behavior": "固定顺序逐个 yield (名字, PCM)，每次先 `_ARNG.seed(SFX_SEED)` 保证音色完全一致。顺序：peg0..5(1040/1180/1330/1500/1680/1880Hz) → wall0..1(185/225) → div0..1(430/505) → ratchet0..5 → charge_full → rail → launch → **flight** → riser → pocket → bounce → win0..6 → lose → click → error → coin → ready → cash → top0..1 → bead0..2(1960/2320/2760)。**新增音效一律追加末尾**(所有配方共用 _ARNG 一条随机流，换顺序噪声实例就变)。",
+   "trigger": "bake_bank() / _bake_named 的冷循环",
+   "source": "iter_bank 3323-3354, bake_bank 3356-3358, _bake_named 6804-6806 跳 flight, _load_cached 6902 跳 flight",
+   "params": "41 项(含 flight)；named 端跳过 flight ⇒ 池1 40 个样本；40 + 61 语音 = 101"
+  },
+  {
+   "id": "sfx-counts-panel",
+   "name": "audio_detail()：启动信息面板几行",
+   "kind": "dev-tool",
+   "behavior": "named 后端返回：[「热/冷启动总耗时Xms(音效加载Yms)」, 「无音频加载累计耗时：Zms」, 「音效就绪：a/b[　后端缺 N][（满编 M）]，语音就绪：c/d」, 「音频后端　<名字>」, 非 0 才有的「后端重建　N 次」, 实验档结论行]。pcm 后端返回同一组但就绪那行换成「音效就绪 x/y，语音就绪 u/v」(PC 上没有按名字就绪那套)，且「音频后端　静音」在极端情况下兜底。android 且 named 且后端名不是 SoundPool 时追加「安卓上应为 SoundPool，静默降级了」+ `_backend_error('SoundPool')` 原文前 64 字。行序 = 排查优先级。",
+   "trigger": "隐藏菜单/启动信息弹窗；audio_status() 给日志与门禁用",
+   "source": "audio_detail 6506-6753, audio_status 6755-6757, backend_count 6490-6504",
+   "params": "「音效就绪」的 ready 里 n_back < n_gate 才印「后端缺 N」，_expected 且 n_gate < _expected 才印「满编 M」"
+  },
+  {
+   "id": "boot-log",
+   "name": "_boot_log / _PROBE_TRACE / _PROBE_COST：只写不改的诊断账",
+   "kind": "dev-tool",
+   "behavior": "`_boot_log(tag, msg)` 往 `_BOOT_LOG` append (t_ms, tag, msg)，tag ∈ (boot/sfx/bake/load/probe/prebake)，**自己吞掉一切异常、调用点不需要 try**，没有任何逻辑读它做判断(只有导出那一处读)。`_PROBE_TRACE` 逐轮记 (t_ms, 连续就绪数, 是否全过)，`_PROBE_COST` 累计探针自身耗时与真扫次数(算单价)，两者同样不参与任何判据。`_SND_STAT`/`_VIB_STAT` 记 [累计秒, 单次最慢秒, 最慢的名字/描述, 超阈次数]。",
+   "trigger": "各处埋点",
+   "source": "_BOOT_T0/_BOOT_LOG/_boot_log 42-51, _PROBE_TRACE 54-56, _PROBE_COST 57-59, _SND_STAT 5983, SND_SLOW_MS=20.0 5987, BENCH_SLOW_MS=90.0 5989, _VIB_STAT 10570"
+  },
+  {
+   "id": "frame-probe",
+   "name": "_FRAME_PROBE：逐帧发声/震动/预热计数",
+   "kind": "dev-tool",
+   "behavior": "[本帧发声次数, 本帧震动次数, 本帧是否跑了预热]。发声在 `Sfx.play` 过完五道闸门、投递/调用**之前**自增；震动在 `_vibrate` 里**发起那一刻**自增(工作线程不再属于某一帧)。只在跑分采样期读，平时只多两次列表自增。",
+   "trigger": "Sfx.play / _vibrate",
+   "source": "_FRAME_PROBE 4495, play 7004/7014, _vibrate 10948"
+  },
+  {
+   "id": "gate-mode-ladder",
+   "name": "闸门实验档位(隐藏菜单/重放冷启动)",
+   "kind": "dev-tool",
+   "behavior": "档位写在**后端对象**上(`out._gate_mode` / `out._arm_extra`)，因为写在 RootWidget、读在后端会四档跑出一样的结果。ARM_LADDER = [(first,''),(off,''),(first,'pools')]，每次「重放冷启动」往上换一档、走到尾循环回第一档；用完复位成空串。`_probe_mode`/`_probe_boost` 决定探针走串行还是并行(默认 (1,1), False = 串行)。",
+   "trigger": "隐藏菜单「重放冷启动」",
+   "source": "GATE_MODE_* 67-69, ARM_LADDER 70-80, SFX_GATE 88, _probe_cfg 4037-4050, 重放分派 15618-15629"
+  }
+ ],
+ "constants": [
+  {
+   "name": "SR",
+   "value": "22050",
+   "meaning": "采样率(Hz)。缓存指纹与所有 PCM 字节→时长换算的分母"
+  },
+  {
+   "name": "SFX_VOICES",
+   "value": "8",
+   "meaning": "**每个** SoundPool 池的 maxStreams / winmm 声道数。2026-09-14 从 16 改回 8(工作线程之后 16 无已证实收益)"
+  },
+  {
+   "name": "SFX_POOL_SPLIT",
+   "value": "True",
+   "meaning": "开第二个 SoundPool 池专装 voice_*。AOSP 每池硬编码 2 条解码线程 ⇒ 两池=4 条"
+  },
+  {
+   "name": "SFX_GATE",
+   "value": "True",
+   "meaning": "闸门总开关。False ⇒ 永不挂载，全链路等价于 v0.8.60"
+  },
+  {
+   "name": "GATE_MODE_OFF / GATE_MODE_ONLY / GATE_MODE_FIRST",
+   "value": "'off' / 'only' / 'first'",
+   "meaning": "实验档位字符串；'first' 是出货默认(闸门优先，1.5s 不开转老探针)"
+  },
+  {
+   "name": "SFX_READY_TIMEOUT",
+   "value": "6.0",
+   "meaning": "等「真的能播」的硬超时(秒)，到点无条件放行 —— 绝不软锁"
+  },
+  {
+   "name": "SFX_GATE_FIRST_SEC",
+   "value": "1.5",
+   "meaning": "闸门先跑最多这么久；停住不动才转老探针(有进展会续命)"
+  },
+  {
+   "name": "SFX_READY_POLL",
+   "value": "0.15",
+   "meaning": "探针起手轮间隔(秒)；之后按速率自适应，夹在 0.03~0.20"
+  },
+  {
+   "name": "SFX_MASTER",
+   "value": "1.0",
+   "meaning": "总音量乘子；lvl = round(clamp(SFX_MASTER*gain,0,1)*10)"
+  },
+  {
+   "name": "SFX_SEED",
+   "value": "20260727",
+   "meaning": "合成随机种子(_ARNG) + 缓存指纹第一段"
+  },
+  {
+   "name": "SFX_RESULT_LEAD",
+   "value": "0.18",
+   "meaning": "结果音前置静音秒数(让入袋声先落地)"
+  },
+  {
+   "name": "SFX_LAUNCH_GAIN / _MAX",
+   "value": "0.60 / 0.80",
+   "meaning": "发射音基准/满蓄力(顶不能摸到 1.0)"
+  },
+  {
+   "name": "SFX_MISFIRE_GAIN / _MAX",
+   "value": "0.35 / 0.50",
+   "meaning": "哑火发射音弱蓄力/贴阈值"
+  },
+  {
+   "name": "CHARGE_HOLD_SEC / CHARGE_HOLD_GAIN",
+   "value": "0.60 / 0.40",
+   "meaning": "满蓄力后持续提示音的重复间隔与音量"
+  },
+  {
+   "name": "SOUND_ENABLED",
+   "value": "True",
+   "meaning": "Sfx 初始 enabled；--nosound / demo 会置 False(22334-22336)"
+  },
+  {
+   "name": "SFX_MIN_SP",
+   "value": "{EV_PEG:45.0, EV_CEIL:60.0, EV_WALL:70.0, EV_DIV:45.0, EV_ARC:1e9}",
+   "meaning": "撞击音下限(法向速率 px/s)，低于不发声；EV_ARC 恒静音"
+  },
+  {
+   "name": "SFX_REF_SP",
+   "value": "{EV_PEG:900.0, EV_CEIL:1300.0, EV_WALL:700.0, EV_DIV:700.0}",
+   "meaning": "撞击音满音量参考速率"
+  },
+  {
+   "name": "SFX_APEX_Y_LO / SFX_APEX_Y_HI / SFX_TOP_Y",
+   "value": "58.0 / 22.0 / 30.0",
+   "meaning": "顶部转向音的高度映射端点 + 「低于此高度不发闷咚」的界线"
+  },
+  {
+   "name": "队列上限",
+   "value": "音频 64 / 震动 32",
+   "meaning": "_q = Queue(maxsize=64)(SoundPool 发声)；_VIB_Q = Queue(maxsize=32)。满了都是丢一次"
+  },
+  {
+   "name": "_retry_wait / _retry_rounds",
+   "value": "0.6 / 12",
+   "meaning": "加载失败重试间隔(秒)/轮数 ≈ 7 秒"
+  },
+  {
+   "name": "SND_SLOW_MS / BENCH_SLOW_MS",
+   "value": "20.0 / 90.0",
+   "meaning": "「后端单次慢」与「慢帧」的门槛(毫秒)，各只有一处真源"
+  },
+  {
+   "name": "BOUNCE_THROTTLE / BOUNCE_GAIN_BOOST / BOUNCE_GAIN_LO..HI",
+   "value": "0.10 / 1.8 / 0.35..1.00",
+   "meaning": "装杯落地音(bounce)的节流与音量钳制；震动挂在它的返回值上"
+  },
+  {
+   "name": "CUP_TRIGGER_DELAY",
+   "value": "0.15",
+   "meaning": "落容器演出的触发延后(秒)，动的是 play_win 的调用时刻不是音效本身"
+  },
+  {
+   "name": "_play_voice_sequence gap",
+   "value": "0.005",
+   "meaning": "语音段之间的间隔(秒)"
+  },
+  {
+   "name": "_vibrate_tick 映射",
+   "value": "ms = 10+8g, amp = 80+140g, g = clamp((gain-0.20)/0.55, 0, 1)",
+   "meaning": "装杯单次轻震时长 10~18ms / 振幅 80~220"
+  },
+  {
+   "name": "中奖震动分档",
+   "value": "m>=100→300, >=50→220, >=20→150, >=10→110, >=5→75, 其余→45 (ms)",
+   "meaning": "settle 里按倍率给的单次长震"
+  },
+  {
+   "name": "哑火/发射/彩蛋震动",
+   "value": "8ms / 14ms / 双震(35, gap=40)",
+   "meaning": "_vibrate(8) 哑火、_vibrate(14) 成功发射、_vibrate_double(35) 彩蛋"
+  },
+  {
+   "name": "语音文件数",
+   "value": "61",
+   "meaning": "android/voice/*.wav 的实际条数(池2 的样本数)"
+  },
+  {
+   "name": "合成音数",
+   "value": "40",
+   "meaning": "iter_bank 41 项减去 flight；池1 的样本数"
+  },
+  {
+   "name": "101",
+   "value": "40 + 61",
+   "meaning": "named 后端满编样本数(池1+池2)"
+  }
+ ],
+ "gotchas": [
+  "`_reset_pools()` 是**唯一**允许清 `_ids` / `_ids2` / `_ok_sids` / `_voice_stream` 的地方 —— 任何一处单独写 `self._ids = {}` 都会造成「同一份清单两处各改一处必然脱钩」的静默失效(项目头号失效形状)。",
+  "两个 SoundPool 实例的 sampleId **各自从 1 编号**。任何以纯 sid 为键的缓存(确认集)都会让池2 前 40 个撞上池1 已确认过的 ⇒ 假绿放行 ⇒ 那 40 个样本从没被验证过。键必须是 `(池序号, sid)`。",
+  "闸门必须**在任何 load() 之前**挂上 —— 回调是一次性的，装晚了已经解完的样本回调永远不来，闸门永远打不开(退化成等 1.5 秒走老探针)。`_rebuild` 里也一样：新池先挂闸门再 prime。",
+  "`ACTION_HEADSET_PLUG` 是 **sticky** 广播，registerReceiver 会立刻回放当前状态 ⇒ 第一帧**只记初值、绝不重建**；按 `st == self._plugged` 判会在初值 None 时恒假(旧代码的 bug)，每次启动都白重建一次池。",
+  "`_await_ready` 的每个出口都必须是 `_audio_ready = True`；`Sfx._bake` 的 `baked = True` 必须放在 except **之后**。任何一条路径漏掉都等于加载页永不消失(软锁，项目红线)。",
+  "老探针**自己抛异常一律当「能播」**放行；探针是护栏，绝不允许反过来把玩家锁在加载页。并行版的 `_probe_chunk` 也不能把「play 抛异常」折成「未就绪」(那会一路重试到 6 秒硬超时)。",
+  "`play_named` 的返回值 = 「请求已受理」，**不是**「后端真的播成了」。这个返回值牵着 `WinPileFX._bounce` 的 `_vibrate_tick` —— 改成「后端说了算」会让装杯震动**整段消失**。真没播成走 `_miss_play`/`n_missed` 计数。",
+  "`set_enabled(True)` **绝不能**调 `resume_out()`：静音那一刻 autoPause 会把正在播的流掐在半路，一 resume 就从半路接着播出来(「连按音效开关听到半句上一句提示音」)。autoResume 只服务于 on_resume。",
+  "pause/resume/close 必须走 `_each_pool()` 对**两个池**都做 —— 只暂停 `_sp` 会让正在念的语音继续念完(而语音恰恰是最长的 1~3 秒)。",
+  "`close()` **不许**把 `_sp`/`_sp2` 置 None —— `play_named` / `probe_all` 都在判 `is not None`，置 None 会把「释放后的旧引用」变成「路径分岔」。",
+  "`_voice_stream` 是**池内**流号 ⇒ `_reset_pools` 与 `close` 必须清零，否则会拿旧池的流号去 stop 新池的一条不相干的流，而且不报错、不留痕。",
+  "`_voice_files()` **只缓存非空结果**：首次调用若目录还没解包出来(空/listdir 抛异常)就把空字典缓存住 ⇒ 语音**永久静默失效**。拿不到就下次再列。",
+  "`_load_cached` 里 prime 失败必须**先原地重试一次**再判缓存无效 —— 一次 `return False` 会让上层 `_wav_wipe` 删掉整个缓存目录并整库重合成(3.7 秒)，把偶发失败放大成「热启动变冷启动」。反过来也不能永远不清：被截断的 WAV 是靠这条自愈路径发现的。",
+  "`iter_bank` 的**顺序即音色**(所有配方共用 `_ARNG` 一条随机流) ⇒ 新增音效一律追加末尾；`flight` 虽然已从 named 端彻底跳过，但**必须留在 iter_bank 里**，删了会扰动其后的所有噪声实例。",
+  "`_await_ready` 的**顺序就是收益的全部**：老探针一次 `probe_all()` 是阻塞约 3 秒的整轮扫描，「先探针后看闸门」等于让闸门白等 3 秒 ⇒ 收益归零。",
+  "`_probe_serial` 里撞到第一个未就绪只许 `break` **本池** —— 旧代码在外层还有一层 `if _stuck: break`，于是池1 卡住期间池2 一轮都不被扫。",
+  "语音互斥必须用**上一句的真实时长**(`_last_voice_len = voice_duration(name)`)，不能写死 3 秒 —— 写死会让「关闭声音」这类 0.9 秒的短句之后 3 秒内全部被挡，按钮颜色在切而完全没声音(音画脱节)。",
+  "`_throttle_key` 必须把 peg0..5(以及 wall/div/top 的变体)聚合成**一个**闸门 —— 按变体名各自计时等于把聚合速率乘以变体数(`impact` 写 0.08 却放行 75 次/秒)，每次都是一次 JNI 往返，表现是「弹珠飞的时候一卡一卡」。",
+  "装杯震动的节流**只有一个真源**：调用点那次 `sfx.play('bounce', ..., BOUNCE_THROTTLE)` 的返回值。`_vibrate_tick` 自己不许再判时间/计数，两边各判必然漂移(「听到响但手上没感觉」)。",
+  "`_vibrate` / `_vibrate_double` 必须**投递即返回**；真正的 JNI 调用只能在 `_vib_worker` 上跑(主线程上 `getSystemService` 本身就是一次 Binder 往返，而 `_vibrate_double(35)` 唯一的调用点是彩蛋的 settle 那一帧)。队列建不起来要**退回同步调用**，绝不静默失震。",
+  "`_vib_get` 必须用 `Context.VIBRATOR_SERVICE` **字符串**取服务 —— 传 `autoclass('android.os.Vibrator')` 的 Class 对象在 pyjnius 下匹配不到重载，会静默失败(「权限也给了、代码也跑了，就是不震」)。",
+  "`_gate_repair` 的三步都必须有上限：点名/重 load 扔后台、重建池每进程只一次(`_gate_rebuilt_once`)、而且**绝不重新合成资源**(合成的 2.2 秒纯 Python 抢解码线程正是 load 返回 0 的原因，重合成=再制造一次争抢)。",
+  "`_close_rtp_hidden` 里切回 360% 的那次 `set_rtp` 必须带 `silent=True` —— `voice_rtp_360` 与 `voice_rtp_hide_*` 同族，两条都走普通路径会被互斥静默挤掉一条，靠调用顺序兜底太脆。",
+  "`_easter_*` 分支播报**直接调 `sfx.play`**，不能走 `set_bet`/`set_rtp` 那类辅助函数 —— 本分支刚把 `_result_until` 设成 now+2.5，走辅助函数会自己把自己抑制掉。",
+  "`sound_mode` 是**故意不持久化**的：`_save_config` 会写它进 JSON，但 `_load_config` **不读**(每次启动恒为「音效已开」)；老存档里的 'voice'/'sfx' 旧值被自然忽略，不需要迁移代码。切换方向**两个都不播提示音**(避免安静场合误触出声)。",
+  "`voice_mode_off.wav` / `voice_mode_sfx.wav` **已从仓库删除**且不许加回来 —— 语音是按目录 `os.listdir` 全量加载的，文件在就会被加载(玩家要的是「也不加载」)，而没有任何地方会播它们。",
+  "`_bake_pcm` 必须在**并入语音之前**取 `len(self.bank)` 才是「合成音满编」；`_expected = _n_bank + len(_voice_files())` 两个分支口径必须一致(满编 = 合成音 + 语音，两个都是数据源)。",
+  "`Sfx._bake_named` 收尾那句 `time.sleep(0.5)` **不许退回「调大一点」**：既拖慢启动，又救不了已经返回 0 的那批(那是永久失败，`_retry_failed` 才是修法)。"
+ ],
+ "uncovered": [
+  "`_arm48_bench` / `_arm_pools_bench` / `_wav_write_sr` / `_resample16`(48k 与多池对拍档)只看了调用点与结论，没读实现 —— 属退休的实验代码，出货路径不经过。",
+  "`_startup_log_text` 的完整排版与「自动判定」逻辑没读；只知道它读 `_BOOT_LOG` / `_PROBE_TRACE` / `audio_detail()`。",
+  "`_probe_boost_thread()`(钉大核)只看到被 `probe_all` 调用，没读它选核的实现。",
+  "`_LoadVeil` 摘页的完整时序(与 `_total_ms` / `_no_audio_ms` / `_calc_no_audio_ms` 的结算)只读了 Sfx 这一侧，面板另一侧没穷尽。",
+  "61 条语音的实际时长分布没逐条量(只核对了条数与命名)，而语音互斥的精度依赖 `voice_duration` 对每条都取到真值；若某条 wav 头不是标准 44 字节，`(size-44)/(SR*2)` 会系统性偏一点。",
+  "`_play_events` 之外的 ev/amp 收集端(累加器循环、`_sim_flight`)没读 —— 本子系统只承担「事件 → 音效」的映射。",
+  "PC 端的 `--nosound` / `--demo` 具体怎么改 `SOUND_ENABLED`(22334-22336 只看到赋值)与 `--sfxtest`/`--dumpwav` 是否走同一套 bake，没有核实。",
+  "`_BENCH_HZ` / `_FRAME_BRK` / `_FRAME_FIT` 等跑分埋点与音频只共享 `_FRAME_PROBE`，其余没读(不属本子系统)。",
+  "`_SoundPoolOut.warm` 不存在这一点是按 `getattr(self.out,'warm',None)` 推断的，没逐个后端核过 `dir()`。"
+ ],
+ "notes": "盘点基于真读代码：E:\\\\AI_Tools\\\\other\\\\DanZhu\\\\android\\\\main.py 的 3487-7112 段，外加常量区 2848-2912 / 55-88、震动段 10567-11328、播报挂点 19738-20936、java/com/plinko/SoundGate.java、tools/generate_voice.py 与 voice/ 目录实盘清单。所有数值均取自文件原文。\n\n一句话骨架：`open_output()` 选后端(SoundPool > winmm > Kivy-SoundLoader > None，每一级失败都留原文) → `Sfx` 起烘焙线程，按 `mode` 分派 pcm(winmm 直接吃 PCM，gain 量化 10 档缓存缩放) 或 named(落盘 WAV + 按名播) → named 冷路径「边合成边原子写边 prime」，热路径按「指纹 + 逐文件字节数」验缓存 → 烘干后 `_await_ready()` 用「纯 Java 的 OnLoadCompleteListener 闸门优先、0 增益试播探针兜底、6 秒硬超时」确认「真的能播」才摘加载页 → 运行期 `play/impact/top` 过 enabled/语音互斥/已加载/gain/节流五道闸门后投递给发声工作线程(SoundPool 那条路主线程绝不等它)。\n\n三条最容易被重写丢掉的行为：\n1. **两端计数分离**：`gate_expected`(闸门满编) 与 `loaded_count()`(后端真握着几个 sid) 是两个数，面板专为抓「闸门满、后端缺」而存在；`backend_count()` 拿不到时必须返回 None，**绝不能退回 `len(self.named)`**(那正是它存在的理由被反噬：面板一片 97/97 假绿)。\n2. **返回值是契约**：`play() -> True/False` 表示「受理/被设计内闸门挡住」，后端没播成的信息只走 `_miss_play`/`_play_missed`/`n_missed` 三个计数；改语义会连锁弄坏震动。\n3. **分池规则按名字前缀、且只有一处**(`name.startswith('voice_')`)；同族清空只有一处(`_reset_pools`)；闸门读数的「相」只有一处(两池都满才算满)。\n\n另注：本文件里 `_bake_pcm` 认的 40 个合成音 + 61 条语音 = 101，与注释里的「101 个样本」自洽(CLAUDE.md 里写的 46 是 PC 版 plinko.py 的口径，含 flight)。"
+}

@@ -1,0 +1,682 @@
+{
+ "constants": [
+  {
+   "meaning": "画布逻辑坐标系（y 向下）",
+   "name": "CW / CH / WALL / FLOOR",
+   "value": "520 / 660 / 12 / 648"
+  },
+  {
+   "meaning": "右侧发射通道宽 / 通道隔墙厚 / 隔墙顶",
+   "name": "LANE_W / LANE_WALL_TH / LANE_WALL_TOP",
+   "value": "42 / 7 / 160"
+  },
+  {
+   "meaning": "场区左右边界与宽度",
+   "name": "RIGHT_INNER / LANE_L / FIELD_R / FIELD_L / FIELD_W",
+   "value": "508 / 466 / 459 / 12 / 447"
+  },
+  {
+   "meaning": "槽数 / 槽宽 / 槽高 / 槽顶 / 隔板宽 / 隔板顶",
+   "name": "NUM_SLOTS / SLOT_W / SLOT_H / SLOT_TOP / DIV_W / DIV_TOP",
+   "value": "9 / 49.667 / 32 / 616 / 6 / 606"
+  },
+  {
+   "meaning": "钉阵：首行 y / 行距 / 行数 / 钉半径 / 球碰撞半径 / 列距 / 深部错开比例 / 起始错开行",
+   "name": "PEG_TOP / PEG_SY / PEG_ROWS / PEG_R / BALL_R / PEG_SX / PEG_DEEP_SHIFT / PEG_DEEP_MIN_ROW",
+   "value": "150 / 55 / 7 / 6 / 9 / 49.667 / 0.30 / 3"
+  },
+  {
+   "meaning": "渲染半径系数（球=12.6px，弧面碰撞也用这个半径）",
+   "name": "BALL_VIEW / ARC_VISUAL",
+   "value": "1.4 / 1.4"
+  },
+  {
+   "meaning": "重力 / 通用矩形弹性 / 钉子高速 e / 低速 e / 侧碰 e / e(v) 过渡参考速度 / 墙 e",
+   "name": "G / E / E_FAST / E_SLOW / E_SIDE / E_VREF / WALL_E",
+   "value": "1000.0 / 0.20 / 0.40 / 0.70 / 0.20 / 700.0 / 0.5"
+  },
+  {
+   "meaning": "碰钉后向上速度上限（弹高 39px < 行距 55px） / 向下保底 / 反射横速上限 / 侧碰最小逃逸 / 比例保底 / 切向摩擦 / 法向摩擦 / 同钉再访横向逃逸",
+   "name": "PEG_BOUNCE_VY_MAX / _MIN / PEG_REFLECT_VX_MAX / PEG_MIN_ESCAPE / PEG_KEEP_VY / PEG_FRICTION / PEG_FRICTION_VY / PEG_CROWN_ESCAPE",
+   "value": "280 / 70 / 300 / 150 / 0.35 / 0.95 / 0.97 / 60"
+  },
+  {
+   "meaning": "速度上限 / 定步长 / 子步数",
+   "name": "VMAX / FIXED_DT / SUBSTEPS",
+   "value": "2400 / 1/60 / 6"
+  },
+  {
+   "meaning": "弧面缓动出口角（相对竖直向左）/ 缓动帧数",
+   "name": "ARC_OUT_ANGLE / ARC_EASE_FRAMES",
+   "value": "35.0 / 3"
+  },
+  {
+   "meaning": "发射速度区间（随 G=1000 回调，apex 57/17 不撞顶）",
+   "name": "LAUNCH_MIN / LAUNCH_MAX",
+   "value": "1077 / 1114"
+  },
+  {
+   "meaning": "哑火阈值 / 哑火速度区间 / 回柱塞弹性 / 停住阈值 / 兜底帧数 / 蓄力速度",
+   "name": "MISFIRE_POWER / MISFIRE_V_MIN / MISFIRE_V_MAX / MISFIRE_E / MISFIRE_BOUNCE_VY / MISFIRE_MAX_FRAMES / CHARGE_RATE",
+   "value": "0.15 / 475 / 935 / 0.22 / 200 / 180 / 0.9"
+  },
+  {
+   "meaning": "事件位：撞钉 / 天花板 / 墙 / 隔板 / 弧面（rail 静音位）",
+   "name": "EV_PEG / EV_CEIL / EV_WALL / EV_DIV / EV_ARC",
+   "value": "1 / 2 / 4 / 8 / 16"
+  },
+  {
+   "meaning": "新工程保留的 4 档（隐藏档 10/20/50 未接）",
+   "name": "RTP_TIERS",
+   "value": "0.80 / 1.20 / 2.00 / 3.60"
+  },
+  {
+   "meaning": "坏盘最多重抽次数 / 高倍率阈值 / RTP 断言容差",
+   "name": "MAX_REROLL / CEIL_THRESHOLD / RTP assert",
+   "value": "2 / 5 / 1e-9"
+  },
+  {
+   "meaning": "每盘有奖格数分布（三张表合起来决定中奖率）",
+   "name": "K_DIST",
+   "value": "0.80:{2:0.8507,3:0.1493} 1.20:{3:0.7761,4:0.2239} 2.00:{3:.25,4:.5,5:.25} 3.60:{6:.10,7:.70,8:.20}"
+  },
+  {
+   "meaning": "非 x2 部分的形状（x2 权重由 _solve_p2 反解）",
+   "name": "VALUE_SHAPE",
+   "value": "0.80/1.20:{3:.556,5:.289,10:.122,20:.033} 2.00/3.60:{3:.5,5:.27,10:.12,20:.06,50:.033,100:.017}"
+  },
+  {
+   "meaning": "落地回弹：弹簧刚度 / 阻尼 / 恢复系数 / 撞击保底 / 回弹上限 / 初速抖动 / 衰减抖动 / 横速上限 / 兜底超时",
+   "name": "LAND_K / LAND_DAMP / LAND_E / LAND_BOUNCE_MIN_VY / LAND_BOUNCE_MAX_VY / LAND_BOUNCE_JITTER / LAND_BOUNCE_DECAY_JITTER / LAND_ALIGN_VX_MAX / LAND_TIMEOUT",
+   "value": "16 / 0.80 / 0.42 / 440(撞击,回弹=440*0.42=185) / 220 / (0.85,1.15) / (0.92,1.08) / 800 / 0.5"
+  },
+  {
+   "meaning": "事件位→音效族；低于该法向速率不发声；增益参考速率；变体步长；每族变体上限",
+   "name": "EV_SFX / SFX_MIN_SP / SFX_REF_SP / _SFX_STEP / _SFX_NMAX",
+   "value": "peg/wall/div/top/rail; 45/60/70/45/0; 900/1300/700/700; 190/700/500/900; 5/1/1/1"
+  },
+  {
+   "meaning": "每族节流下限（秒），键是族名不是文件名",
+   "name": "THROTTLE",
+   "value": "peg .030 / wall .040 / div .040 / top .050 / ratchet .022 / bead .030 / win .080 / coin .060"
+  },
+  {
+   "meaning": "投注档 / 落袋后停留时长",
+   "name": "BETS / HOLD_SEC",
+   "value": "(1,10,50,100) / 0.6"
+  },
+  {
+   "meaning": "门禁：发数 / 随机种子 / 落袋步数预算 / 卡死判据（位移<=1px 的连续帧数）",
+   "name": "selftest N / SEED / MAX_STEPS / STALL_FRAMES",
+   "value": "1200 / 20260918 / 900 / 240"
+  },
+  {
+   "meaning": "门禁阈值：落格卡方上限 / 弧面接触率下限 / 首钉 x 跨度下限 / 弹高上限（=一行钉距）",
+   "name": "selftest 阈值",
+   "value": "chi2<=120 / >=0.99 / >=20px / apex<=PEG_SY=55"
+  },
+  {
+   "meaning": "阴性对照实测分辨力：不清 vx 时 30 帧漂移中位/最大（槽宽 49.7） / 好版 RTP 误差 / 坏版误差",
+   "name": "NC 实测数",
+   "value": "28.3px / 79.3px / 2.22e-15 / 9.33e-03"
+  },
+  {
+   "meaning": "行为对等版总预算（= 已落地 1404 + 补 ~1300~2200）",
+   "name": "阶段预算（docs/02）",
+   "value": "装杯演出 +400~640、语音 +120、震动与落地音共用节流 +40、SoundPool 后端 +150~450、横屏反旋转 +250、存档+防沉迷 +80、隐藏档四选一 +115、跑分/高压/曲线 +1200、诊断面板 +150、自适应字号 +340"
+  },
+  {
+   "meaning": "风险优先方案已落地下界的实测真代码（我复算一致）",
+   "name": "dz_slim_leftover 体量",
+   "value": "745 真代码 / 1277 总行（kernel.py 915 行 531 真代码、board.py 220/112、regression.py 142/102）"
+  },
+  {
+   "meaning": "老版运行时程序化合成 41 个音效的 bake 耗时（被离线渲染消除的那 2.5 秒）",
+   "name": "老版 bake 耗时",
+   "value": "2586ms（安卓冷启动 2.1~2.5s）"
+  },
+  {
+   "meaning": "老版语料：⚠️1886 处 / 必须 428 / 唯一 109 / 恒 85 / except Exception 420 处 / 模块级全大写常量 414 个（17 个全文只出现 1 次）",
+   "name": "老版注释血泪统计",
+   "value": "1866/428/109/85/420/414(17)"
+  }
+ ],
+ "features": [
+  {
+   "behavior": "22:49 时 new_danzhu 还是完整的 9 文件工程（主会话自己的 ls 有输出：main.py 1616 / README.md 2479 / selftest.py 7548 / danzhu 下 __init__ 296 + audio 3716 + board 20641 + rules 15205 + ui 13428 / docs 01..05 {3131,6776,5487,4783,4208} / tests/negative_control 4745 / tools/fetch_assets 2903 / assets/ + fonts/）；22:51 再读时目录为空。三个 SID 的回收站近 4 小时 0 条 ⇒ 不是资源管理器删除，是程序化 delete/move。12 个兄弟侦察代理转录里没有任何 Remove-Item/rm/Move-Item 命中（我 grep 过，命中项是我自己 probing 的思维文本）。我已用会话转录把整套源码逐字节恢复到 temp/_recover_new_danzhu/：18 个文件，47 个 Write/Edit 回放 0 冲突，大小与 22:49 磁盘清单逐一对上；恢复副本跑 selftest=全绿、negative_control=全绿，输出与 docs/04 记录逐行相同",
+   "id": "dir-deleted",
+   "kind": "silent-invariant",
+   "name": "【事实】new_danzhu 目录已被清空（非本工作流所为）",
+   "source": "主会话 722e4340-....jsonl + 兄弟代理日志；恢复物 E:/AI_Tools/other/DanZhu/temp/_recover_new_danzhu/",
+   "trigger": "任何后续步骤要读 new_danzhu/ 磁盘内容"
+  },
+  {
+   "behavior": "main.py(39)=入口 --selftest/--smoke/开窗；danzhu/board.py(393)=几何+物理纯 stdlib；danzhu/rules.py(313)=盘面配平+一局状态机；danzhu/ui.py(280)=唯一依赖 Kivy 的层；danzhu/audio.py(55)；selftest.py(175)；tests/negative_control.py(89)；tools/fetch_assets.py(60)；danzhu/__init__.py(0)。我用自己的 tokenize+ast 脚本复算：1819 总行 / 1404 真代码，与 README 声称完全一致",
+   "id": "mod-layout",
+   "kind": "player-visible",
+   "name": "工程形状：9 个文件 / 1,819 行 / 真代码 1,404（已复算）",
+   "source": "temp/_recover_new_danzhu/ 全部 .py",
+   "trigger": "读工程"
+  },
+  {
+   "behavior": "每帧拆 SUBSTEPS=6 子步：vy+=G*sub → 限速 VMAX → 位移 → 按固定顺序碰撞：墙（跳过地板那条矩形）→ 弧面（y 粗筛）→ 钉阵（逐行、行内 y 带粗筛且每次重读 b.y）→ 隔板",
+   "id": "phys-step",
+   "kind": "silent-invariant",
+   "name": "物理步进与碰撞顺序（对照老版一位不动）",
+   "source": "danzhu/board.py:415-458 physics_step",
+   "trigger": "advance_flight 每帧"
+  },
+  {
+   "behavior": "判据 b.y+BALL_R >= FLOOR-0.5 → b.y=FLOOR-BALL_R、b.vx=0（保留 vy）、返回 clamp(int((b.x-FIELD_L)/SLOT_W),0,8)。落袋后再推进 30 帧，槽号与球心 x 不许变（selftest 与 negative_control 各断言一次）",
+   "id": "phys-land",
+   "kind": "silent-invariant",
+   "name": "落袋即终态：只清 vx、保留 vy、贴地",
+   "source": "danzhu/board.py:448-457",
+   "trigger": "落袋那一子步"
+  },
+  {
+   "behavior": "walls 里 (0, FLOOR, CW, CH) 在 physics_step 里被 continue 跳过 —— 当墙撞会把落袋那一步弹成向上并让槽号返回 None",
+   "id": "phys-floor-boundary",
+   "kind": "silent-invariant",
+   "name": "地板是落袋边界不是墙",
+   "source": "danzhu/board.py:427-436",
+   "trigger": "每子步墙碰撞"
+  },
+  {
+   "behavior": "碰到弧面不当场反射：把方向在 3 帧内从竖直缓动到 ARC_OUT_ANGLE=35°（加一个按力度档采样的离散角偏）；出口速度=入射速度（弧面不耗能）；力度倍率 boost 只在第一接触帧乘一次；碰撞半径=视觉半径 BALL_R*1.4=12.6",
+   "id": "phys-arc-ease",
+   "kind": "player-visible",
+   "name": "弧面缓动带球转向（3 帧）",
+   "source": "danzhu/board.py:369-412 _collide_arc",
+   "trigger": "球上升撞击右壁口部弧形导轨"
+  },
+  {
+   "behavior": "10 个力度档 × 4 张表（弧角/弧 boost/天花板角/天花板 boost），每张是「离散值: 权重」表按权重采样。天花板旋钮**只在第一次撞顶时采样一次**（b.ceil_knob 缓存）；撞顶后 vy 保底 180",
+   "id": "phys-knobs",
+   "kind": "silent-invariant",
+   "name": "4 旋钮离散表（遗传算法输出，承重数据）",
+   "source": "danzhu/board.py:100-148 KNOB_* + _sample_table/_power_band + 349-364",
+   "trigger": "发射力度决定力度档；弧面接触帧/撞顶那一刻"
+  },
+  {
+   "behavior": "e(v)=E_SLOW-(E_SLOW-E_FAST)*clamp(vn/E_VREF)（侧碰走 E_SIDE）×±8% 随机；法线扰动 gauss(0,0.04) clamp ±0.15；向上 vy 限 -280；向下保底 max(70, 碰前 vy*0.35)；vx 限 300；侧碰 vy 保底 150；切向/法向摩擦 0.95/0.97；同钉再访（撞在钉顶）给 vy>=70 且 vx>=60 横向逃逸",
+   "id": "phys-pegs",
+   "kind": "silent-invariant",
+   "name": "碰钉 e(v) 恢复系数 + 全套限幅",
+   "source": "danzhu/board.py:266-326 _collide_pegs",
+   "trigger": "球心与钉距 < BALL_R+PEG_R"
+  },
+  {
+   "behavior": "power<MISFIRE_POWER=0.15 → launch_misfire：vy=-(475+460*clamp(power/0.15))，走 advance_misfire 一维升降（零碰撞、x 恒=PLUNGER_X），落回柱塞弹一下或停住 → 状态 landed；GUI 提示 力度不够, 球没飞出去",
+   "id": "phys-misfire",
+   "kind": "player-visible",
+   "name": "哑火",
+   "source": "danzhu/board.py:478-502 + rules.py:279-287",
+   "trigger": "松手时 power < 0.15"
+  },
+  {
+   "behavior": "u=power_u(power)，vy=-(LAUNCH_MIN+(LAUNCH_MAX-LAUNCH_MIN)*u)，球从 PLUNGER_X=487 / PLUNGER_Y=FLOOR-BALL_R-2=637 竖直上升",
+   "id": "phys-launch",
+   "kind": "player-visible",
+   "name": "发射（完全被动，零引导零预定槽）",
+   "source": "danzhu/board.py:466-475",
+   "trigger": "松手且 power>=0.15"
+  },
+  {
+   "behavior": "物理层写位并记该位本帧最大法向接近速率 b.amp[bit]；表现层每个物理步消费完立即清 events 与 amp（攒到渲染帧会让撞钉计数虚高，老版实测 35% 偏差）",
+   "id": "phys-events",
+   "kind": "silent-invariant",
+   "name": "事件位协议（逐物理帧消费）",
+   "source": "danzhu/board.py:93-94, _mark + rules.py:289-292",
+   "trigger": "每次碰撞"
+  },
+  {
+   "behavior": "7 行钉（偶数列在槽中心、奇数行在槽边界、第 3 行起深部右移 0.3 列）+ 贴墙钉两端 + y=570 那排隔板钉（8 颗，把落哪格推到最后一刻）+ 5 面墙（含地板矩形）+ 通道隔墙 + 弧面 11 段折线",
+   "id": "geo",
+   "kind": "silent-invariant",
+   "name": "盘面几何（形状就是玩法本身）",
+   "source": "danzhu/board.py:177-229 build_pegs/dividers/walls/deflectors/build_geo",
+   "trigger": "模块加载时 build_geo()"
+  },
+  {
+   "behavior": "_solve_p2 二分 200 次反解 x2 权重，使含坏盘重抽后的闭式期望精确=档位；模块顶层 assert |_effective_rtp(p2,rtp)-rtp|<1e-9（import 时就炸，不用等自测）；改 VALUE_SHAPE/K_DIST 任一个数会自动重配平",
+   "id": "rules-rtp-closed",
+   "kind": "silent-invariant",
+   "name": "RTP 闭式反解 + 顶层 assert",
+   "source": "danzhu/rules.py:61-111",
+   "trigger": "import danzhu.rules"
+  },
+  {
+   "behavior": "掷 k 格（K_DIST）填倍率（VALUE_DIST）；坏盘判据 n2*5>=k*4 or nh>=2（x2 占比>=80% 或 >=2 个 >=x5）必重抽，最多 MAX_REROLL=2 次共 3 盘，第三盘无条件收",
+   "id": "rules-board",
+   "kind": "player-visible",
+   "name": "盘面配平（4 档 + 坏盘重抽）",
+   "source": "danzhu/rules.py:114-127 roll_multipliers",
+   "trigger": "开局/回准备区/切档"
+  },
+  {
+   "behavior": "ready → charging（CHARGE_RATE=0.9/s 线性到 1.0）→ flying 或 misfire → landing（第一次触地即结算）→ landed（停 0.6s 回准备区）；GUI 与 selftest 共用同一个 Game（老版自测是手抄一份 GUI 循环，只测得到自己）",
+   "id": "rules-gamestate",
+   "kind": "player-visible",
+   "name": "一局状态机（GUI 与自测共用同一个）",
+   "source": "danzhu/rules.py:174-374 class Game",
+   "trigger": "start_charge/release/step/park_ball"
+  },
+  {
+   "behavior": "set_rtp 只在 state=='ready' 且档位在 RTP_TIERS 时生效，返回 bool；被拒时 GUI 不改高亮、不重建贴图，只提示 等这一发结束再切档",
+   "id": "rules-rtp-guard",
+   "kind": "silent-invariant",
+   "name": "切档守卫（非 ready 拒绝）",
+   "source": "danzhu/rules.py:207-218 + ui.py:261-269",
+   "trigger": "点档位按钮"
+  },
+  {
+   "behavior": "self.accum+=dt，while accum>=FIXED_DT 才推一个物理步；单帧最多 8 步，超出则 accum=0 并 break（防 帧慢→补更多步→更慢 的正反馈）。老版用的是 4，数值不同，换机器前值得对拍",
+   "id": "rules-accum",
+   "kind": "silent-invariant",
+   "name": "累加器 + 步数截断（steps>8）",
+   "source": "danzhu/rules.py:269-297",
+   "trigger": "flying/misfire/landing 每帧"
+  },
+  {
+   "behavior": "在落袋返回的那一物理步里立刻 settle_slot=slot、payout=bet*mult、balance+=payout（不等回弹落定），随后进 landing 继续播回弹；落袋即 break（继续跑会让结算时刻随帧率漂）",
+   "id": "rules-settle",
+   "kind": "silent-invariant",
+   "name": "落袋即结算（提前到第一次触地）",
+   "source": "danzhu/rules.py:302-318 _on_land",
+   "trigger": "physics_step 返回槽号"
+  },
+  {
+   "behavior": "每帧加回弹（LAND_BOUNCE_MIN_VY=440 保底撞击速度×LAND_E=0.42 得回弹、±15% 抖动、每次触地再 ×LAND_E×(0.92~1.08)）；同时横向弹簧把球拉向**结算格中心**（LAND_K=16/DAMP=0.8/上限 800）；触地 vy>60 出 bounce 音（gain=vy/500 clamp 0.3~1，与回弹同一次判定不另立节流）；|x-中心|<0.45 槽宽 且 |vy|<10 则停住，或超 LAND_TIMEOUT=0.5s 兜底停住；回弹上限 220（apex<=24px 不越隔板顶）",
+   "id": "rules-landing",
+   "kind": "player-visible",
+   "name": "落地弹跳 + 入槽对齐 + 兜底",
+   "source": "danzhu/rules.py:320-364 _step_landing",
+   "trigger": "state=='landing'"
+  },
+  {
+   "behavior": "重掷盘面（roll_multipliers）、球清空、state=ready，可发下一发",
+   "id": "rules-park",
+   "kind": "player-visible",
+   "name": "回准备区（park_ball）",
+   "source": "danzhu/rules.py:366-374",
+   "trigger": "landed 停满 HOLD_SEC=0.6"
+  },
+  {
+   "behavior": "save 写 path+'.tmp' 再 os.replace（写一半被杀不会留半个 JSON），异常吞掉；load 读 balance/bet/rtp，档位白名单从 RTP_TIERS 派生（不手抄第三份清单）",
+   "id": "rules-save",
+   "kind": "silent-invariant",
+   "name": "存档：原子替换 + 档位白名单",
+   "source": "danzhu/rules.py:377-399",
+   "trigger": "手动调用（尚未接入循环）"
+  },
+  {
+   "behavior": "EV_PEG→peg/wall/div/top/rail；低于 SFX_MIN_SP 不发；gain=clamp(sp/SFX_REF_SP, 0.3, 1)；变体号=int(sp/_SFX_STEP) 截到 _SFX_NMAX",
+   "id": "rules-sfxmap",
+   "kind": "silent-invariant",
+   "name": "事件位→音效名与增益的唯一映射口",
+   "source": "danzhu/rules.py:143-171",
+   "trigger": "Game.step 消费事件位"
+  },
+  {
+   "behavior": "family(name) 只对白名单 SFX_FAMILY=(peg,wall,div,top,ratchet,bead,win,coin) 合并（前缀匹配且剩余部分全为数字）；voice_* 不合并 ⇒ voice_rtp_200 与 320 各占一个闸门。写成 rstrip(0123456789) 会把两者合成一个键",
+   "id": "audio-family",
+   "kind": "silent-invariant",
+   "name": "节流键 = 白名单族名",
+   "source": "danzhu/audio.py:24-40",
+   "trigger": "Sfx.play"
+  },
+  {
+   "behavior": "每族节流下限（peg .030/ratchet .022/bead .030/top .050 等），同族内两个音共享一次节流；play 返回 True=请求已受理（不是后端播成了）",
+   "id": "audio-throttle",
+   "kind": "silent-invariant",
+   "name": "按族节流 + 返回语义",
+   "source": "danzhu/audio.py:62-80",
+   "trigger": "任何播音请求"
+  },
+  {
+   "behavior": "SoundLoader.load(assets/sfx/<name>.wav) 惰性缓存；s.volume=gain*master；win(mult) 按 mult 映射 win0..win6（mult<=0 播 lose）",
+   "id": "audio-play",
+   "kind": "player-visible",
+   "name": "播 wav + 音量 + 中奖音档位",
+   "source": "danzhu/audio.py:54-89",
+   "trigger": "启动/中奖"
+  },
+  {
+   "behavior": "整个工程唯一依赖 Kivy 的层：把 dt 喂进 Game、把事件画出来、把按钮意图转成 Game 调用；不含任何游戏判定",
+   "id": "ui-layer",
+   "kind": "player-visible",
+   "name": "Kivy 界面层（280 行，职责只有三件）",
+   "source": "danzhu/ui.py:1-7 文档串",
+   "trigger": "开窗"
+  },
+  {
+   "behavior": "每帧 self.canvas.clear() 后按 PushMatrix→Translate(ox,oy)→Scale(k) 重建：底、墙、钉、弧、槽、隔板、弹簧、球；k=min(w/CW,h/CH) 居中缩放，逻辑坐标恒为 520x660（y 向下）",
+   "id": "ui-redraw",
+   "kind": "player-visible",
+   "name": "每帧全清重建画布 + 缩放平移矩阵",
+   "source": "danzhu/ui.py:77-108 Board.redraw/_layout",
+   "trigger": "每帧 + 布局变化"
+  },
+  {
+   "behavior": "蓄力时弹簧高度 h=34*(1-0.55*power) 的 Z 字形折线；准备期球坐在弹簧上方 26px 处（柱塞隐喻）",
+   "id": "ui-spring-ball",
+   "kind": "player-visible",
+   "name": "Z 字弹簧（蓄力压缩）+ 准备期球位",
+   "source": "danzhu/ui.py:166-190",
+   "trigger": "charging / ready"
+  },
+  {
+   "behavior": "按住开始蓄力、松手发射；蓄力期按钮底色随 power 从 COL_FIRE 逐帧插值到 COL_FIRE_HOT，文字 蓄力 N%；非蓄力期由 _restyle 统一写底色（_restyle 是按钮底色的唯一取值口）",
+   "id": "ui-fire",
+   "kind": "player-visible",
+   "name": "按住蓄力键：逐帧变色 + 文本",
+   "source": "danzhu/ui.py:233-235, 278-291, 319-328",
+   "trigger": "on_press/on_release"
+  },
+  {
+   "behavior": "落袋后把结算槽亮绿灯（multipliers[i]>0 且 i==settle_slot）、其余亮红灯；停满 HOLD_SEC=0.6 后回准备区并全灭",
+   "id": "ui-lamps",
+   "kind": "player-visible",
+   "name": "槽位灯（绿=结算格，红=其余）",
+   "source": "danzhu/ui.py:160-164, 192-196, 300-315",
+   "trigger": "state=='landed'"
+  },
+  {
+   "behavior": "落袋后 命中 xN  +M / 未命中；切档被拒 等这一发结束再切档；余额不足/球还在飞；哑火 力度不够, 球没飞出去",
+   "id": "ui-hint",
+   "kind": "player-visible",
+   "name": "提示行文案",
+   "source": "danzhu/ui.py:237-239, 247, 259, 263",
+   "trigger": "各种状态"
+  },
+  {
+   "behavior": "余额 N      盘面 2 3 - 3 2 ...（有奖格显示倍率、空格显示 -）",
+   "id": "ui-hud",
+   "kind": "player-visible",
+   "name": "HUD 两行：余额 + 当前盘面",
+   "source": "danzhu/ui.py:317-318",
+   "trigger": "每帧"
+  },
+  {
+   "behavior": "投注 1/10/50/100 与返还率 80/120/200/360% 各一行按钮；选中态底色 COL_BTN、其余 COL_PANEL；切档被拒时高亮不动；投注只在 ready 生效",
+   "id": "ui-buttons",
+   "kind": "player-visible",
+   "name": "投注档 + 返还率档按钮",
+   "source": "danzhu/ui.py:214-228, 271-291",
+   "trigger": "点按钮"
+  },
+  {
+   "behavior": "倍率文字用 CoreLabel 预生成纹理（每种倍率一张，x%d 22px 粗体）；受击钉闪白**只在 state=='flying'** 显示（落袋后还亮着像第二颗球）",
+   "id": "ui-tex-flash",
+   "kind": "player-visible",
+   "name": "倍率贴图 + 受击钉闪白",
+   "source": "danzhu/ui.py:55-59, 83-89, 122-131",
+   "trigger": "重建盘面/碰撞"
+  },
+  {
+   "behavior": "注册 fonts/NotoSansSC-Medium.otf 覆盖 Roboto；不存在则回落系统字体",
+   "id": "ui-font",
+   "kind": "platform-glue",
+   "name": "中文字体注册",
+   "source": "danzhu/ui.py:26-29",
+   "trigger": "import"
+  },
+  {
+   "behavior": "落袋 1200/1200、卡死 0、步数 p50/p90/max=256/331/434；弧面接触率>=0.99；首钉 x 跨度>=20px；直方图无空槽且 chi2(8df)<=120；碰钉弹高 max<=PEG_SY(55)；落袋后 30 步槽号与球心 x 不变 0/300；哑火零泄漏；结算==落格倍率 0/30；飞行中切档被拒且盘面未变；节流族名 5 个互不撞键。我实跑恢复副本：PASS 全绿，输出与 docs/04 记录逐字相同",
+   "id": "gate-suite",
+   "kind": "dev-tool",
+   "name": "selftest.py 的 9 条门禁（已实跑复现）",
+   "source": "selftest.py:54-207",
+   "trigger": "python selftest.py（1200 发）"
+  },
+  {
+   "behavior": "NC1 不清 vx ⇒ 30 步漂移 30/30 局、中位 28.3px、最大 79.3px（槽宽 49.7）；NC2 去掉 ready 守卫 ⇒ 飞行中切档生效；NC3 换成 rstrip ⇒ voice_rtp_200/320 撞成同一个键；NC4 抬 2% 权重 ⇒ RTP 误差从 2.22e-15 变 9.33e-03。四条都必须红。我实跑恢复副本：PASS",
+   "id": "negative-control",
+   "kind": "dev-tool",
+   "name": "tests/negative_control.py 的 4 条阴性对照（已实跑复现）",
+   "source": "tests/negative_control.py:23-113",
+   "trigger": "python tests/negative_control.py（不需要 Kivy）"
+  },
+  {
+   "behavior": "老工程有、本工程没有：碰钉减速比 p50∈0.45~0.80、滞留帧<=30/发、行穿行>=0.15s、底部横向突增=0、悬念率>=35%、天花板<10%、撞钉音覆盖>90%。它们没有闭式解，是某个常数被顺手调一下时唯一的哨兵",
+   "id": "gate-missing-handfeel",
+   "kind": "silent-invariant",
+   "name": "【缺】手感哨兵（老版有，新版无）",
+   "source": "docs/03_不能弄丢的不变量.md 第四节 + docs/05 第 5 条",
+   "trigger": "待补"
+  },
+  {
+   "behavior": "老版那条只按公式算区间（它自己都承认真正的落地循环在 GUI 里，抖动被删掉照样全绿）；本工程的落地循环在 rules._step_landing，可以直接断言 apex>=10px 占比>=25%、>=20px>=5%、max<=45px",
+   "id": "gate-missing-bounce",
+   "kind": "silent-invariant",
+   "name": "【缺】落地弹跳的行为门禁",
+   "source": "docs/03 §4 + docs/05 §5；对照 temp/dz_slim_leftover/tests/regression.py R3 已经写好了这条",
+   "trigger": "待补"
+  },
+  {
+   "behavior": "现在只断言 有接触（接触率>=0.99），没断言 每发恰好 1 个接触 episode（老版 R5b 防二次接触：球蹭回弧面）",
+   "id": "gate-missing-arc-episode",
+   "kind": "silent-invariant",
+   "name": "【缺】弧面二次接触门禁",
+   "source": "docs/03 §4 + docs/05 §5",
+   "trigger": "待补"
+  },
+  {
+   "behavior": "老版在运行时用 700+ 行配方现场合成那 41 个音效（纯 Python 浮点循环，安卓冷启动 2.1~2.5s / 实测 bake 2586ms），围着它长出加载页、就绪闸门、缓存目录、指纹、原子写、整目录 wipe、12 轮后台重试。新版改成 assets 里 41 个离线渲染的 wav（确定性产物，一个采样都不改）",
+   "id": "drop-A-synth",
+   "kind": "player-visible",
+   "name": "【丢/A类】运行时程序化合成 41 个音效 + 其全部配套复杂度",
+   "source": "docs/02_丢掉什么.md A 表；对照老版 android/main.py:2918-3356、3495-3535、6866-6942",
+   "trigger": "冷启动"
+  },
+  {
+   "behavior": "长按标题 3 秒不再弹测试菜单（性能测试 / CPU 高压 / 帧率曲线 / 成绩历史 / 启动信息面板 / 日志导出）；一局都不受影响。老版对外只通过 3 个接触点连主流程（_bench_running 标志、play_win(auto_close=True)、_bench_dim 挂 canvas.after）",
+   "id": "drop-A-bench",
+   "kind": "player-visible",
+   "name": "【丢/A类】隐藏跑分工程整块",
+   "source": "docs/02 A 表；老版 RootWidget 内约 3,309 行 + 模块级约 1,620 行 = ~4,930 行",
+   "trigger": "长按标题 3 秒"
+  },
+  {
+   "behavior": "老版在加载期用 Java SoundGate 把触摸/播音挡到就绪（213 行 Java + ~170 行 Python）；新版不做加载页、不等就绪（产物随包走，问题不存在）。代价：老机器加载期多停 3~4 秒",
+   "id": "drop-A-gate",
+   "kind": "platform-glue",
+   "name": "【丢/A类】Java 就绪闸门 + 加载页扫色开场 + 双池/48k 实验残留",
+   "source": "docs/02 A 表；老版 3906-4040、6184-6489、java/com/plinko/SoundGate.java、21475-21720",
+   "trigger": "启动"
+  },
+  {
+   "behavior": "16:9 以上的平板横拿会被系统塞进 letterbox 半屏；手机锁竖屏零影响",
+   "id": "drop-A-rotate",
+   "kind": "platform-glue",
+   "name": "【丢/A类】横屏反旋转 + 旋转弹窗（+250 行预算）",
+   "source": "docs/02 A 表；老版 11436-11625，散布 20+ 处调用点",
+   "trigger": "横屏"
+  },
+  {
+   "behavior": "系统字体调到 1.3 倍时不再折行/溢出；代价是丢掉了 尊重系统字体设置 这条无障碍语义",
+   "id": "drop-A-font",
+   "kind": "player-visible",
+   "name": "【丢/A类】自适应字号机器（量宽度→挑档→重入闸，343 行 / 补 +340 行预算）",
+   "source": "docs/02 A 表；老版 13427-13643、20939-21076、10304-10468",
+   "trigger": "系统字号缩放"
+  },
+  {
+   "behavior": "长按返还率标签不再弹四选一。注意删它要连带改 8 处引用，漏一处就是 AttributeError（RTP_HIDDEN 在 _all_rtp() 里还被读，那是重掷盘面的唯一档位清单）",
+   "id": "drop-A-hiddenrtp",
+   "kind": "player-visible",
+   "name": "【丢/A类】隐藏返还率 1000/2000/5000%（补 +115 行预算）",
+   "source": "docs/02 A 表；老版 19812-19960",
+   "trigger": "长按返还率标签"
+  },
+  {
+   "behavior": "全文只出现 1 次、没有读者：PEG_GLANCE_UP:568、ALIGN_DAMP:611、ARC_EJECT_*:641-644、CEIL_VX_KEEP:645、FRAME_MS:585、COL_X50:844、COL_X100:845、HILITE:848、FONT:849、COL_BTN_HOVER:794、_PWR_UNIT:2153、_THERMAL_NAMES:2400、_BRK_KEYS:4505、FPS_CAP_MAX:5685 等 17 个",
+   "id": "drop-A-dead",
+   "kind": "silent-invariant",
+   "name": "【丢/A类】17 个死常量 + 每帧埋点 + 电池/频率/温度采样",
+   "source": "docs/02 A 表 + android/temp/dz_slim_spec/10_核验_3.md 第 1 节（AST 扫描复现）",
+   "trigger": "-"
+  },
+  {
+   "behavior": "老版 --selftest 的 n=40000 × 4 档蒙特卡洛第 (1) 段可以删（顶层 assert 做同一件事且严无穷倍）；但第 (1b) 段不能删 —— 它比的是每档多少次会中（_ref = {0.80:24.15, 1.20:35.67, 2.00:43.37, 3.60:78.52}），闭式里没有这个量。它抓到过真事故：2026-09-10 把 300% 改成 360% 时只改档位名、没动有奖格数，中奖率一动不动停在 65.6%",
+   "id": "drop-A-mc",
+   "kind": "dev-tool",
+   "name": "【丢/A类·有例外】--selftest 的 n=40000 粗网可以丢，但 (1b) 中奖率对照段不能丢",
+   "source": "docs/02 A 表注；老版 7126-7136 vs 2797-2798",
+   "trigger": "自测"
+  },
+  {
+   "behavior": "中奖只有大字 + 音效 + 槽灯，没有装球动画。这是本作唯一的奖励感来源，被点名为 阶段 2 第一优先（+400~640 行）",
+   "id": "drop-B-pile",
+   "kind": "player-visible",
+   "name": "【丢/B类】中奖玻璃杯装球演出（WinPileFX + pile3d，老版 1,324 行）",
+   "source": "docs/02 B 表；Android 侧老版 7712-10156",
+   "trigger": "中奖"
+  },
+  {
+   "behavior": "切档/中奖没有报数语音；语音 61 条 wav 已在 assets/voice/ 但没接（+120 行含全局互斥）",
+   "id": "drop-B-voice",
+   "kind": "player-visible",
+   "name": "【丢/B类】语音 61 条 + 全局互斥",
+   "source": "docs/02 B 表",
+   "trigger": "切档/中奖"
+  },
+  {
+   "behavior": "装杯时每颗球落地只有声音没有触感（+40 行，与落地音共用同一次节流）",
+   "id": "drop-B-vib",
+   "kind": "player-visible",
+   "name": "【丢/B类】震动",
+   "source": "docs/02 B 表",
+   "trigger": "装杯落球"
+  },
+  {
+   "behavior": "关掉游戏余额从初始值重来（+80 行）。注意：丢存档是丢功能；把落盘改回同步（落袋那一帧 open+json.dump）是引入卡顿。rules.save/load 已经写好但没接进循环",
+   "id": "drop-B-save",
+   "kind": "player-visible",
+   "name": "【丢/B类】存档 + 轮次/防沉迷",
+   "source": "docs/02 B 表；danzhu/rules.py:377-399 已实现",
+   "trigger": "启动/落袋"
+  },
+  {
+   "behavior": "设置弹窗少一项 60/90/120/144/165/185。这是玩家设置项不是开发工具，删它要单独决定",
+   "id": "drop-B-fps",
+   "kind": "player-visible",
+   "name": "【丢/B类】帧率档位设置（60/90/120/144/165/185）",
+   "source": "docs/02 B 表",
+   "trigger": "设置弹窗"
+  },
+  {
+   "behavior": "杯中前后半环亮度差回到 4.1:1；球堆从 像倒进去的 变成 整齐球阵（玻璃杯 4 张分层 png 已在 assets/glass/）",
+   "id": "drop-B-glass",
+   "kind": "player-visible",
+   "name": "【丢/B类】玻璃杯口环补画 + 两份球贴图",
+   "source": "docs/02 B 表",
+   "trigger": "装杯"
+  },
+  {
+   "behavior": "若保留隐藏档却删自适应字号，+500000 会比屏幕还宽（两者必须同进同出）",
+   "id": "drop-B-bigtext",
+   "kind": "player-visible",
+   "name": "【丢/B类】大字自适应字号",
+   "source": "docs/02 B 表",
+   "trigger": "中奖大字"
+  },
+  {
+   "behavior": "1 落袋即终态（只清 vx 保留 vy）→ 已实现且有断言。2 地板是落袋边界不是墙 → 已实现。3 揭晓与 mode 解耦 → 未接装杯，状态 N/A。4 result 段故意没有时间兜底 + _closing_at 唯一真源 → 未接，N/A。5 节流键是族名且按白名单 → 已实现且有断言。6 安卓后端必须是 SoundPool 不能是 Kivy SoundLoader → 未实现（现在是 SoundLoader）。7 加载页必须吞掉触摸 → 无加载页，N/A。8 存档原子替换 + 只保留最新一份 → save() 已实现（未接）。9 事件位逐物理帧消费 → 已实现",
+   "id": "drop-C-invariants",
+   "kind": "silent-invariant",
+   "name": "【丢不起来/C类】9 条不变量在新工程里的真实状态",
+   "source": "docs/02 C 表 + docs/03 第一节；逐条对照 danzhu/board.py、rules.py、audio.py",
+   "trigger": "每次改动这些路径"
+  },
+  {
+   "behavior": "老工程踩坑最多、重写最容易漏的一类（任何一处单独看都合规）：1 语音互斥×节流 → 谁都不念（静默）；2 set_rtp 守卫×盘面 → 高亮走了账按旧档；3 演出触发延迟 CUP_TRIGGER_DELAY(0.15) × 落袋停留 _land_hold 最小值(0.3) → 球已回弹簧杯子才浮出来；4 累加器截断×帧循环 → 帧慢补更多步的正反馈；5 点击受理路径×result 段无超时 → 永久软锁只能杀进程；6 发声离开主线程×闸门（SoundPool.play 单次可到 143.6ms）；7 余额冻结×揭晓时刻 → 数字先跳大字 0.4s 后才出来；8 落盘线程×落袋那一帧；9 事件位×物理帧（老版实测 35% 计数偏差）；10 voice_duration×互斥（时长读不到回落 0.15s ⇒ 互斥窗口塌掉 ⇒ 几句叠着念）",
+   "id": "crosspoints",
+   "kind": "silent-invariant",
+   "name": "只在两处代码交叉点上成立的 10 条（老版血泪，重写必查）",
+   "source": "docs/03_不能弄丢的不变量.md 第二节",
+   "trigger": "接回被丢的子系统时逐条复核"
+  },
+  {
+   "behavior": "game/kernel.py 63321 B（915 行 / 531 真代码）= 从 android/main.py 物理段机器化剥注释后的副本（含 MISFIRE_*、BENCH_SEED/BENCH_BOARD、MAX_FALL_SEC=4.0、STALL_RETRY_SEC=1.2、STALL_MAX_RETRY=10、LAND_HOLD=0.60、EV_*、SFX_MIN_SP、PEG_SPRINT 等）；game/board.py 13395 B（220 行/112 真代码）= RTP 盘面内核**含全部 7 档**（0.80/1.20/2.00/3.60/10.0/20.0/50.0 隐藏档）+ _reroll_dead + _line_color + _is_bad_board 单一真源；tests/regression.py 142 行/102 真代码 = R1~R8 八条回归断言，其中 R2（地板是边界）、R3（回弹 apex 三条）、R5b（每发恰好 1 个弧面 episode）、R8（落格无空槽无垄断）正是新工程承认缺的那三条门禁；合计 745 真代码/1277 总行 —— 与 android/temp/dz_slim_spec/10_核验_3.md 里 风险优先 自称下界 745、评审员实测 745 精确吻合（我复算一致）",
+   "id": "leftover",
+   "kind": "dev-tool",
+   "name": "dz_slim_leftover 是什么：风险优先方案的已落地下界（745 真代码）",
+   "source": "temp/dz_slim_leftover/{game/kernel.py, game/board.py, tests/regression.py}",
+   "trigger": "参考/取用"
+  },
+  {
+   "behavior": "原因（都是可核的事实）：1 它是**机器剥注释的老代码副本**，不是重写 —— 与 第一性原理重写 的前提冲突，且 kernel.py 根本没删结构；2 物理上撞车：同一批子代理被派到同一个输出目录 new_danzhu/，两套互不兼容的骨架并存在一起（老版 reviewer 的原话：两个骨架我都能跑），主代理 22:41 把 new_danzhu/game 与 new_danzhu/tests 整体 Move-Item 到 temp/dz_slim_leftover，并删掉 __pycache__；3 README/docs 只描述 danzhu/ 那一套，风险优先只剩 spec 文档（android/temp/dz_slim_spec/06_设计_风险优先.md）与这堆 leftover",
+   "id": "leftover-why",
+   "kind": "dev-tool",
+   "name": "dz_slim_leftover 为什么被弃",
+   "source": "主会话转录 849e4a66 @22:41 的 Move-Item 命令与输出；docs/05 第 6 条",
+   "trigger": "-"
+  },
+  {
+   "behavior": "assets/sfx 41 个 wav（bead0-2/bounce/cash/charge_full/click/coin/div0-1/error/flight/launch/lose/peg0-5/pocket/rail/ratchet0-5/ready/riser/top0-1/wall0-1/win0-6，数量核对=41）；assets/voice 61 条 voice_*.wav（android/voice 实数 61）；assets/glass 4 张分层 png（glass_tumbler{,_back,_front,_over}.png）；fonts/NotoSansSC-Medium.otf（android/fonts 实数 1）。合计 6.2 MB。导出脚本本体在 android/temp/_slim_assets.py（用 main.iter_bank() 离线渲染 + _wav_write），语音/贴图/字体直接拷贝",
+   "id": "assets",
+   "kind": "platform-glue",
+   "name": "assets/ 里已经有什么（素材已导出过，但目录随工程一起被删）",
+   "source": "android/temp/_slim_assets.py + assets 导出清单（主会话 ls 结果）",
+   "trigger": "重建工程时"
+  },
+  {
+   "behavior": "fetch_assets.py --sfx 走 os.system('python main.py --dumpwav')：老版 android/main.py **没有 --dumpwav 这个开关**（它只有 --nosound/--selftest/--smoke/--landscape），且读的是 android/sfx_wav（现在不存在）。即使存在，根目录 sfx_wav 里是 102 个 wav（41 音效 + 61 语音混在一起），把整目录拷进 assets/sfx 会把语音也塞进去。真正跑通的是 android/temp/_slim_assets.py",
+   "id": "fetch-assets-broken",
+   "kind": "dev-tool",
+   "name": "【坑】tools/fetch_assets.py 的 --sfx 分支是坏的",
+   "source": "temp/_recover_new_danzhu/tools/fetch_assets.py:23-40 + android/main.py:22335-22345 的 CLI 分支",
+   "trigger": "跑 python tools/fetch_assets.py --sfx"
+  },
+  {
+   "behavior": "docs/02 的 B 类把 落地弹跳的随机抖动 列为已丢，但最终代码里 rules.py 有 LAND_BOUNCE_JITTER=(0.85,1.15) 与 LAND_BOUNCE_DECAY_JITTER=(0.92,1.08)，也就是这条其实**没丢**（docs/02 成文早于最后一轮 Edit）。同理 docs/03 说的 待补门禁 里，回弹的完整性应重新核对",
+   "id": "doc-vs-code-drift",
+   "kind": "silent-invariant",
+   "name": "【不一致】docs/02 的 B 类里有一条与最终代码对不上",
+   "source": "docs/02 B 表 vs danzhu/rules.py:138-139",
+   "trigger": "按 docs 预算排期时"
+  },
+  {
+   "behavior": "新工程在规则侧只保留 4 档（RTP_TIERS），隐藏档 10.0/20.0/50.0 与 REROLL_DEAD/_reroll_dead 只在 leftover 的 game/board.py 里。隐藏档的数学：K_DIST={9:1.0} 必中 ⇒ 每格均值被恒等式钉死在档位（E[倍率]=rtp），x2 占比由 _solve_p2 反解（1000% 档 x2≈56%）；三档的坏盘判据恒真 ⇒ 重抽纯空转（_reroll_dead 直接只掷一遍，RTP 一分不变）",
+   "id": "hidden-tiers",
+   "kind": "player-visible",
+   "name": "界外：隐藏返还率三档的数学在 leftover 里是完整的",
+   "source": "temp/dz_slim_leftover/game/board.py:44-58, 76-82, 177-199",
+   "trigger": "要补隐藏档时"
+  }
+ ],
+ "gotchas": [
+  "最要命的一条是工程目录状态：new_danzhu/ 现在只剩一个兄弟代理的 scratch（tests/ 与若干 scratch_*.py），任何后续步骤直接读盘会全部落空 —— 用我恢复的 temp/_recover_new_danzhu/ 或先跑 temp/_recover_src.ps1 重放。",
+  "落袋即终态：physics_step 落袋处只能清 vx、不能清 vy（清 vy 会把落地弹跳整个抹平）；也不能把地板当墙（落袋那一步会被弹成向上、槽号返回 None 被调用方吞掉）。",
+  "碰撞里没有一步可以省：子步 6、碰撞顺序 墙→弧面→钉→隔板、钉阵行内 y 带粗筛但必须每次重读 b.y（缓存住就漏碰，静默错）、VMAX 限速在位移前。",
+  "碰钉限幅是互相咬合的：PEG_BOUNCE_VY_MAX 与 E_SLOW/E_FAST/PEG_KEEP_VY 必须同进同出（放开 e 不同步放开上限会变成死硬顶）；法线扰动幅度刻意小（gauss(0,0.04) clamp ±0.15），放大它会把侧碰横向分量一起放大 ⇒ 玩家报的 凭空横向移动。",
+  "4 张 KNOB_* 离散表不是装饰：换成 ±均匀角 + 均匀 boost 两参数连续采样实测 chi2 从 26 涨到 84，全置零涨到 125。数字一位不许改，改完必须跑 selftest 看 9 格是否仍铺满、chi2 是否不涨。",
+  "碰弧面必须缓动（3 帧，每帧约 +11.7°）而不是当场反射：改回一帧反射，约 39° 的突变横移就回来了（玩家投诉过 刚开始就突然横向移动）。",
+  "RTP 的 x2 权重必须由 _solve_p2 闭式反解、绝不手写：改 VALUE_SHAPE/K_DIST/坏盘判据任何一项都会自动重配平，顶层 assert 在 import 时就炸。坏盘判据只能有 _is_bad_board 一处真源（历史上两处互补写法，改一处忘另一处 ⇒ 解析 RTP 与实测分家）。",
+  "节流键必须是白名单族名（peg0..5→peg），不能写成 name.rstrip(\"0123456789\")：那会把 voice_rtp_200 与 voice_rtp_320 合成一个闸门 ⇒ 连点两个档位 掐旧+挡新 ⇒ 谁都不念，而且是静默的。",
+  "set_rtp 必须只在 state=='ready' 生效：非 ready 切档 = 按钮高亮跳到新档、这一发仍按旧档盘面赔付（玩家报 我明明切到 200%，中奖还是按 80% 算）。",
+  "落袋要 break：少了它球还会被继续模拟 0.6~1.3 秒，结算时刻随帧率漂；同时单帧步数必须截断（本工程>8 步清零，老版用 4，数值不同，换机器前值得对拍），否则 帧慢→补更多步→更慢 的正反馈。",
+  "事件位必须逐物理帧消费并清零：攒到渲染帧再消费会让撞钉计数虚高（老版实测 35% 偏差）。",
+  "SAVE/LOAD 的档位白名单必须从 RTP_TIERS 派生，不许手抄第三份清单；写盘必须 tmp+os.replace 原子替换（写一半被杀 ⇒ 半个 JSON ⇒ 读档炸），且不要把同步写盘放回落袋那一帧。",
+  "装配新的 Kivy 层时别碰已钉死的三处：_restyle 是按钮底色的唯一取值口（别处写必然和它漂移）；蓄力期由 _frame 逐帧写力度色；受击钉闪白只在 state=='flying' 显示（落袋后还亮着像第二颗球）。",
+  "安卓音频后端现在用的是 Kivy SoundLoader —— 正是老版明确要避开的降级后端（老版优先级 SoundPool > winmm > Kivy-SoundLoader > 静音；SoundPool.play 单次实测可到 143.6ms，所以那条工作线程只给这个后端开）。桌面完全测不出来，必须真机验。",
+  "PEG_SPRINT（570 排隔板钉冲刺 vx*=0.7 + vy>=160）被新版删掉了，这是**改了出货物理**：收益目前只有内部指标（卡方 26.2→20.5），没有玩家可感判据，推翻条件是 360% 档真机录屏看末段有没有贴隔板横滑。",
+  "落地弹跳门禁在老版是空转的：它只按公式算区间，真正的落地循环在 GUI 里，所以抖动被删掉它照样全绿；新版落地循环在 rules._step_landing，可以直接断言，必须补。",
+  "一份活不能派给两个共享输出目录的代理：本仓库为此把两套骨架挪到 temp/dz_slim_leftover/ 才算收场（以后派活要指定互斥的输出路径）。",
+  "主代理在 22:52 之后仍在往 new_danzhu/ 写东西（tests/ 目录），说明这个目录仍被当 scratch 用；要在这块地上重建工程，先确认目录归属，别和别的会话互相踩。",
+  "隐藏档（1000/2000/5000%）的坏盘判据恒真 ⇒ 重抽是死代码（_reroll_dead 直接只掷一遍）。补隐藏档时不要把这个优化当成 少算了一遍 RTP。"
+ ],
+ "notes": "【本子系统的结论：new_danzhu 磁盘内容已被清空，但我已逐字节恢复并实跑复现，下面每一条都基于恢复副本 + 实跑，不是读文档转述】恢复物：E:/AI_Tools/other/DanZhu/temp/_recover_new_danzhu/（18 文件，含 docs/01..05、danzhu 四模块、selftest.py、tests/negative_control.py、main.py、tools/fetch_assets.py）；回放脚本 temp/_recover_src.ps1（47 个 Write/Edit 按时间戳重放，0 处 old-not-found）；旁证 temp/_recon_newdanzhu_trace.txt（老会话里 new_danzhu 的完整操作轨迹）。实跑：python selftest.py = PASS 全绿（1200 发、卡死 0、chi2 24.5、弧面 1.0000、弹高 max 36.9px、落袋即终态 0/300）；python tests/negative_control.py = PASS（NC1 漂移 30/30 中位 28.3px、NC4 好 2.22e-15 坏 9.33e-03）。两份输出与 docs/04 记录逐行相同 ⇒ 恢复可信。老工程侧我没有动。\\n\\n一、已实现且可跑（真代码 1,404 / 总行 1,819 —— 我用 tokenize+ast 复算，与 README 完全一致）：物理内核（几何/钉阵/弧面缓动/落袋/发射/哑火/事件位）+ RTP 闭式配平 + 一局状态机 + Kivy 最小界面（蓄力/弹簧/球/槽/灯/提示/余额）+ 按族节流播 wav + 9 条不变量门禁 + 4 条阴性对照 + 素材导出脚本。真代码占比 10.8%，最大单块 board.py 393 行（老版 RootWidget 4,835 行）。\\n\\n二、它自己承认丢掉的功能（docs/02，三类）——A 类（真能丢，逐条行预算）：隐藏跑分工程 ~4,930 行（界面 3,309 + 模块级 1,620）、运行时合成 41 音效 + 缓存/指纹/原子写/12 轮重试 ~2,600 行、Java 就绪闸门 383 行（213 Java + 170 Python）、双池/48k/多池残留 ~300 行、加载页扫色开场、横屏反旋转 250 行、自适应字号 343 行、隐藏返还率 3 档 115 行、17 个死常量 + 埋点、--selftest 的 n=40000 粗网（但 (1b) 中奖率对照段不能删：它抓到过 2026-09-10 改档只改名没改有奖格数的事故）。B 类（丢了退化，玩家看得见）：装杯演出 1,324 行（+400~640 行补，第一优先，是本作唯一奖励感来源）、语音 61 条（+120）、震动（+40）、存档+防沉迷（+80）、玻璃杯口环补画/两份球贴图、帧率档位设置（玩家设置项，不是开发工具）、大字自适应字号（与隐藏档必须同进同出）。C 类（丢了出 bug）：9 条不变量，我逐条核了真实状态 —— 已实现 4 条（落袋即终态/地板是边界/节流族名/事件位逐物理帧）、已写代码未接 1 条（存档原子写）、未实现 1 条（SoundPool 后端）、N/A 3 条（揭晓与 mode 解耦、result 段无超时、加载页吞触摸 —— 这些子系统还没接）。另外 docs/03 单列了 10 条 只在两处代码交叉点上成立 的坑（语音互斥×节流、set_rtp 守卫×盘面、CUP_TRIGGER_DELAY×land_hold、累加器截断×帧循环、点击路径×result 无超时、发声线程×闸门、余额冻结×揭晓、落盘线程×落袋帧、事件位×物理帧、voice_duration×互斥）—— 接回任何被丢子系统时必须逐条重验。\\n\\n三、temp/dz_slim_leftover 是什么、为什么被弃：它是 风险优先 方案的**已落地下界 745 真代码行**（我复算与评审表里 我实测 745 精确吻合）：game/kernel.py（= 从 android/main.py 物理段机器剥注释的副本，63321 B）、game/board.py（RTP 盘面内核，**含全部 7 档 + 隐藏档 + _reroll_dead + _line_color**）、tests/regression.py（R1~R8 八条断言）。被弃的两个可核原因：① 它是剥注释的老代码副本而非重写，与新工程 第一性原理重写 的前提冲突；② 同一批子代理被派到同一个输出目录，两套互不兼容的骨架并存在 new_danzhu/ 里，主代理 22:41 用 Move-Item 把 game/ 与 tests/ 整体挪到 temp/dz_slim_leftover/ 并删 __pycache__。注意：**它的 tests/regression.py 有 4 条门禁恰好是新工程承认缺的那几条**（R2 地板是边界、R3 回弹 apex 三条、R5b 每发恰好 1 个弧面 episode、R8 落格无空槽无垄断），是可直接搬的净收益。\\n\\n四、复用判断（1:1 功能对等版）：可直接照搬 —— danzhu/board.py 的几何+物理（常数我已逐条对 android/main.py 核对一致：G/E/E_SLOW/E_FAST/E_VREF/PEG_*/ARC_*/LAUNCH_*/MISFIRE_*/VMAX/SUBSTEPS 等；唯一主动改动是删 PEG_SPRINT，标待核）；rules.py 的 RTP 闭式配平段（要扩到 7 档，leftover 的 game/board.py 已经写好）；selftest.py + negative_control.py 的门禁框架与 共用同一个 Game 的架构决策；android/temp/_slim_assets.py 的素材导出路径；leftover 的 tests/regression.py；docs/01~05（价值最高，尤其 02 的丢法清单与 03 的交叉点表）。必须重做 —— ui.py 整层（280 行这层对 1:1 等于不存在：装杯演出/大字/横屏/字号/隐藏档/跑分全没有）、audio.py 后端（SoundLoader 就是老版要避开的降级后端，要重做 SoundPool + 语音互斥 + 震动 + 发声离主线程）、存档/防沉迷接线、隐藏档、以及那 3 条待补门禁；tools/fetch_assets.py 的 --sfx 分支是坏的，不要照抄。行数锚点：已落地 1,404 + 补 ~1,300~2,200 = 行为对等 2,700~3,600 真代码（老版 12,998）。\\n\\n五、我这次没有做的事（避免过度声称）：没有逐行比对 board.py 与老版 physics 段（只核了常数表 + 结构 + 门禁结果）；没有打开 assets 里的 wav/png 核对内容（目录随工程被删；源目录 android/voice 61、android/assets 4、fonts 1 已核实存在）；没有把 dz_slim_spec 的 10 份设计文档读完（只读了 06 与 10 的开头）；没有查清 22:51 到底是谁删的目录（只能排除：不是本工作流的代理、不是回收站路径）。",
+ "subsystem": "new_danzhu（第一性原理精简重写工程）——已实现能力、9+4 条门禁、明确丢掉的功能、dz_slim_leftover 骨架、复用判断",
+ "uncovered": [
+  "22:51 的删除者未查明：只能排除 本工作流 12 个兄弟代理（转录里无删除命令命中）与回收站路径（三个 SID 近 4 小时 0 条）。兄弟代理仍在往该目录写 scratch（22:52-22:55 出现 scratch_mc_*.py 与 tests/golden），说明目录还被当 scratch 用。请主代理确认这块地的归属后再重建。",
+  "我没有逐行比对 danzhu/board.py 与老版 physics 段（android/main.py:496-1401）的实现细节，只核对了常数表、碰撞顺序、结构与门禁结果；若要 1:1 对等，建议再做一次逐行对拍（尤其 _collide_pegs 的 crown/逃逸分支与 _collide_rect 的天花板旋钮）。",
+  "docs/02 B 类把 落地弹跳的随机抖动 列为已丢，但最终 rules.py 里有 JITTER/DECAY_JITTER ⇒ 文档与代码有漂移；同一份文档里其它条目的行号来自老工程，我没有逐条打开验证。",
+  "dz_slim_leftover 只读了 board.py 全文 + kernel.py 头部 + regression.py 全文；kernel.py 其余 900 行（含 LAND_*、跑分残留、GUI 层残留？）没有读完，无法判断它还带出了多少可直接复用的东西（例如它的 landing 循环与 STALL 兜底）。",
+  "android/temp/dz_slim_spec/ 的 10 份设计文档我只读了 06（风险优先）与 10（核验 3）的开头；05/07（MVP 优先、产品优先）两份与 08/09 两份核验的结论没有提取 —— 那里面可能有 行为对等 的逐块预算与优先级，对 1:1 重写直接有用。",
+  "assets 的实际字节没有核对（目录已随工程被删）：41 音效 wav 是否与老版 iter_bank 输出逐字节一致、61 条语音的命名规则、玻璃杯 4 张分层图的分辨率，都只依赖脚本与清单，没有物证。",
+  "new_danzhu 的 ui.py 行为我只按代码读出来（弹簧/闪白/灯/文案/按钮），没有开窗截图比对；docs/04 记录的四张截图在 temp/shots/（22:28-22:29）是旧版 _slim_shot.py 产物，我没有重新跑一遍界面验收。"
+ ]
+}

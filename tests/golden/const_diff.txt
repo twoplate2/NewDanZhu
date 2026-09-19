@@ -1,0 +1,2 @@
+CONST  _FONT_PATH                 老 os.path.join(os.path.dirname(os.path.abs | 新 os.path.join(os.path.dirname(os.path.dirname
+CONST  _THERMAL_NAMES             老 ('无', '轻微', '中等', '严重', '危急', '紧急', '关机' | 新 ('无', '轻微', '中等', '严重', '临界', '紧急', '关机')

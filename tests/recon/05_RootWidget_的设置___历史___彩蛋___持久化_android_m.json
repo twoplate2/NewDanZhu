@@ -1,0 +1,582 @@
+{
+ "subsystem": "RootWidget 的设置 / 历史 / 彩蛋 / 持久化（android/main.py 13263-21435）",
+ "features": [
+  {
+   "id": "row-info",
+   "name": "信息行显示",
+   "kind": "player-visible",
+   "behavior": "一条 26dp 高的行, 左起: 14dp 空白 → 「弹珠：」(15sp 粗体, 宽按字量) → 余额数字(19sp 粗体, 金色 COL_BALL, 初始宽 80dp, 写的是 int(round(display_balance))) → 统计标签(15sp 粗体, 居中, size_hint_x=0.70, 文案 `累计%d投%d中(%.0f%%)`, 命中率 = 100*hits/plays, plays=0 时 0%)。所有文字都挂 _install_fit: 装不下时缩字号, 绝不折行。",
+   "trigger": "常驻; 余额在 _frame 每帧刷新, 统计在 _refresh_stats 时刷新",
+   "source": "13841 _build_ui / 13959-13978 / 19784 _refresh_stats / 21425 附近 _frame 写 balance_lbl",
+   "params": "H_INFO=26; 字号 15sp/19sp; stats size_hint_x=0.70"
+  },
+  {
+   "id": "row-bottom",
+   "name": "底行布局",
+   "kind": "player-visible",
+   "behavior": "一条 64dp 高的行: 12dp 空白 → 「重置」按钮(96dp 宽, 底色 COL_BTN_OFF + 描边) → 弹簧 0.95 → 力度标签(初始空串 ⇒ 宽 0) → 「蓄力发射」按钮(110dp 宽, 底色 COL_FIRE) → 弹簧 0.05。重置按下变 COL_BTN_LOCK, 松手回 _restyle_buttons 取值口(不是写死颜色)。",
+   "trigger": "常驻",
+   "source": "13983-14007",
+   "params": "H_BOTTOM=64; reset 96dp / fire 110dp / padding [6,4,12,4]"
+  },
+  {
+   "id": "bet-buttons",
+   "name": "投注档按钮",
+   "kind": "player-visible",
+   "behavior": "「每次投入弹珠：」标签 + 四个按钮 `1个/10个/50个/100个`(来自 PRESETS=[1,10,50,100], 文字是 str(v)+\"个\")。点击 → set_bet(v): 立刻改 self.bet、重排底色、刷新统计、播 click(throttle 0.08)、音效开时播 voice_bet_%d(throttle 0.6, 且 time>=_result_until 才播)、写盘 _save_config。选中的按钮底色 COL_BTN, 未选中 COL_BTN_OFF。",
+   "trigger": "点按钮; 启动时 __init__ 用 silent=True,click=False 恢复",
+   "source": "13945-13954 (建) / 19791 set_bet",
+   "params": "PRESETS=[1,10,50,100]; DEFAULT_BET=10; 初始宽 56dp, 运行期由 _apply_row_budget 反算并夹在 [34*us, 72*us]"
+  },
+  {
+   "id": "rtp-buttons",
+   "name": "返还率常驻档按钮",
+   "kind": "player-visible",
+   "behavior": "「期望返还比例：」标签(文字永不变) + 四个按钮 80%/120%/200%/360%(RTP_TIERS)。标签与按钮之间先插一个吃余量的 spacer Widget(_rtp_spacer, 新按钮靠它定位插到左边)。点击 → set_rtp(t)。切档时立刻 self.multipliers = self._boards[t] 并 game_area._redraw()。",
+   "trigger": "点按钮",
+   "source": "13896-13931 (建) / 20001 set_rtp / 19822 _add_rtp_button",
+   "params": "RTP_TIERS=(('80%',0.80),('120%',1.20),('200%',2.00),('360%',3.60)); 初始宽 56dp"
+  },
+  {
+   "id": "row-budget",
+   "name": "档位行宽度预算(增删按钮后重排)",
+   "kind": "silent-invariant",
+   "behavior": "档位按钮宽 = (行真实宽 - 标签宽 - 间距*(n+1))/n, 夹在 [dp(34)*us, dp(72)*us]; 标签宽按 text_px 算(不写死 115dp); 一排按钮共用一个字号(_fit_buttons_uniform, 度量 bold 取\"组里任一个粗体就按粗体量\")。每行的 width 只绑一次 _budget_bound 守卫的 _reflow_row_budget, 否则 observer 数量每变一次宽 ×4。",
+   "trigger": "_apply_sizes 时; 以及 _add_rtp_button / _remove_rtp_button 之后",
+   "source": "20983 _apply_row_budget / 19815 _reflow_row_budget",
+   "params": "上界 dp(72)*us, 下界 dp(34)*us; _TW_GROW_MAX=1.6"
+  },
+  {
+   "id": "rtp-hidden-hold",
+   "name": "隐藏返还率入口: 长按标签 3 秒",
+   "kind": "player-visible",
+   "behavior": "_on_title_touch_down 里若 title_lbl 没命中但 _rtp_title_lbl.collide_point 命中, 记 _rtp_hold_start=now 且 _rtp_hold_fired=False。每帧 _frame 调 _check_title_hold: now-start >= RTP_UNLOCK_HOLD(3.0s) 且未 fired ⇒ 置 fired 并调 _ask_unlock_rtp()。抬手(_on_title_touch_up)把 _rtp_hold_start 清零 = 取消。",
+   "trigger": "在「期望返还比例：」标签上按住 3 秒",
+   "source": "14218-14246 (_on_title_touch_down) / 14344 _check_title_hold / 14247 _on_title_touch_up",
+   "params": "RTP_UNLOCK_HOLD = 3.0 (原 5.0)"
+  },
+  {
+   "id": "rtp-hidden-popup",
+   "name": "隐藏返还率弹窗(每次长按都弹)",
+   "kind": "player-visible",
+   "behavior": "四个选项横排: 「关闭隐藏」 + 1000%/2000%/5000%(从 RTP_HIDDEN 生成, 不写死文字)。点击选项**只高亮不生效**(sel 变量), 点「确定」才生效(_confirm: sel is None → _close_rtp_hidden(), 否则 _unlock_rtp(sel))。默认选中当前档位: 当前是隐藏档 ⇒ 高亮它, 当前是常驻档 ⇒ 高亮「关闭隐藏」。点弹窗外部 on_dismiss 也能关(等于没生效)。",
+   "trigger": "长按 3s 后",
+   "source": "19906-19985 _ask_unlock_rtp",
+   "params": "RTP_HIDDEN=(('1000%',10.0),('2000%',20.0),('5000%',50.0)); 弹窗 _popup(0.98, 265); 选项行高 54dp, 字号 18sp; 提示行「（重启游戏后隐藏返还率失效，需重新激活）」"
+  },
+  {
+   "id": "rtp-hidden-guards",
+   "name": "隐藏返还率弹窗的两道守卫",
+   "kind": "silent-invariant",
+   "behavior": "① state != 'ready' 直接 return(装杯/飞行期不给开, 否则 Window 级触摸观察者能绕过模态弹窗, 造成\"切一半\"); ② _rtp_popup is not None 直接 return(防重入: 弹窗开着时再长按会叠出第二个)。解锁点只有一个: popup.bind(on_dismiss=lambda: self._rtp_popup = None)。",
+   "trigger": "每次 _ask_unlock_rtp 被调用",
+   "source": "19924-19930",
+   "params": "-"
+  },
+  {
+   "id": "rtp-hidden-apply",
+   "name": "应用隐藏档: 只留当前一个",
+   "kind": "player-visible",
+   "behavior": "_unlock_rtp(val): 先遍历 RTP_HIDDEN 把**其它**档的按钮摘掉, 若 val 不在 rtp_btns 里则补建它, 最后 set_rtp(val)。于是那排上永远最多挂一个隐藏档按钮。",
+   "trigger": "弹窗点「确定」且选了某个隐藏档",
+   "source": "19888 _unlock_rtp",
+   "params": "-"
+  },
+  {
+   "id": "rtp-hidden-close",
+   "name": "关闭隐藏档",
+   "kind": "player-visible",
+   "behavior": "_close_rtp_hidden(): 先判 was_hidden = 当前档是不是隐藏档(**必须在动任何东西之前判**); 然后摘掉**全部**隐藏档按钮; 若本来就 是常驻档 ⇒ 到此为止(不跳 360%); 若是隐藏档 ⇒ set_rtp(max(RTP_TIERS), silent=True) 回 360%, 并在音效开时播 voice_rtp_hide_%d(档位*100, throttle 0.6)。_boards 一个字不动。",
+   "trigger": "弹窗选「关闭隐藏」+ 确定",
+   "source": "19864 _close_rtp_hidden",
+   "params": "回落到 max(('80%',0.80),('120%',1.20),('200%',2.00),('360%',3.60)) = 3.60"
+  },
+  {
+   "id": "rtp-hidden-nopersist",
+   "name": "隐藏档不持久化",
+   "kind": "silent-invariant",
+   "behavior": "存档里 rtp_target 的读档白名单是 _regular_rtp() = 从 RTP_TIERS 派生(**只有常驻档**), 所以写盘时就算写着 50.0, 重开也读不回来 —— 隐藏档**结构上**进不了存档。同时\"有没有隐藏档\"的唯一真源是 rtp_btns 的键(冷启动重建界面时为空)。",
+   "trigger": "每次启动 _load_config",
+   "source": "20329 _regular_rtp / 20574 读档白名单",
+   "params": "-"
+  },
+  {
+   "id": "set-rtp-guard",
+   "name": "非 ready 不切档(守卫在函数最前)",
+   "kind": "silent-invariant",
+   "behavior": "set_rtp 第一行就是 `if self.state != 'ready': return` —— 连 rtp_target 都不许先写。否则档位高亮跳到新档而 9 个倍率槽还是旧档 = 这一发按旧档赔付、下一发 park_ball 才同步。",
+   "trigger": "任何切档调用(点按钮/解锁/关闭隐藏/启动恢复)",
+   "source": "20001-20029 set_rtp",
+   "params": "-"
+  },
+  {
+   "id": "reset-balance",
+   "name": "重置",
+   "kind": "player-visible",
+   "behavior": "强制中断 charging/flying/misfire/landing 回 ready; balance=display_balance=anim_target=anim_start=START_BEADS(1000); plays=hits=round_plays=0; _round_end_shown=False; 播 cash; 解锁输入; notify=True 时先清掉所有 toast 再 0.05s 后弹「弹珠数量已调整到1000个」(绿, 28sp, life 1.5) 并在音效开时播 voice_reset_progress(throttle 1.5); 最后 _save_config 写盘。",
+   "trigger": "点「重置」按钮; 轮次结束弹窗点确定(notify=False); 启动时上轮打满被 kill(auto_reset_on_start, notify=False)",
+   "source": "20031 reset_balance",
+   "params": "START_BEADS=1000; toast life=1.5, size=28"
+  },
+  {
+   "id": "round-settings",
+   "name": "每轮游戏次数设定弹窗",
+   "kind": "player-visible",
+   "behavior": "标题「每轮游戏次数设定」。上: 三个按钮 20次/50次/100次, 当前档高亮 COL_BTN; 中: 一个 ScrollView, 每行「第%d轮  每轮%d次  剩 %d 个弹珠」, 数据来自 round_history **倒序**(最近的在最上, 且序号从 1 重新数), 空时一行「暂无完成的轮次记录」; 所有行走 _fit_uniform 共用一个字号。下: 「确定」(只关窗, 不改档)。选档只调 _set_max_plays。",
+   "trigger": "点顶栏「每轮N次」按钮",
+   "source": "20792 _show_round_settings",
+   "params": "档位 (20,50,100); _popup(0.84, 500); 行高 26dp / 15sp; 最多显示最近 100 条"
+  },
+  {
+   "id": "set-max-plays",
+   "name": "切换每轮次数 = 全清重来",
+   "kind": "player-visible",
+   "behavior": "_set_max_plays(val): 与当前档相同直接 return; 否则 max_plays=val, 顶栏按钮文字改「每轮N次」, balance/display/anim 回 1000, plays=hits=round_plays=0, _round_end_shown=False, 刷新弹窗内高亮, 弹 toast「每轮已设定为N次」(绿, 20sp, life 1.5), 音效开时播 voice_round_set_%d, 写盘。",
+   "trigger": "在设定弹窗里点 20/50/100 次",
+   "source": "20859 _set_max_plays / 20792",
+   "params": "合法档 (20,50,100)"
+  },
+  {
+   "id": "round-end",
+   "name": "本轮游戏结束弹窗",
+   "kind": "player-visible",
+   "behavior": "_show_round_end() 幂等(_round_end_shown 守卫)。做四件事: ① 锁输入; ② round_history.append({plays:round_plays, balance:balance, time:time.time()}), 超过 100 条 pop(0), 立刻 _save_history; ③ 弹窗(标题「本轮游戏结束」, 正文四行「本轮游戏 %d 次已结束 / 剩余 [金]%d[/金] 个弹珠 / 弹珠数量已调整到1000个 / 欢迎你再次挑战」, 只有一个「确定」); ④ 播轮次结束语音。点确定 → reset_balance(notify=False) + dismiss(_done 防重复)。auto_dismiss=False, **没有超时自动关闭**。",
+   "trigger": "start_charge 时 round_plays >= max_plays; park_ball 时 round_plays >= max_plays 且未弹过",
+   "source": "20747 _show_round_end / 20073 (start_charge 里) / 20369 (park_ball 里)",
+   "params": "_popup(0.82, 320); 正文 18sp, h0 72dp"
+  },
+  {
+   "id": "round-end-voice",
+   "name": "轮次结束语音拼接",
+   "kind": "player-visible",
+   "behavior": "音效开: voices = ['voice_round_end_%d' % max_plays] + number_voice_names(balance) + ['voice_round_suffix'], 逐条按上一条时长+0.005s 的间隔 Clock.schedule_once 播放。音效关: 不念; **若调用方传了 on_done 才** 3.0s 后回调。返回总时长。",
+   "trigger": "_show_round_end 结尾",
+   "source": "20735 _play_round_end_voice / 20721 _play_voice_sequence / 11330 number_voice_names",
+   "params": "gap=0.005; 关音效时兜底 3.0s; voice_duration 查不到时回落 0.15s"
+  },
+  {
+   "id": "mute-toggle",
+   "name": "声音开关(两态循环, 无弹窗)",
+   "kind": "player-visible",
+   "behavior": "顶栏最左一个按钮, SOUND_MODES=('on','off') 循环。on → 文字「音效已开」、字色 #0e1524、底色 COL_GREEN; off → 「音效已关」、字色 #c0c8e4、底色 COL_MUTE_OFF。两个方向**都不播任何提示音**(voice_mode_off / voice_mode_sfx 两个 wav 已从仓库删除); off 时**立即** sfx.set_enabled(False), 没有 1 秒延迟。切换后 _restyle_buttons + _save_config。sound_mode **不持久化**, 每次启动恒为 on。",
+   "trigger": "点顶栏左侧按钮",
+   "source": "19740 SOUND_MODES / 19742 toggle_mute / 19769 _refresh_mute_btn / 13300-13302 (不持久化)",
+   "params": "按钮宽 dp(58)*us, 字号 13sp; SOUND_MODES 两态"
+  },
+  {
+   "id": "fps-cap-settings",
+   "name": "帧率上限设定弹窗",
+   "kind": "player-visible",
+   "behavior": "标题「帧率上限设定」+ 实时值「当前设定：%d Hz」(金色)+ Slider(min 0, max len-1, step 1) + 六档刻度标签 + 说明「实际帧率上限=min(屏幕支持,系统设定,本窗口设定)」(12sp 半角标点) + 「取消」「确定」。拖动只改本地 picked + 值标签, 点确定才 _set_fps_cap_setting(picked): 校验在 FPS_CAP_OPTIONS 里 → 写 self.fps_cap_setting、_FPS_USER_CAP[0]、调 _apply_fps_cap()、写盘, 并弹 toast「帧率上限已设为 %d Hz」(绿)。",
+   "trigger": "跑分菜单里点「帧率上限设定」; 也由 _frame 的启动恢复路径生效",
+   "source": "20646 _show_fps_cap_settings / 20629 _set_fps_cap_setting",
+   "params": "FPS_CAP_OPTIONS=(60,90,120,144,165,185); FPS_CAP_DEFAULT=120; _popup(0.96, 310)"
+  },
+  {
+   "id": "bench-history-table",
+   "name": "模拟测试历史表(渲染/CPU)",
+   "kind": "dev-tool",
+   "behavior": "标题「测试历史（渲染 / CPU）」(金色)。表头三列 _HIST_COLS=('时间','平均/1%Low帧','平均分/平均差系数'), 表头按自己文字宽度独立排版(不与数据列对齐)。数据行四格宽固定 (80,66,92,50)dp: 时间走 _hist_stamp(**去掉年份**, 格式 `%m-%d %H:%M`)、帧率 `%.1f/%.1f` 或 `—`、跑分 `%d/%.1f%%` 或 `%d/—`、第四格是「详情」按钮 → _show_bench_detail(r)。**排序 = 最近在前**(`reversed(bench_history[-100:])`)。行高 26dp, 全表统一字号(按各数据列能放下的最大字号取 min)。有记录时底部「清空历史」「关闭」, 无记录时只有「关闭」且上下加弹簧居中。宽度固定 0.96*_vw、高 0.7*_vh —— **高度不随记录数变**, 末尾**不调** _popup_fit_content。",
+   "trigger": "跑分菜单点「查看模拟历史」; 空态文案「暂无测试记录 / 长按标题 3 秒即可测试」",
+   "source": "19420 _show_bench_history / 4683 _HIST_COLS / 4639 _hist_stamp / 13568 _fit_w",
+   "params": "行高 26dp*_k; 行间距 2dp*_k; 表头行高 22dp*_k; 列宽 (80,66,92,50)dp × _k; 最多 100 条; 脚注 12sp「平均分：物理引擎每秒模拟步数的平均值 / 平均差系数：平均差 ÷ 平均值，越小越稳」"
+  },
+  {
+   "id": "bench-history-source",
+   "name": "模拟测试历史的数据来源与字段",
+   "kind": "dev-tool",
+   "behavior": "每条记录在跑分结束时 append, 超过 100 条 pop(0), 立刻 _save_bench_history 落盘。记录字段(能读回来的): time / version / device / render_fps / render_median / render_1low / render_10low / render_p99 / render_p90 / battery_start_c / battery_end_c / phys_runs / phys_fps / phys_fps_runs / phys_speed_runs / phys_alloc_runs / phys_norm / phys_speed_runs / phys_min / phys_max / phys_spread / phys_mad / phys_cpu_seconds / phys_freq_mean / phys_freq_p50 / sust_sec / sust_first / sust_last / sust_min / sust_decay_pct / sust_freq_p50 / sust_fps_windows / diag。旧记录缺字段时**印「—」或整块不出现, 绝不回填**。",
+   "trigger": "跑分(长按标题 3 秒 → 开始模拟测试)跑完",
+   "source": "16878 (append) / 16800-16879 (记录 dict)",
+   "params": "上限 100 条"
+  },
+  {
+   "id": "hp-history-table",
+   "name": "CPU 高压测试历史表",
+   "kind": "dev-tool",
+   "behavior": "与模拟测试历史**分两张表、两个文件**。标题「CPU高压测试历史」(金色)。表头三列 ('时间','平均值','平均差系数')。数据行四格 (110,58,62,58)dp: 时间、_hp_score(r)(**平均数**; 老记录拿 windows 现算, 不印 —)、mad(`%.2f%%` 或 —)、「详情」按钮。排序最近在前。空态: 上下弹簧 + 「暂无 CPU 高压测试记录 / 性能测试菜单里选「CPU高压测试」/ 连续高压测试 %d 秒即可产生一条」。同样固定高度、不调 _popup_fit_content。",
+   "trigger": "跑分菜单点「高压测试历史」",
+   "source": "18810 _show_hp_history / 4613 _hp_score / 1622 _mad_coef",
+   "params": "SOC_SUSTAIN_WALL_SEC=360.0; 弹窗 0.96*_vw × 0.7*_vh; 列宽 110/58/62/58 dp"
+  },
+  {
+   "id": "hp-history-record",
+   "name": "CPU 高压历史的落条与字段",
+   "kind": "dev-tool",
+   "behavior": "高压测试结束 append 一条, 超 100 条 pop(0), 落盘 plinko_hp_history.json。字段: time / mean / median(=旧口径, 不再显示但要留着) / spread / mad / first / last / min / decay / freq_mean / freq_p50 / freq_min / freq_max / freq_n / battery_* / power_* / volt_* / amp_* / wh / ppw / thermal / zones / sec / version / device / windows / freq_series / battery_series / power_series / battery_t / freq_pinned / norm / speed_runs。整段包在 try 里, 存不成不影响结果弹窗。",
+   "trigger": "高压测试跑完",
+   "source": "14996-15087 (append)",
+   "params": "上限 100 条"
+  },
+  {
+   "id": "history-detail",
+   "name": "两条历史的详情弹窗",
+   "kind": "dev-tool",
+   "behavior": "「详情」按钮 → _show_bench_detail(r) / _show_hp_detail(r)。高压详情正文复用**现场结果弹窗**的 _hp_result_text(不另写一套版式), 头一行只印「设备 + 时间」(版本号已删), opt_lines 传空(锁核/提优先级是运行时状态, 记录里没存 ⇒ 不印假值); 按记录里有哪些键决定建不建「成绩曲线」「频率曲线」「功率曲线」按钮(不足 2 个点就不建)。",
+   "trigger": "点历史表最后一列的「详情」",
+   "source": "19249 _show_hp_detail / 19358 _show_bench_detail",
+   "params": "高压详情窗 0.88*_vw × 0.62*_vh"
+  },
+  {
+   "id": "clear-history",
+   "name": "清空历史(二次确认, 只清一张表)",
+   "kind": "player-visible",
+   "behavior": "「清空历史」按钮只在**有记录**时才建(空表上不摆热区, 免得误触「关闭」旁的不可逆操作)。点击先弹确认窗(标题「清空模拟测试历史」/「清空高压测试历史」, 正文「将删除全部 %d 条…不可恢复。（另一张表不受影响）」, 「取消」「确定清空」)。确认后清内存列表 + _save_*_history 落盘 + 关闭旧面板 + **当场重开一次**看空态 + 状态栏写一行「…已清空」。",
+   "trigger": "历史面板底部「清空历史」",
+   "source": "19691 _clear_bench_history / 19010 _clear_hp_history / 19723 / 19042",
+   "params": "_popup(0.86, 260)"
+  },
+  {
+   "id": "persist-config",
+   "name": "设定存档 plinko_config.json",
+   "kind": "silent-invariant",
+   "behavior": "写盘键: max_plays / rtp_target / bet / balance / round_plays / plays / hits / fps_cap_setting / power_grain。写盘默认走**工作线程**(`_cfg_post(cfg, path)`, 建不起线程才同步写)。读档逐字段校验白名单: max_plays∈(20,50,100)、rtp_target∈_regular_rtp()、bet∈PRESETS、balance>=0、0<=round_plays<=max_plays、plays>=0、hits>=0、fps_cap_setting∈FPS_CAP_OPTIONS、power_grain∈POWER_GRAINS —— 任一项非法就**保持默认**, 不抛。sound_mode **不读也不写**。",
+   "trigger": "__init__ 里 _load_config; 写盘点见下一条",
+   "source": "20554 _config_path / 20565 _load_config / 20607 _save_config",
+   "params": "文件名 plinko_config.json; 路径 = Android user_data_dir, 桌面 tempfile.gettempdir()"
+  },
+  {
+   "id": "persist-when",
+   "name": "balance / round_plays / plays / hits 什么时候写盘",
+   "kind": "silent-invariant",
+   "behavior": "**只在 settle() 里**(正常结算与彩蛋结算各一次 —— 账务 balance/hits 在 settle 开头就落, 一分钱不挪: 中途被杀不能吞奖励)。另有 set_bet / set_rtp / reset_balance / toggle_mute / _set_fps_cap_setting / _set_max_plays / _reopen_curve 各自写一次。⚠️ launch() 里 ++plays/++round_plays 且扣 balance **不写盘** ⇒ 飞行途中被杀, 这一注不算数(退回上一存档态)。",
+   "trigger": "见行为",
+   "source": "20302 (正常 settle 尾) / 20165 (彩蛋 settle) / 19767 / 19801 / 20029 / 20060 / 20643 / 20882 / 19205",
+   "params": "-"
+  },
+  {
+   "id": "persist-round-history",
+   "name": "轮次历史 plinko_round_history.json",
+   "kind": "player-visible",
+   "behavior": "list, 每条 {plays, balance, time}, 只在 _show_round_end 里 append(每完成一轮一条), 超 100 条 pop(0), 立刻写盘。启动时 _load_history 读回(非 list 或读失败都静默忽略)。设置/轮次面板里倒序显示。",
+   "trigger": "轮次结束; 启动恢复",
+   "source": "20468 _history_path / 20479 _load_history / 20488 _save_history / 20760-20769",
+   "params": "上限 100 条"
+  },
+  {
+   "id": "persist-bench-hp",
+   "name": "两条跑分历史的持久化",
+   "kind": "dev-tool",
+   "behavior": "plinko_bench_history.json 与 plinko_hp_history.json, 同为 list、同目录、同样只留最后 100 条, 读失败静默忽略。三份历史各有独立 _xxx_history_path()(静态方法/普通方法), Android 都落 user_data_dir。",
+   "trigger": "启动 _load_*_history; 每条新记录后 _save_*_history",
+   "source": "20496-20553",
+   "params": "上限 100 条/份"
+  },
+  {
+   "id": "auto-reset-on-start",
+   "name": "防沉迷: 上轮打满被 kill 的启动重置",
+   "kind": "silent-invariant",
+   "behavior": "_load_config 末尾若发现读回的 round_plays >= max_plays, 置 _auto_reset_on_start=True(**不能当场重置** —— 那时 UI 还没建)。__init__ 在 _build_ui() 之后立刻 `if self._auto_reset_on_start: self.reset_balance(notify=False)` —— 静默(不弹 toast、不播语音), 但 reset_balance 会 _save_config 把盘上的 round_plays 清零。",
+   "trigger": "每次启动读档",
+   "source": "20601-20603 / 13348-13349",
+   "params": "-"
+  },
+  {
+   "id": "easter-trigger",
+   "name": "彩蛋: 球落回竖井",
+   "kind": "player-visible",
+   "behavior": "_frame 的 flying 落袋分支里若 `b.x > FIELD_R`(球落回**发射槽那一侧**) ⇒ 标 _easter_egg=True。settle() 开头见到这个标记就走彩蛋支路: balance += 2*bet(按 ×2 结算, 文案是「返还 %d 个弹珠」的**总返还** 2×bet)、plays 与 round_plays 各 -1(**不计一局**)、_refresh_stats、_vibrate_double(35)、_result_until = now+2.5、余额动画、_save_config、**不设 status_lbl**。",
+   "trigger": "发射后球没进倍率槽、落回右边竖井",
+   "source": "21371-21390 (标记) / 20151-20172 (settle 彩蛋支路)",
+   "params": "赔付 = 2 × bet; 震动 35"
+  },
+  {
+   "id": "easter-flow",
+   "name": "彩蛋演出与弹窗",
+   "kind": "player-visible",
+   "behavior": "① 跑分期间(或 win_fx 排不上) ⇒ 只走账务 + _land_hold=max(0.3, LAND_HOLD-0.5) 直接结束, **不播装杯不弹窗**; ② 正常路: 置 _easter_hold=True 锁住 park_ball, 先 play_win(2, bet, on_done=_on_easter_settled) 播装杯; ③ _on_easter_settled 轮询等 win_fx.mode=='idle'(每 0.2s 一次, **无上界**: 玩家不点就一直等), 期间若 _bench_running ⇒ 走 _easter_finish 解锁(绝不能只 return, 会软锁); ④ _show_easter_popup: 「弹珠返回发射槽」(28) + 正文「弹珠未落入倍率槽，已回到发射槽。/ 本局按 ×2 结算，返还 %d 个弹珠。」+「确定」(auto_dismiss=False), 音效开时播 voice_easter_%d 否则播 win1(0.6); ⑤ 关窗 on_dismiss → _easter_finish() 放行。",
+   "trigger": "彩蛋标记的 settle",
+   "source": "20374 _on_easter_settled / 20400 _show_easter_popup / 20458 _on_easter_closed / 20462 _easter_finish / 21346-21356 (land_target_x 修正)",
+   "params": "_popup(0.90, 280); title=\"\", separator_height=0; 轮询间隔 0.2s; 震动 35"
+  },
+  {
+   "id": "easter-hold-escape",
+   "name": "彩蛋锁的逃生口",
+   "kind": "silent-invariant",
+   "behavior": "_easter_hold 必须**在 __init__ 里初始化**(不能只放在 launch 里 —— 任何\"直接进 landed\"的路径都会在 _frame 的 landed 分支读到它而 AttributeError), 且 launch() 里每次发射都无条件清一次(防御性: reset_balance 能强制中断回 ready, 之后必须能再发出去)。",
+   "trigger": "每次 __init__ 与每次 launch",
+   "source": "13331-13332 / 20128-20131",
+   "params": "-"
+  },
+  {
+   "id": "key-return",
+   "name": "返回键拦截",
+   "kind": "platform-glue",
+   "behavior": "_on_key_down: key == 27 (Android 返回键 / ESC) ⇒ **return True**(吞掉, 阻止误触退出)。key == 32(空格)⇒ 按住蓄力(start_charge, _space_held 去重), return True。其它键 return False。",
+   "trigger": "Window.bind(on_key_down=...)",
+   "source": "14192-14201",
+   "params": "27 = 返回/ESC; 32 = 空格"
+  },
+  {
+   "id": "key-space-up",
+   "name": "空格松手发射(50ms 去抖)",
+   "kind": "player-visible",
+   "behavior": "_on_key_up: key==32 ⇒ _space_held=False; 若 state=='charging' 冻结松手瞬间的力度到 _release_power, 并 Clock.schedule_once(self._space_fire, 0.05); _space_fire 把那一下的 power 写回再 launch()。",
+   "trigger": "松开空格",
+   "source": "14202-14216",
+   "params": "去抖 0.05s"
+  },
+  {
+   "id": "title-touch-down",
+   "name": "_on_title_touch_down 的三个职责",
+   "kind": "silent-invariant",
+   "behavior": "Window 级触摸观察者, 每次按下都进。① 先 `_land_layer()._to_eq(*pos)` 把物理坐标逆旋转成等效竖屏坐标(横屏时关键); ② 调 `self.game_area.win_fx.request_close()` —— 若“我看够了”被受理(杯子装满且过了最短停留)**直接 return, 吞掉这一下**, 不启动任何长按计时(整段包 try/except, 因为 Window 事件派发不捕异常; 用裸 return 不用 return True); ③ 若 title_lbl.collide_point 且 not _bench_running ⇒ 记 _bench_start=now, _bench_triggered=False; ④ 若 _rtp_title_lbl.collide_point ⇒ 记 _rtp_hold_start=now, _rtp_hold_fired=False。**只记时刻, 不做计时器**(计时在 _check_title_hold 里逐帧查)。",
+   "trigger": "Window.bind(on_touch_down=...), 每次屏幕按下",
+   "source": "14218-14246",
+   "params": "-"
+  },
+  {
+   "id": "title-touch-up",
+   "name": "_on_title_touch_up: 取消长按 + 发射保底",
+   "kind": "silent-invariant",
+   "behavior": "① 无条件 `_bench_start = 0.0` 和 `_rtp_hold_start = 0.0`(抬手即取消长按); ② 发射保底: 若 state=='charging' **且 touch.uid == self._charge_uid** ⇒ 清 uid 并 launch()(滑出按钮导致 on_release 没触发时补发)。uid 由 on_touch_down 在发射键命中时记下(不能用 touch.grab_current, 实测读不到)。",
+   "trigger": "Window.bind(on_touch_up=...), 每次屏幕抬手",
+   "source": "14247-14258 / 14140-14169 (on_touch_down 记 uid)",
+   "params": "-"
+  },
+  {
+   "id": "title-hold-bench",
+   "name": "长按标题 3 秒 → 性能测试菜单",
+   "kind": "player-visible",
+   "behavior": "_check_title_hold(每帧在 _frame 开头调): `_bench_start > 0 且未 triggered 且 now - start >= 3.0` ⇒ triggered=True 并 _show_bench_menu()。菜单 6 个按钮两列三行: 开始模拟测试/查看模拟历史(红 COL_FIRE)、CPU高压测试/高压测试历史(琥珀 COL_SOC)、游戏信息/帧率上限设定(蓝 COL_BTN)——**同一行同色**; 上面一段说明文字(走 _bench_menu_desc(), 高度按真实排版 _auto_h)。",
+   "trigger": "标题上按住 3 秒",
+   "source": "14344-14352 / 15174 _show_bench_menu",
+   "params": "阈值硬编码 3.0s; _popup(0.92, 520); 按钮高 52dp"
+  },
+  {
+   "id": "input-lock",
+   "name": "输入锁(吞触摸)与置灰",
+   "kind": "silent-invariant",
+   "behavior": "_set_controls_enabled(bool): 不再逐个改 btn.disabled(Kivy 会为每个 Button 重排文字纹理, 12 个按钮一帧 12~21ms), 而是① 改 self._controls_enabled; ② _restyle_buttons 把身份色朝 COL_BG 混一档(dim_rgb, 保留\"选中了哪一档\"的信息); ③ 标题类 UILabel 走画布染色(_set_lbl_tint), 拿不到才退回写 .color。on_touch_down 在锁期间**整个吞掉**(return True), 但**不挡 on_touch_up**(发射键在按下时就 grab 了, launch 必须送达)。弹窗是 Window 直接子控件, 锁不住 —— 靠这个特性让彩蛋/轮次/设置弹窗照常可点。",
+   "trigger": "start_charge / launch / _show_round_end 等",
+   "source": "14094 _set_controls_enabled / 14140 on_touch_down / 14060 _restyle_buttons",
+   "params": "BTN_OFF_DIM 混色系数"
+  },
+  {
+   "id": "big-result-text",
+   "name": "中奖大字的 life 与字号规则",
+   "kind": "player-visible",
+   "behavior": "big_result_text(m, payout): 中奖 ⇒ text='+%d' % payout, 颜色 slot_color(m), size=sp(48); 未中 ⇒ '未中', COL_FIRE, sp(36)。三者都再过 fit_font_size(text, size, max(80, width*0.94), bold=True) —— 隐藏档 5000% 的 '+500000' 靠这一步才不被切。画两个 Label(main 彩色 + shadow 黑 0.6 alpha), 走 GlyphLabel 白字图集路线(烘不到就退回普通 Label)。life = **BIG_TEXT_LIFE = 1.8 秒**, 缩放靠 canvas 上的 GPU Scale(1.0→1.2→1.0, 绝不逐帧写 font_size), 且 PushMatrix/PopMatrix 必须成对(否则 Scale 泄漏给 HUD 五行)。纵向 cy: 中奖用 TEXT_CY_WIN(杯顶之上), 未中用 CH/2-80。",
+   "trigger": "settle 未中支路(立即) / 中奖走 _reveal_win(装杯落定那刻)",
+   "source": "12351-12434 / 8272 BIG_TEXT_LIFE",
+   "params": "BIG_TEXT_LIFE=1.8; sp(48) / sp(36); 可用宽 max(80, width*0.94); shadow alpha 0.6"
+  },
+  {
+   "id": "reveal-flow",
+   "name": "揭晓合流与兜底",
+   "kind": "silent-invariant",
+   "behavior": "中奖时账务立刻走, 但**大字/余额/语音全部推迟到\"最后一颗球落定\"那一刻**: 开 _anim_pending(余额冻结)、_reveal_done=False、_win_seq+=1、_pending_win=(m,payout)、_settle_cb=_on_settled; CUP_TRIGGER_DELAY(0.15s) 后才 play_win, 并把 _reveal_deadline = win_fx.reveal_at()+0.05(**必须先归零再调度**, 否则上一轮残留值会让兜底提前剧透)。_frame 每帧兜底: 未揭且到 deadline ⇒ 调**同一个** _settle_cb(绝不另写一份\"揭晓该做什么\")。_on_settled 用序号丢弃上一局的迟到回调。",
+   "trigger": "settle 中奖支路",
+   "source": "20202-20290 / 21408-21417",
+   "params": "CUP_TRIGGER_DELAY=0.15; REVEAL_DELAY=0.4; 兜底 +0.05; 统计刷新延后 0.20s"
+  },
+  {
+   "id": "launch-stats",
+   "name": "发射时的计数与扣注",
+   "kind": "silent-invariant",
+   "behavior": "launch(): 力度 < MISFIRE_POWER ⇒ 哑火(不扣珠、不计一局、不换盘面, 状态栏「力度不足,未扣弹珠」); 否则 balance -= bet、plays += 1、round_plays += 1(都不写盘)、_settled=False、_easter_egg=False、_easter_hold=False、弧面 arc_dy ±6px 随机平移后重建 geo['deflectors']、输入上锁、播 launch 音(音量按 power 从 0.60 线性到 0.80)。",
+   "trigger": "松手/超时",
+   "source": "20089-20150",
+   "params": "SFX_LAUNCH_GAIN 0.60 → MAX 0.80; arc_dy ±6.0"
+  },
+  {
+   "id": "charge-auto-fire",
+   "name": "蓄力 3 秒兜底自动发射",
+   "kind": "silent-invariant",
+   "behavior": "_frame 的 charging 分支: power = min(1.0, power + CHARGE_RATE*dt)(用真实 dt, 适配 30fps 设备); 若 now - _charge_start > 3.0 ⇒ 直接 launch() 并 return(防 on_release 丢失卡死)。同时按力度播棘轮音(_play_charge_sound), 满蓄力后每 CHARGE_HOLD_SEC(0.60s) 补一声 charge_full。",
+   "trigger": "蓄力中每帧",
+   "source": "21216-21225 / 20062 start_charge / 20900 _play_charge_sound",
+   "params": "3.0s 兜底; CHARGE_HOLD_SEC=0.60; CHARGE_HOLD_GAIN=0.40"
+  },
+  {
+   "id": "startup-info",
+   "name": "「游戏信息」弹窗(只读诊断)",
+   "kind": "dev-tool",
+   "behavior": "跑分菜单里点「游戏信息」→ _show_startup_info(): 标题 = _startup_title()(「跳跳的弹珠机 vX.Y.Z」, 版本号全工程只在这里出现), 正文 = self._build_info()(制作日期) + sfx.audio_detail() 逐行(每行自动撑高, 折行不裁切) + 一行每 0.5s 刷新的「温度/功耗」(读不到整行不出现)。底部「保存加载日志」(调 _save_startup_log, 结果写回按钮文字 3s)与「重放冷启动」。**纯只读, 不许放任何会动音频栈或游戏状态的按钮**。",
+   "trigger": "跑分菜单 → 游戏信息",
+   "source": "15327-15488 / 17985 _startup_log_text / 18132 _save_startup_log",
+   "params": "实时行刷新 0.5s; 正文 15sp; 结果文字回写 3.0s 后复原"
+  },
+  {
+   "id": "diag-exports",
+   "name": "诊断导出/曲线族",
+   "kind": "dev-tool",
+   "behavior": "跑分结果/历史详情里可打开的导出与曲线: _bench_frame_log(逐帧日志文本) / _copy_bench_log(复制到剪贴板, 失败必须说出来, 成功写「已复制 N 行」2s) / _bench_save_log(存 txt, prefix plinko_fps) / _power_log_text + _save_power_log + _on_save_power_click(功率原始采样导出, 含\"极值点游程\") / _show_fps_curve(帧率曲线, 可带 tags 阶段条, allow_save=False 时不建保存按钮) / _fps_curve_zoom / _reopen_curve(切粒度: 关掉当前弹窗重开, 参数在闭包里整捕获) / _show_hp_curve(成绩/频率/功率曲线) / _bench_diag_text / _bench_low_summary_text / _recalc_power_stats。",
+   "trigger": "跑分/高压结果面板与历史详情里的按钮",
+   "source": "17013 / 17848 / 18153 / 17878 / 18144 / 18354 / 18282 / 19185 / 19057 / 18465 / 18668 / 19211",
+   "params": "POWER_GRAINS=('每帧','每5秒'), POWER_GRAIN_K={'每帧':1,'每5秒':25}"
+  },
+  {
+   "id": "power-grain",
+   "name": "功率曲线粒度(保存的)",
+   "kind": "player-visible",
+   "behavior": "power_grain 会被 _reopen_curve 写进状态 + _save_config + **立刻** _recalc_power_stats(重算面板那三个数), 所以切到「每5秒」之后曲线与面板数值口径一致(玩家明确要求一致, 与\"曲线滤波/统计用原始\"那条相反的口径分离是另一码事)。",
+   "trigger": "在功率曲线弹窗里切粒度",
+   "source": "19185 _reopen_curve / 19211 _recalc_power_stats / 13310",
+   "params": "默认 '每帧'"
+  }
+ ],
+ "constants": [
+  {
+   "name": "START_BEADS",
+   "value": "1000",
+   "meaning": "初始/重置后的弹珠数, reset_balance 与 _set_max_plays 都回落到它"
+  },
+  {
+   "name": "DEFAULT_BET",
+   "value": "10",
+   "meaning": "默认每次投入, 借用主游戏 b1 段的值, 不另起名字"
+  },
+  {
+   "name": "PRESETS",
+   "value": "[1, 10, 50, 100]",
+   "meaning": "投注档按钮列表, 文案 str(v)+\"个\"; 也是 _load_config 的 bet 白名单"
+  },
+  {
+   "name": "RTP_TIERS",
+   "value": "(('80%',0.80),('120%',1.20),('200%',2.00),('360%',3.60))",
+   "meaning": "常驻返还率档(唯一真源, 可持久化的那批从它派生)"
+  },
+  {
+   "name": "RTP_HIDDEN",
+   "value": "(('1000%',10.0),('2000%',20.0),('5000%',50.0))",
+   "meaning": "彩蛋返还率档, 长按解锁, 不保存; 三档全部\"必中\"(K_DIST={9:1.0})"
+  },
+  {
+   "name": "RTP_UNLOCK_HOLD",
+   "value": "3.0",
+   "meaning": "长按「期望返还比例」触发隐藏档弹窗的秒数(5.0 → 3.0)"
+  },
+  {
+   "name": "FPS_CAP_OPTIONS",
+   "value": "(60, 90, 120, 144, 165, 185)",
+   "meaning": "帧率上限六档; 同时是 _set_fps_cap_setting / _load_config 的白名单"
+  },
+  {
+   "name": "FPS_CAP_DEFAULT",
+   "value": "120",
+   "meaning": "默认帧率上限; _FPS_USER_CAP[0] 初值"
+  },
+  {
+   "name": "POWER_GRAINS",
+   "value": "('每帧', '每5秒')",
+   "meaning": "功率曲线粒度档, power_grain 的读档白名单走它(派生, 不手抄)"
+  },
+  {
+   "name": "POWER_GRAIN_K",
+   "value": "{'每帧': 1, '每5秒': 25}",
+   "meaning": "粒度→平滑窗口长度(5Hz 采样下 25 格 = 5 秒)"
+  },
+  {
+   "name": "H_TOP / H_RTP / H_BETS / H_INFO / H_BOTTOM",
+   "value": "44 / 44 / 44 / 26 / 64",
+   "meaning": "五行固定行高(dp), _apply_sizes 时各乘 us"
+  },
+  {
+   "name": "BIG_TEXT_LIFE",
+   "value": "1.8",
+   "meaning": "中奖/未中大字的存活秒数"
+  },
+  {
+   "name": "LAND_HOLD",
+   "value": "0.60",
+   "meaning": "落袋后球停留展示时长; 实际用 max(0.3, LAND_HOLD-0.5)=0.3, 大奖用 0.7"
+  },
+  {
+   "name": "SOC_SUSTAIN_WALL_SEC",
+   "value": "360.0",
+   "meaning": "CPU 高压测试时长(秒), 也是高压历史空态文案里的那个数"
+  },
+  {
+   "name": "_TW_GROW_MAX",
+   "value": "1.6",
+   "meaning": "历史表在宽屏(等效竖屏宽>600dp)上等比放大的上限; 手机上恒为 1.0"
+  },
+  {
+   "name": "BENCH_SEED",
+   "value": "20260914",
+   "meaning": "跑分专用随机种子; 每发按 BENCH_SEED+1000+球号 派生独立流, 使球路可复现"
+  },
+  {
+   "name": "CHARGE_HOLD_SEC / CHARGE_HOLD_GAIN",
+   "value": "0.60 / 0.40",
+   "meaning": "满蓄力后提示音重复间隔与音量"
+  },
+  {
+   "name": "CUP_TRIGGER_DELAY",
+   "value": "0.15",
+   "meaning": "settle 到 play_win(装杯)之间的秒数; park_ball 抢不进来的前提是 _land_hold(最小0.3) > 它"
+  },
+  {
+   "name": "REVEAL_DELAY",
+   "value": "0.4",
+   "meaning": "装杯揭晓 = 最后一颗球第一次触地 + 0.4s(win_fx.reveal_at 的构成)"
+  },
+  {
+   "name": "SOUND_MODES",
+   "value": "('on', 'off')",
+   "meaning": "声音两态(原来三态, 中间\"不播语音\"档已删)"
+  },
+  {
+   "name": "sound_mode 持久化",
+   "value": "不持久化(恒为 on)",
+   "meaning": "不写进 plinko_config.json; voice_mode_off.wav / voice_mode_sfx.wav 两个文件已从仓库删除"
+  },
+  {
+   "name": "存档文件名",
+   "value": "plinko_config.json / plinko_round_history.json / plinko_bench_history.json / plinko_hp_history.json",
+   "meaning": "四份 JSON 同目录(Android=user_data_dir, 桌面=tempfile.gettempdir()), 除 config 外都只留最后 100 条"
+  }
+ ],
+ "gotchas": [
+  "隐藏档**绝不能进存档**: 读档白名单必须走 _regular_rtp()(从 RTP_TIERS 派生)。手抄一份档位清单 = v0.6.47 KeyError 闪退事故的同款形状。",
+  "隐藏档状态**只有一个真源** = rtp_btns 的键。曾经有过 _rtp_unlocked 标志, 只置真从不置假 ⇒ \"长按解锁过一次\"之后入口永久失效; 该标志已整个删除, 别再引入第二个状态源。",
+  "_ask_unlock_rtp 的两道守卫都不能删: `state != 'ready'`(弹出后能点确定, 造成\"切一半\")与 `_rtp_popup is not None`(Window 级触摸观察者拦不住模态弹窗, 会叠第二个)。以及唯一解锁点在 popup.on_dismiss。",
+  "_unlock_rtp 必须收参数: 曾写死 RTP_HIDDEN[0][1], 选 2000% 也会跳到 1000%。同理 _rtp_is_hidden 走 RTP_HIDDEN 判, 不手抄数字。",
+  "_remove_rtp_button 必须**两处一起改**(rtp_btns 字典 + _rtp_row.children): 只删字典 → 按钮还画着、照样能点; 只删 children → 下次 _unlock_rtp 见 val in rtp_btns 直接 return, 按钮永远加不回来。_rtp_spacer 是定位锚点,**绝不碰**。",
+  "set_rtp 的 `state != 'ready'` 守卫必须在**函数最前面** —— 连 rtp_target 都不能先写, 否则 _restyle_buttons 会照着新值上高亮, 就是\"切了一半\"。",
+  "隐藏档按钮 _fit_base **必须在建按钮时就算对**(sp(16)*_font_scale*_ui_scale): _apply_sizes 只给当时已存在的按钮写过它, 而隐藏档是运行期新建的; 不给就会退回裸 16.0 并被缓存成基准 ⇒ 那一个按钮字号与同排四个永远参差。",
+  "隐藏档按钮增删后**必须重跑 _apply_row_budget**: 新按钮宽写死 dp(56) 而常驻档是反算出来的(≈45dp), 一解锁整行右溢 61dp, 最右那个被推出屏幕(玩家报的\"几乎看不到\")。",
+  "_apply_row_budget 里给行宽 bind 回调**只能绑一次**(_budget_bound 守卫): 不守 → observer 数 21→85→341→1365, 转屏/分屏时整帧卡 1~4 秒, 且只增不减。",
+  "_save_config 只在 settle 里写 balance/hits/plays/round_plays —— 这条保证\"飞行途中被杀不吞奖励、也不多扣\"。把写盘挪到 launch 会破掉它。",
+  "launch() 里 ++plays/++round_plays **不写盘**: 中途被杀这一注不算数。要保留这个行为。",
+  "_easter_hold 必须在 __init__ 里初始化(任何\"直接进 landed\"的路径都会读它), 且 launch() 里每次无条件清一次作逃生口。",
+  "跑分期间彩蛋**必须走 _easter_finish 解锁**, 不能只 return —— 只 return 会让 _easter_hold 永远不放, 玩家被软锁死。",
+  "彩蛋那发的 land_target_x 必须是 PLUNGER_X(**不能**用槽中心): 竖井在隔墙右边, 按 x 算出的槽中心在墙左边, landing 循环没有墙体碰撞 ⇒ 球会被 LAND_K 弹簧拽穿隔墙嵌在墙里定格。",
+  "彩蛋 settle 里 plays/round_plays **各 -1**(不计一局), 与哑火一致。漏了会让每轮次数被彩蛋偷偷吃掉一次。",
+  "轮次结束弹窗**只有**「确定」一条出口(autodismiss=False, 无超时)。_play_round_end_voice 那个\"音效关时 3s 后回调 on_done\"的兜底分支目前是**死路**(唯一调用点不传 on_done); 1:1 复刻就照原样保留\"不自动关\"。",
+  "_show_round_end 幂等靠 _round_end_shown; reset_balance 与 _set_max_plays 都要把它清回 False, 否则下一轮打满不弹窗、玩家被卡在无法继续。",
+  "「每轮次数」换档 = **全清重来**(balance/plays/hits/round_plays 全归零)。这是玩家定稿, 不是 bug。",
+  "轮次历史表**倒序显示且序号从 1 重新数**(最近一条叫\"第1轮\")。",
+  "两张历史表**必须分开存**: 性能测试(峰值/帧率) plinko_bench_history.json, CPU 高压(衰减/频率) plinko_hp_history.json。挤一张表会互相污染(一半格子是 0/—)。",
+  "两张历史表的弹窗**固定高度 0.7*_vh**、末尾**绝不能调 _popup_fit_content** —— ScrollView 对 minimum_height 的贡献是 0, 一调就把列表压成 0 行。空态靠上下两根 size_hint_y=1 的弹簧居中, **不许把窗口收小**。",
+  "表头必须**独立排版**(不与数据列对齐)且**全表共用一个字号**: 字号要按**数据列宽**算, 按表头列宽算会把字号压到 5.88sp; 按表头文字算会把整表从 13.16sp 拖到 10.64sp; 逐列各缩会出现两种字号。",
+  "列宽元组里**第四项是按钮列**, 跑\"全表统一字号\"时要按 `len(_HIST_COLS)`(=3) 而不是 `len(_HW)`(=4), 否则 IndexError。",
+  "旧记录缺字段(phys_mad / render_10low / mean / power_*)一律印「—」或整行不出现, **绝不拿别的字段回填/返修**; 但 `_hp_score` 对老记录拿 windows **现算**是允许的(同一次测试的同一批样本, 原始数据还在)。",
+  "已经\"不再显示\"的字段(**phys_norm / phys_freq_mean / phys_spread / median / norm / version 在详情里**)照旧存进 JSON —— 删了会丢历史可比性。",
+  "历史表里的时间戳**盘上存完整 `%Y-%m-%d %H:%M`, 只显示去掉年份的 `%m-%d %H:%M`**(玩家来回改过五轮, 现在是 Omitting-year 版)。",
+  "「清空历史」按钮只在**有记录时**才建 —— 空表上摆它离「关闭」只有 8dp, 误触代价不可逆。确认后必须 _save_*_history **把盘上也清掉**, 否则重启又回来了。",
+  "sound_mode **不读档也不写档**; off 时 set_enabled(False) **立即生效**, 不许有 1 秒延迟(界面已写「音效已关」而声音还在响)。两个方向的切换音都不许播。",
+  "帧率档位设定必须走 `_set_fps_cap_setting`(校验白名单 + _FPS_USER_CAP[0] + _apply_fps_cap + 写盘), 不能只改 self.fps_cap_setting。",
+  "power_grain 被切时**必须当场 _recalc_power_stats**, 否则曲线用新粒度而面板那三个数还是旧的, 出现\"曲线最高 3.81、面板写 7.60\"的自相矛盾。",
+  "key 27(返回键/ESC)必须吞掉 return True, 否则安卓上误触直接退出游戏。",
+  "_on_title_touch_down 里那一下 `win_fx.request_close()` 命中后**必须直接 return 吞掉**, 不许继续往下启动标题/返还率的 长按计时; 且整段必须包 try/except(Window 派发不捕异常)。",
+  "_on_title_touch_up 的发射保底必须**用 uid 限定是按下发射键的那根手指** —— 裸判 state=='charging' 会让蓄力期间另一根手指蹭一下抬手就把球打出去(力度作废甚至哑火)。uid 要在 on_touch_down 用显式命中判定记录, 不能靠 touch.grab_current(实测读不到)。",
+  "中奖大字的 Scale 变换 PushMatrix/PopMatrix **必须成对**: 漏了 PopMatrix 会泄漏给之后画的 HUD 五行, 那两行被推出窗口\"凭空消失\"。",
+  "大字/余额/语音 **绝不能提前揭晓**: _anim_pending 为真时余额一帧都不许追平; _reveal_deadline 每次调度前**必须先归零**(上一轮的残留值会让兜底提前开火 = 剧透)。",
+  "兜底揭晓必须调**同一个** _settle_cb 闭包, 不能另写一份\"揭晓该做什么\"(历史上就是这么丢掉中奖音的)。",
+  "_show_round_end / reset_balance / _set_max_plays / toggle_mute / set_bet / set_rtp / _set_fps_cap_setting 都要写盘一次; 而 set_bet / set_rtp 在 __init__ 里恢复时要 `silent=True, click=False` **两个都关** —— 只关 silent 会发一声幽灵 click, 音频还没就绪 ⇒ 记一次\"后端没播成\"。",
+  "信息行/底行/顶栏的字号一律走 _fit1(装不下缩字号, **绝不折行**), 且 _fit1 的重入闸不能删(写 font_size → texture_size 变 → 回调回来 = 死循环)。"
+ ],
+ "uncovered": [
+  "17013 `_bench_frame_log` / 18153 `_bench_save_log` 的逐帧日志格式与文件命名细节只扫了头尾, 没逐行读完(它是纯导出文本, 与\"设置/历史\"交界但不含玩家可见行为)",
+  "18465 `_bench_diag_text` / 18668 `_bench_low_summary_text` 的内部逐行口径(卡顿帧定义、阶段分组)只读了注释开头",
+  "19057 `_show_hp_curve` / 18282 `_fps_curve_zoom` 的坐标轴、缩放、导出交互未展开(属曲线绘制, 更接近 WinPileFX/FpsCurve 那个子系统)",
+  "15174 `_show_bench_menu` 的说明文案 _bench_menu_desc() 与 15327 `_show_startup_info` 的音频体检行内容(audio_detail)未逐条抄",
+  "跑分主流程本身(_start_bench_test / _auto_launch_tick / _bench_done / _hp_done, 约 14400-15100 与 15600-16990)不在本次范围, 只在必须解释历史字段来源时旁读",
+  "`_build_info` / `_app_version` / `_device_info` / `_live_power_temp_line` 的实现未读(属设备信息采集)",
+  "LoadVeil / 重放冷启动(_replay_cold_start / _finish_replay_veil / _replay_cost_text)只在 _frame 里读到调用点, 未展开",
+  "持久化的那份 `_cfg_post` 工作线程实现(写出错时的重试/丢弃策略)未读"
+ ],
+ "notes": "范围以 class RootWidget 为界(13263-21571), 重点覆盖 13841-21435。本子系统没有任何\\\"声音设置弹窗\\\" —— 声音是一个两态按钮(顶栏最左, `音效已开`/`音效已关`), 切换静默、不持久化。真正带\\\"设置\\\"字样的弹窗只有三个: 隐藏返还率(0.98×265)、帧率上限设定(0.96×310)、每轮游戏次数设定(0.84×500), 全部从返还率行长按 3s 或跑分菜单进入。彩蛋(球落回竖井 → ×2 结算)的触发点是物理量 `b.x > FIELD_R`, 与任何按钮无关。历史一共三份表: 轮次历史(每轮一条)、模拟测试历史、CPU 高压历史; 前一份是玩家可见的\\\"最近完成的轮次\\\", 后两份是开发者面板。所有落盘都走四条路径 + 文件同名不同后缀, Android 落 user_data_dir、桌面落 tempfile.gettempdir()。防沉迷的实现只有两处: `round_plays >= max_plays` 时拦发射并弹轮次结束窗, 以及启动读档发现已打满就延后到 UI 建好后静默 reset_balance。本次盘点**没有实跑** android/main.py(环境是 win32, 无 Kivy/Android), 全部结论来自源码静态读取; 所有数值均逐条回查过源码行。"
+}

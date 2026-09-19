@@ -1,0 +1,505 @@
+{
+ "constants": [
+  {
+   "name": "FIXED_DT",
+   "value": "1.0/60.0",
+   "meaning": "物理固定步长(秒), 累加器的基本单位"
+  },
+  {
+   "name": "MAX_STEPS_PER_FRAME",
+   "value": "4",
+   "meaning": "单帧最多补几个物理步; _clamp_accum 的上限=4/60=0.0667s"
+  },
+  {
+   "name": "CHARGE_RATE",
+   "value": "0.9",
+   "meaning": "蓄力速度(每秒充满比例), 60Hz 下约 1.11s 满"
+  },
+  {
+   "name": "MISFIRE_POWER",
+   "value": "0.15",
+   "meaning": "哑火阈值: power 低于它球飞不出竖井"
+  },
+  {
+   "name": "MISFIRE_MAX_FRAMES",
+   "value": "180",
+   "meaning": "哑火兜底: 超过这么多物理步强制放回柱塞"
+  },
+  {
+   "name": "LAND_HOLD",
+   "value": "0.60",
+   "meaning": "落袋后球停留展示时长(基值); 实际用 0.7(大奖)/max(0.3, LAND_HOLD-0.5)=0.3"
+  },
+  {
+   "name": "LAND_K",
+   "value": "16.0",
+   "meaning": "landing 横向软吸附刚度(把球拉向 land_target_x)"
+  },
+  {
+   "name": "LAND_DAMP",
+   "value": "0.80",
+   "meaning": "landing 横向阻尼, 每个物理步乘一次"
+  },
+  {
+   "name": "LAND_E",
+   "value": "0.42",
+   "meaning": "落地恢复系数: 触地回弹 vy = -vy*LAND_E*±8%"
+  },
+  {
+   "name": "LAND_BOUNCE_MIN_VY",
+   "value": "440.0",
+   "meaning": "落地首帧的'撞击'速度保底(不是回弹速度), 再乘 LAND_BOUNCE_JITTER"
+  },
+  {
+   "name": "LAND_BOUNCE_MAX_VY",
+   "value": "220.0",
+   "meaning": "落地回弹 vy 上限; 顶到上限时再乘 JITTER 下半段防套路化"
+  },
+  {
+   "name": "LAND_BOUNCE_JITTER",
+   "value": "(0.85, 1.15)",
+   "meaning": "首帧撞击速度的随机系数"
+  },
+  {
+   "name": "LAND_BOUNCE_DECAY_JITTER",
+   "value": "(0.92, 1.08)",
+   "meaning": "每次触地回弹的 ±8% 随机"
+  },
+  {
+   "name": "ALIGN_VX_MAX",
+   "value": "800.0",
+   "meaning": "landing 横向弹簧输出 vx 的硬上限"
+  },
+  {
+   "name": "STALL_RETRY_SEC",
+   "value": "1.2",
+   "meaning": "位置不动超过它就沿法线向下踢一次"
+  },
+  {
+   "name": "MAX_FALL_SEC",
+   "value": "4.0",
+   "meaning": "位置不动超过它就按 x 强制算出物理槽结算"
+  },
+  {
+   "name": "STALL_MAX_RETRY",
+   "value": "10",
+   "meaning": "向下踢的次数上限, 到顶后只能走 4s 强制结算"
+  },
+  {
+   "name": "BIG_TEXT_LIFE",
+   "value": "1.8",
+   "meaning": "中奖/未中大字的总寿命(秒)"
+  },
+  {
+   "name": "BIG_TEXT_ALPHA_STEPS",
+   "value": "20",
+   "meaning": "拿着不到画布 Color 时 alpha 的量化档数(防每帧重光栅化)"
+  },
+  {
+   "name": "CUP_TRIGGER_DELAY",
+   "value": "0.15",
+   "meaning": "settle 到 play_win 装杯之间的延迟(账务留在 t=0)"
+  },
+  {
+   "name": "SFX_LAUNCH_GAIN / _MAX",
+   "value": "0.60 / 0.80",
+   "meaning": "正常发射音量的基准/满蓄力上限, 按 power_u 插值"
+  },
+  {
+   "name": "SFX_MISFIRE_GAIN / _MAX",
+   "value": "0.35 / 0.50",
+   "meaning": "哑火发射音量, 按 power/MISFIRE_POWER 插值"
+  },
+  {
+   "name": "CHARGE_HOLD_SEC / CHARGE_HOLD_GAIN",
+   "value": "0.60 / 0.40",
+   "meaning": "满蓄力后 charge_full 提示音的重复间隔与音量"
+  },
+  {
+   "name": "BTN_OFF_DIM",
+   "value": "0.55",
+   "meaning": "输入锁时按钮/标签保留的对比度(dim_rgb 系数)"
+  },
+  {
+   "name": "RTP_UNLOCK_HOLD",
+   "value": "3.0",
+   "meaning": "长按'期望返还比例'标签多久弹隐藏档窗口"
+  },
+  {
+   "name": "SFX_TOP_Y",
+   "value": "30.0",
+   "meaning": "低于此高度的撞墙/天花板事件不发声(交给 top 音)"
+  },
+  {
+   "name": "TEXT_CY_WIN",
+   "value": "150.0",
+   "meaning": "中奖时大字上移到的逻辑 cy(避让杯口)"
+  },
+  {
+   "name": "START_BEADS / DEFAULT_BET / PRESETS",
+   "value": "1000 / 10 / [1,10,50,100]",
+   "meaning": "初始弹珠数、默认投入、四档投注"
+  }
+ ],
+ "features": [
+  {
+   "id": "sm-ready-charging",
+   "name": "ready→charging(蓄力启动)",
+   "kind": "player-visible",
+   "behavior": "state 必须为 ready, 否则直接 return。余额<bet: 语音档播 voice_nomoney(节流3s), 否则播 error(0.4), 再 center_toast'弹珠数量不足'并 return(不进 charging)。round_plays>=max_plays 时调 _show_round_end()并 return。都通过才置 state=charging、power=0、立即 _set_controls_enabled(False)(防这窗口里点档位/投注)、_charge_start=now、_last_charge_sound=0、_charge_topped=False、状态栏'蓄力中'。",
+   "trigger": "发射键 on_press / 空格 key_down / 跑分 _auto_launch_tick",
+   "source": "20062-20087"
+  },
+  {
+   "id": "sm-charging-flying",
+   "name": "charging→flying(正常发射)",
+   "kind": "player-visible",
+   "behavior": "power>=MISFIRE_POWER 分支: frozen_power=power; balance-=bet; arc_dy=uniform(-6,6) 重建 geo['deflectors']; ball=launch_ball(frozen_power); _settled=False; _easter_egg=False; _easter_hold=False; state=flying; _accumulator=0; power=0; plays+1、round_plays+1; _crossed/_risen/_topped=False; _last_motion=now; _last_ball_xy=球位; 播 launch 音; _vibrate(14); 上输入锁; 状态栏'发射!'。",
+   "trigger": "发射键 on_release / 空格 50ms 去抖后 / 蓄力超 3s 兜底",
+   "source": "20089-20148"
+  },
+  {
+   "id": "sm-charging-misfire",
+   "name": "charging→misfire(哑火)",
+   "kind": "player-visible",
+   "behavior": "power<MISFIRE_POWER(0.15): 球仍弹出去(launch_misfire)但升不过隔墙; state=misfire; _accumulator=0; power=0; _misfire_frames=0; 不扣弹珠、不计一局、不换盘面; 发射音走 0.35+(0.50-0.35)*clamp(power/0.15); _vibrate(8); 上锁; 状态栏'力度不足,未扣弹珠'。",
+   "trigger": "发射键 on_release 且力度不足",
+   "source": "20093-20106"
+  },
+  {
+   "id": "sm-misfire-ready",
+   "name": "misfire→ready(哑火回落)",
+   "kind": "player-visible",
+   "behavior": "_frame 里按固定步长推进: 每个物理步 _misfire_frames+=1, 调 advance_misfire(b); 返回真或帧数>180 时把球强制放回 (PLUNGER_X,PLUNGER_Y) 并清零 vx/vy、播 bounce(0.55)、park_ball(reroll=False)(不重掷盘面、不白送新盘)、break。",
+   "trigger": "state==misfire 的 _frame 分支",
+   "source": "21324-21336"
+  },
+  {
+   "id": "sm-flying-landing",
+   "name": "flying→landing(落袋)",
+   "kind": "player-visible",
+   "behavior": "advance_flight 返回落袋, 或卡死兜底算出槽号。物理槽 i=clamp(int((b.x-FIELD_L)/SLOT_W))。b.x>FIELD_R 时置 _easter_egg=True 且 land_target_x=PLUNGER_X(彩蛋, 防弹簧把球拽穿隔墙), 否则 land_target_x=槽中心 FIELD_L+(i+0.5)*SLOT_W。记 _settle_slot、landed_at=now; state=landing; _accumulator=0; _landing_primed=True; b.vx=0(回弹改纯竖直); 若 not _settled 则 _settled=True 并**立即 settle(i)**(结算提前到第一次触地)。",
+   "trigger": "飞行物理步返回落袋 / 4s 卡死兜底",
+   "source": "21287-21321"
+  },
+  {
+   "id": "sm-landing-landed",
+   "name": "landing→landed(回弹落定)",
+   "kind": "player-visible",
+   "behavior": "首帧(_landing_primed): vy<LAND_BOUNCE_MIN_VY(440) 补到 440, 再乘 uniform(0.85,1.15)。之后每个物理步: vx+=(land_target_x-x)*16*FIXED_DT; vx*=0.8; vx 限幅 ±800; vy+=G*FIXED_DT; 积分 x/y。触地 y>=FLOOR-BALL_R: 贴地, vy>0 时播 bounce(音量 clamp(vy/500,0.3,1.0), 节流0.05)并 vy=-vy*0.42*uniform(0.92,1.08), 超过 220 时取上限再乘 uniform(0.85,1.0)。出状态两条: |x-target|<SLOT_W*0.45 且 |vy|<10 且贴地 → 清零; 或触地后 >=0.5s 超时 → 贴地清零。两者都 state=landed 并重置 landed_at。",
+   "trigger": "state==landing 的 _frame 分支",
+   "source": "21337-21379"
+  },
+  {
+   "id": "sm-landed-ready",
+   "name": "landed→ready(park_ball)",
+   "kind": "silent-invariant",
+   "behavior": "必须同时满足 now-landed_at>=_land_hold 且 not game_area.win_fx_busy() 且 not _easter_hold 才 park_ball()。_land_hold 在 settle 里定: 大奖(m>=10) 0.7, 普通 max(0.3, LAND_HOLD-0.5)=0.3。三条守卫分别挡住'杯子还在演'、'彩蛋弹窗+装杯整段'、'球还没停够'。",
+   "trigger": "state==landed 的 _frame 分支",
+   "source": "21380-21390"
+  },
+  {
+   "id": "sm-force-reset",
+   "name": "任意态→ready(强制重置)",
+   "kind": "player-visible",
+   "behavior": "reset_balance 里若 state ∈ {charging,flying,misfire,landing} 就直接改回 ready 并清 power(不回收已飞出的球、不撤装杯、不清 _easter_hold 之外的结算锁); 余额/display_balance/_anim_* 回到 START_BEADS, plays=hits=0, round_plays=0, _round_end_shown=False, 播 cash, _set_controls_enabled(True), 状态栏'已重置', 存盘。",
+   "trigger": "重置按钮 / 轮次结束弹窗的确定",
+   "source": "20031-20047"
+  },
+  {
+   "id": "accum-clamp",
+   "name": "累加器截断 _clamp_accum",
+   "kind": "silent-invariant",
+   "behavior": "_lim=MAX_STEPS_PER_FRAME*FIXED_DT≈0.0667s, 超过就返回 _lim。截断=故意丢掉那一帧的多余墙钟时间(球慢一瞬), 换掉'帧慢→补更多物理步→更慢'的正反馈; 绝不留着积压下帧再还(那会拖出一长串满步帧)。flying/misfire/landing 三个分支各自在 +=dt 之后立刻过它。",
+   "trigger": "每个非 charging 的物理分支每帧",
+   "source": "589-605"
+  },
+  {
+   "id": "accum-flight",
+   "name": "飞行循环: 逐物理步推进",
+   "kind": "silent-invariant",
+   "behavior": "while _accumulator>=FIXED_DT: 先减 FIXED_DT, 再 landed=advance_flight(b, geo); 每物理步把 b.events 或进 tick_ev、b.amp 逐位取最大值, 然后立刻 b.events=0 / b.amp.clear(); landed 非 None 就 break(落袋即终态, 剩余物理步不再推进这颗球, 否则结算时刻/槽位白闪/装杯/揭晓全部随帧率漂)。循环外才 _play_events(tick_ev, tick_amp, ball)。",
+   "trigger": "state==flying 的 _frame 分支每帧",
+   "source": "21228-21250"
+  },
+  {
+   "id": "charge-power",
+   "name": "蓄力累加 + 3 秒兜底自动发射",
+   "kind": "player-visible",
+   "behavior": "charging 分支每帧 power=min(1.0, power+CHARGE_RATE*dt)(用真实 dt 适配 30fps 设备); 若 now-_charge_start>3.0 则 launch() 并立刻 return(防 on_release 丢失把玩家卡死在蓄力); 否则调 _play_charge_sound(power); power<MISFIRE_POWER 时发射键底色=COL_FIRE 否则 COL_FIRE_HOT。",
+   "trigger": "state==charging 的 _frame 分支每帧",
+   "source": "21218-21225"
+  },
+  {
+   "id": "charge-sound",
+   "name": "蓄力音效分级(棘轮/满蓄力提示)",
+   "kind": "player-visible",
+   "behavior": "power>=1.0: 首次播 charge_full(默认 gain)并置 _charge_topped, 之后每 >=CHARGE_HOLD_SEC(0.6s) 重播 charge_full(0.40)。power<1: 距上次 >=0.25-0.18*power 秒就播 ratchet0..5(档位=int(clamp(power,0,1)*5.99))。_last_charge_sound 每次更新。",
+   "trigger": "charging 每帧",
+   "source": "20900-20915"
+  },
+  {
+   "id": "charge-meter",
+   "name": "力度条绘制",
+   "kind": "player-visible",
+   "behavior": "g.power>0.01 时填充矩形从槽底(SLOT_TOP-8)向上到 (SLOT_TOP-8)-power*200; power<MISFIRE_POWER 时填充色改 COL_FIRE(与静态哑火红线同色, 让玩家看见阈值), 否则 COL_METER。power<=0.01 时 size=(0,0) 隐藏。静态红线画在 (SLOT_TOP-8)-MISFIRE_POWER*200。",
+   "trigger": "tick_draw 每帧",
+   "source": "12585-12593"
+  },
+  {
+   "id": "charge-release-freeze",
+   "name": "松手冻结力度(键盘路径)",
+   "kind": "player-visible",
+   "behavior": "空格 key_up: _space_held=False; 若 state==charging 则 _release_power=power 并 Clock.schedule_once(_space_fire, 0.05) 去抖; _space_fire 先把 power 还原成冻结值再 launch()。触摸路径不走这条, 直接 launch。",
+   "trigger": "window on_key_up(key==32)",
+   "source": "14202-14216"
+  },
+  {
+   "id": "charge-uid-down",
+   "name": "按下发射键记手指 uid",
+   "kind": "silent-invariant",
+   "behavior": "on_touch_down 里: 输入锁关着(_controls_enabled=False)时整个函数直接 return True 吞掉这一下(注意只挡 down, 不挡 up)。解锁时若 state=='ready' 且坐标(先经 _land_layer()._to_eq 逆旋转)落在 fire_btn 内, 记 _charge_uid=touch.uid。用显式命中判定而不用 touch.grab_current(实测那条路读不到)。",
+   "trigger": "任何触摸按下",
+   "source": "14140-14168"
+  },
+  {
+   "id": "charge-uid-up",
+   "name": "抬手只认那根手指",
+   "kind": "silent-invariant",
+   "behavior": "Window 级 _on_title_touch_up 每次抬手都会进(屏幕上任何一根手指); 只有 state=='charging' 且 touch.uid==_charge_uid 才清 _charge_uid 并 launch() —— 否则蓄力期间另一根指头蹭一下再抬起球就飞了(力度作废甚至哑火)。同时 _bench_start=0、_rtp_hold_start=0 取消两处长按计时。",
+   "trigger": "window on_touch_up",
+   "source": "14247-14257"
+  },
+  {
+   "id": "launch-arc-jitter",
+   "name": "弧面 arc_dy 抖动",
+   "kind": "silent-invariant",
+   "behavior": "每发用 uniform(-6,6) 的垂直平移重建 geo['deflectors'](由 _base_deflectors 逐点加 arc_dy 得到), 让档内首钉散布 ±10~15px。跑分期间改用 random.Random(BENCH_SEED+1000+球号) 派生, 使球路逐帧可复现; 正常发射仍走全局 random(每球天然不同)。",
+   "trigger": "launch() 扣款之后",
+   "source": "20109-20127"
+  },
+  {
+   "id": "launch-gain-vibrate",
+   "name": "发射音量分级与震动",
+   "kind": "player-visible",
+   "behavior": "哑火: play('launch', 0.35+(0.50-0.35)*clamp(power/0.15,0,1)) + _vibrate(8); 正常: play('launch', 0.60+(0.80-0.60)*power_u(frozen_power)) + _vibrate(14)。power_u 把 [0.15,1.0] 归一化到 [0,1]。",
+   "trigger": "launch() 两条分支",
+   "source": "20101-20146"
+  },
+  {
+   "id": "flight-event-sound",
+   "name": "碰撞事件播放",
+   "kind": "player-visible",
+   "behavior": "_play_events 对 EV_PEG/EV_CEIL/EV_WALL/EV_DIV 调 sfx.impact(bit, 本帧该位最大振幅); 但 EV_WALL/EV_CEIL 且 b.y<SFX_TOP_Y(30) 时跳过(那一下交给 top 音, 不叠)。EV_ARC 播 rail 0.18(节流 0.05, 弧面接触的轻'擦'声)。impact 内 EV_PEG 按速率选 peg0..5、音量 0.30~1.0、节流 0.08(机关枪连击只响第一声)。",
+   "trigger": "飞行循环收完本帧事件后",
+   "source": "20885-20898"
+  },
+  {
+   "id": "flight-rise-top",
+   "name": "冲顶三标记与状态栏分档",
+   "kind": "player-visible",
+   "behavior": "一次性标记: _crossed(越过 FIELD_R 且 y<LANE_WALL_TOP)、_risen(其后 y>RISER_Y 时播 riser 0.9)、_topped(_crossed 后首次 vy>=0 时播 sfx.top(y), 音量按转向高度)。状态栏按球高: y>SLOT_TOP-40 → '即将入袋…'; y>PEG_TOP(150) → '弹跳中…'; 否则 '入场中…'。三个标记 launch 时重置。",
+   "trigger": "state==flying 每帧",
+   "source": "21251-21264"
+  },
+  {
+   "id": "flight-stall",
+   "name": "卡死兜底(看位移不看速度)",
+   "kind": "silent-invariant",
+   "behavior": "每帧比较 _last_ball_xy: 位移>1.0 就刷新 _last_motion; 静默超 STALL_RETRY_SEC(1.2s) 且 _stall_retry<10 时沿接触法线切向(b.last_nx/last_ny 的切线, 强制向下)给 120px/s 的踢, _stall_retry+1, 并重置 _crossed/_risen/_topped; 静默超 MAX_FALL_SEC(4.0s) 则按 x 直接算出物理槽当落袋处理。判据必须用位移: 卡死球的速度和微碰撞从未停过, 位置不说谎。",
+   "trigger": "飞行循环退出后 landed is None",
+   "source": "21265-21286"
+  },
+  {
+   "id": "settle-core",
+   "name": "settle 账务与即时反馈",
+   "kind": "player-visible",
+   "behavior": "m=multipliers[i]; payout=bet*m; balance+=payout; m>0 时 hits+1; _refresh_stats 用 Clock.schedule_once 推迟 0.20s(落袋帧太挤, 写文字=重排字形纹理)。投中指示灯: m<=0 用 COL_FIRE, 否则 COL_GREEN(固定语义, 不按倍率取色); set_lamp(i,lamp) + pulse_slot(i) 白闪; 播 pocket, m<=0 再播 lose 0.9。_land_hold = 0.7(m>=10) 或 max(0.3, LAND_HOLD-0.5); _anim_dur = 1.2/0.5。最后 _result_until=now+2.5(+装杯预期时长) 并 _save_config。",
+   "trigger": "flying 第一次触地且 not _settled",
+   "source": "20181-20202"
+  },
+  {
+   "id": "settle-reveal",
+   "name": "中奖揭晓合流 + 装杯排程",
+   "kind": "player-visible",
+   "behavior": "m>0 时: 状态栏'命中 x%d · 结算中'; _anim_pending=True(冻结余额); _win_seq+1; _reveal_done=False; _pending_win=(m,payout); 定义闭包 _on_settled(检查 _reveal_done 与 seq 幂等, 通过则 _reveal_win + _play_win_voice)并存进 _settle_cb; _reveal_deadline 先归零; Clock.schedule_once(_start_cup, CUP_TRIGGER_DELAY=0.15), _start_cup 调 win_fx.play_win(m, bet, on_done=_on_settled, auto_close=跑分中); 排不上就直接 _on_settled(); 之后 _reveal_deadline = win_fx.reveal_at()+0.05。震动按倍率分档 45/75/110/150/220/300ms。",
+   "trigger": "settle 里 m>0",
+   "source": "20203-20287"
+  },
+  {
+   "id": "settle-lose",
+   "name": "未中路径(不播装杯)",
+   "kind": "player-visible",
+   "behavior": "m<=0: 状态栏'未中'; 立刻 game_area.big_result_text(m,payout); _anim_pending=False; _reveal_done=True; _pending_win=None; 重置 _anim_* 与 _coin_* 为 0(无滚分)。",
+   "trigger": "settle 里 m<=0",
+   "source": "20288-20299"
+  },
+  {
+   "id": "settle-easter",
+   "name": "彩蛋(球落回竖井) ×2 结算",
+   "kind": "player-visible",
+   "behavior": "settle 开头查 _easter_egg: 置回 False, balance += 2*bet, plays-1 与 round_plays-1(不计一局, 与哑火一致), _refresh_stats, _vibrate_double(35), _result_until=now+2.5, 存盘。跑分中只把 _land_hold 压到 0.3 就 return(不表演不弹窗); 否则置 _easter_hold=True 并 win_fx.play_win(2, bet, on_done=_on_easter_settled), 排不上直接调回调。装杯播完 → _on_easter_settled 轮询等 win_fx 回 idle 后 _show_easter_popup(弹窗关掉才解 _easter_hold)。",
+   "trigger": "settle 且 _easter_egg 为真",
+   "source": "20152-20180"
+  },
+  {
+   "id": "reveal-fallback",
+   "name": "揭晓兜底(共用闭包)",
+   "kind": "silent-invariant",
+   "behavior": "_frame 里若 (not _reveal_done and _pending_win and _settle_cb and _reveal_deadline and now>=_reveal_deadline) 就调 _settle_cb()。兜底与主路径共用同一个闭包和同一套 _reveal_done/_win_seq 幂等闸, 所以可以安全赛跑、不会双响; 另写一份'揭晓该做什么'会造成补了数字没补声音。",
+   "trigger": "每帧(杯子卡住/tick 停摆时才会命中)",
+   "source": "21408-21417"
+  },
+  {
+   "id": "balance-anim",
+   "name": "余额揭晓门与滚分伴音",
+   "kind": "player-visible",
+   "behavior": "_anim_pending 为真时 display_balance 冻结在扣注后的值(一帧都不追平, 防剧透), 否则 display_balance=balance; 余额文字只在真变时写(_set_label_text) —— 每帧写会重测字形+重光栅化+重建纹理, 实测占 _frame 单块最大开销。_coin_start~_coin_until 窗口内每帧播 coin(0.8, 节流 0.055) 作滚分伴音, 起点=揭晓时刻+0.35s 让开语音起句。",
+   "trigger": "_frame 每帧",
+   "source": "21393-21418"
+  },
+  {
+   "id": "slot-lamp",
+   "name": "投中指示灯 + 槽位白闪",
+   "kind": "player-visible",
+   "behavior": "set_lamp(i,hex) 原地改第 i 个 _lamp_cols(9 个灯的 Color 指令); lamps_off() 全部刷回 COL_LAMP_OFF。灯在 park_ball 重掷时经 _update_slots() 熄灭(否则会每局点亮一格、从不熄灭)。flash: pulse_slot(i) 置 _pulse=(i, now+0.30); tick_draw 里未到期把该槽颜色写白 (1,1,1), 到期后恢复 slot_color(g.multipliers[i]) 并清 _pulse; _update_slots 和 _redraw 都把 _pulse 置 None(重掷后白闪作废)。",
+   "trigger": "settle / 重掷 / tick_draw",
+   "source": "12505-12511"
+  },
+  {
+   "id": "slot-lamp-pulse",
+   "name": "槽位白闪计时",
+   "kind": "player-visible",
+   "behavior": "pulse_slot(i) 只在 0<=i<len(_slot_cols) 时置 _pulse=(i, time.time()+0.30)。tick_draw 每帧: 到期或越界就恢复原色并清 _pulse, 否则把该槽写成纯白。",
+   "trigger": "settle 命中/未中都调",
+   "source": "12436-12438"
+  },
+  {
+   "id": "big-text",
+   "name": "中奖/未中大字构造",
+   "kind": "player-visible",
+   "behavior": "m>0: text='+payout'、色=slot_color(m)、字号 sp(48); m<=0: '未中'、COL_FIRE、sp(36)。按可见宽(屏宽*0.94)缩字号防溢出。有字形图集就走 GlyphLabel(彩色与黑影共用同一批白色贴图), 否则退回普通 Label。缩放走 GPU Scale: canvas.before 里 PushMatrix+Scale, canvas.after 里 PopMatrix(缺 PopMatrix 会让 Scale 泄漏给之后画的每个控件, 把 HUD 五行推出屏幕)。逻辑 cy = CH/2-80(未中)或 TEXT_CY_WIN(中奖, 让位给杯口)。life=BIG_TEXT_LIFE(1.8), 登记进 _effects。",
+   "trigger": "_reveal_win(m,payout) 或 settle 的未中分支",
+   "source": "12351-12434"
+  },
+  {
+   "id": "big-text-anim",
+   "name": "大字动画与 alpha 零重建",
+   "kind": "player-visible",
+   "behavior": "tick_draw 里按 p=(now-born)/life: p<0.5 时 sc=1.0→1.2 弹入, 后 50% 1.2→1.0 慢收; alpha 从前 55% 实色到 p=1 线性淡到 0; 大字以 38px/s 上浮, shadow 偏移 (+2,-2) 并各自绕自己的 center 缩放。alpha 走画布那条 Color(_fx_fade_set, uniform 写入零重建), 拿不到才退回写 label.color 并按 BIG_TEXT_ALPHA_STEPS(20) 量化。p>=1 时移除控件并从 _effects 删除。",
+   "trigger": "tick_draw 每帧",
+   "source": "12641-12706"
+  },
+  {
+   "id": "squash-spin",
+   "name": "球受击压扁 + 自转",
+   "kind": "player-visible",
+   "behavior": "squash<0.99 时每帧 squash += (1-sq)*0.5 渐回 1.0(约 2~3 帧≈50ms 的硬钢感); 画布矩形按法线缩、切向胀: size=(bs*(2-sq), bs*sq), pos 再补 bs*(1-sq)*0.5 的中心偏移, 保证压扁绕球心。自转: _ball_rot.angle = degrees(b.spin % 2π), origin=球心 —— spin 是物理层碰钉切向速度的积分, 让横滑看起来是滚动而非悬浮。",
+   "trigger": "tick_draw 每帧(球非空)",
+   "source": "12536-12548"
+  },
+  {
+   "id": "peg-flash",
+   "name": "钉子受击高亮",
+   "kind": "player-visible",
+   "behavior": "物理层每次碰钉置 b.peg_flash=(px,py)(b.hit_peg 另做'同钉再访'判定); 渲染读走后立刻把 b.peg_flash 置 None 并把该钉记进 _peg_flash 计时表。动画 0.30s: 前 60ms 纯电光金 (1,0.898,0); 之后 240ms 线性插值回 COL_PEG, 半径从 1.2x 线性缩回 1.0x(PEG_R*scale)。超过 0.30s 恢复原色原半径并删条目(钉坐标不在 _peg_cols 里的直接删, 防空转)。",
+   "trigger": "tick_draw 每帧",
+   "source": "12549-12584"
+  },
+  {
+   "id": "spring",
+   "name": "弹簧 Z 字形与阻尼振荡",
+   "kind": "player-visible",
+   "behavior": "charging 时 _spring_power=power、_spring_vel=0(直接跟随); 否则 k=120、damp=3.2 的阻尼振荡按 FIXED_DT 积分(vel += (-k*p - damp*vel)*FIXED_DT; p += vel*FIXED_DT), |p|<0.0005 且 |vel|<0.005 时双双归零。显示值 sp=max(-0.25, _spring_power)(过冲 clamp 到 -0.25≈回弹 11px)。三条 Line 画 Z 字: 上横线 y=PLUNGER_Y+BALL_VIS_R(球坐在弹簧上不陷入), 下横线 = 上横线+9+sp*45(视觉倍率 45), 斜线连两侧。颜色: sp<0.01 灰蓝 #8fa0c4; 0.01<=sp<MISFIRE_POWER 红 #c45a4a; 否则灰蓝→金黄 #ffd700 按 power_u 插值。",
+   "trigger": "tick_draw 每帧",
+   "source": "12594-12630"
+  },
+  {
+   "id": "restyle-buttons",
+   "name": "按钮底色唯一取值口",
+   "kind": "silent-invariant",
+   "behavior": "输入四个: _controls_enabled(_keep=BTN_OFF_DIM 0.55 或 1.0)、选中的投注档与返还率档、sound_mode、state。发射键在 state=='charging' 时**跳过**(底色归 _frame 按力度独占写, 这里再写会闪一帧亮红); 重置键额外调 _sync_outline 让描边跟着 dim; 每轮键 COL_GREEN; 静音键 COL_GREEN/COL_MUTE_OFF; bet_btns 与 rtp_btns 选中 COL_BTN 否则 COL_BTN_OFF。全部经 dim_rgb(色, keep) 朝 COL_BG 混一档 —— 不是换成品红外的色, 那样会把'我押的是哪一档'抹掉。四个 HUD 按钮一律 getattr 取, 探针夹具只有半套控件。",
+   "trigger": "set_bet/set_rtp/_set_controls_enabled/重置键 on_release/首帧",
+   "source": "14060-14092"
+  },
+  {
+   "id": "controls-lock",
+   "name": "输入锁实现",
+   "kind": "silent-invariant",
+   "behavior": "_set_controls_enabled(bool) 只做两件事: 写 _controls_enabled, 调 _restyle_buttons()。**绝不逐个改 btn.disabled** —— Kivy 把文字颜色烘进纹理, 改一次 disabled 就重排一次字形纹理, 且 Kivy 把它们攒到同一帧做(12 个按钮 = 12~21ms, 1%Low 头号来源); 变灰走 background_color 是免费的。解锁时额外 _refresh_mute_btn() 并用 _set_lbl_tint 给返还率标题/投注标题/统计三个标签染色(不写 .color, 写了就是一次字形重排), 拿不到画布 Color 才退回写 .color。",
+   "trigger": "start_charge/launch/park_ball/reset_balance/_show_round_end",
+   "source": "14094-14138"
+  },
+  {
+   "id": "hud-rows",
+   "name": "HUD 五行",
+   "kind": "player-visible",
+   "behavior": "顶栏: 静音键 + '每轮N次'键 + 居中标题'跳跳的弹珠机' + 右对齐状态栏。返还率行: '期望返还比例：' + 80/120/200/360 四个按钮 + 右侧 spacer(隐藏档按钮插在 spacer 左边)。投入行: '每次投入弹珠：' + 1个/10个/50个/100个。游戏区: GameArea(板面+杯层+大字)。信息行: '弹珠：' + 余额 + '累计N投M中(x%)'。底行: 重置(96) + 右移弹簧 + 力度标签(实测恒为空串, 宽度自适应为 0) + 蓄力发射(110)。五行高度在 _apply_sizes 里按 _ui_scale 重算, 纵向用 us² 衰减给游戏区让位。",
+   "trigger": "_build_ui 建一次; 尺寸变化时 _apply_sizes",
+   "source": "13840-14015"
+  },
+  {
+   "id": "status-text",
+   "name": "状态栏取值",
+   "kind": "player-visible",
+   "behavior": "_set_game_status 只经 _set_label_text(文本真变才写)。出现过的取值: '按住蓄力发射'(初值)、'蓄力中'、'发射!'、'力度不足,未扣弹珠'、'入场中…'、'弹跳中…'、'即将入袋…'(按球高分档)、'命中 x%d · 结算中'、'中奖! +%d (x%d)'、'未中'、'已重置'。飞行段那三句每帧都在算, 但 _set_label_text 挡掉了同值写入。",
+   "trigger": "各状态迁移点 + 飞行每帧",
+   "source": "14180-14182"
+  },
+  {
+   "id": "title-hold",
+   "name": "标题长按 3 秒 + 返还率长按",
+   "kind": "dev-tool",
+   "behavior": "按下时若命中 title_lbl 且 not _bench_running, 记 _bench_start=now、_bench_triggered=False; _check_title_hold 每帧查 now-_bench_start>=3.0 且未触发 → _show_bench_menu()(性能测试菜单)。同理命中 _rtp_title_lbl 记 _rtp_hold_start, >=RTP_UNLOCK_HOLD(3.0) → _ask_unlock_rtp()(隐藏档窗口); 一次按压只弹一个由 _rtp_hold_fired 保证。两处都在 _on_title_touch_up 里抬手清零。",
+   "trigger": "window 级触摸 down + _frame 每帧查时长",
+   "source": "14234-14252"
+  },
+  {
+   "id": "replay-close-tap",
+   "name": "装杯退场点击优先",
+   "kind": "player-visible",
+   "behavior": "_on_title_touch_down 里第一件事就是 try game_area.win_fx.request_close(), 受理就裸 return(吞掉这一下, 不再往下走标题/返还率的长按计时) —— 玩家点的是'我看够了', 不是 HUD 上的长按热区。用裸 return 而非 return True(观察者返回值只做 OR 聚合、不短路)。",
+   "trigger": "任何触摸按下",
+   "source": "14223-14233"
+  },
+  {
+   "id": "reset-btn-press",
+   "name": "重置键按下态",
+   "kind": "player-visible",
+   "behavior": "on_press 把重置键底色写成 COL_BTN_LOCK; on_release 回 _restyle_buttons()(回到唯一取值口, 不写死颜色) —— 写死的话'按住重置不放 → 3s 兜底自动发射上锁 → 松手'会把锁着的键涂回亮的。",
+   "trigger": "重置键按下/抬起",
+   "source": "13990-13994"
+  }
+ ],
+ "gotchas": [
+  "on_touch_down 的文档串说'锁只发生在 launch() 之后(start_charge 不加锁)', 但 start_charge 第 20083 行**确实**上了锁 —— 注释与代码不符, 以代码为准。",
+  "on_touch_up 的注释说'锁只发生在 launch 之后', 现在 launch 与 start_charge 都上锁; 而 Kivy 的 touch grab 保证 release 仍能送达(锁只挡 down), 所以发射不受影响。",
+  "power_lbl 是**死标签**: 全工程只有 _frame 里一处 'self.power_lbl.text = \"\"'(清空), 从没有任何地方给它写过力度值。_apply_row_budget 显式按空串给 0 宽(否则底行 366dp 会在 340dp 以下机器上把'蓄力发射'推出屏幕)。",
+  "落袋即 break 的两道保险分工不同: 物理层 physics_step 落袋处清 vx+贴地(管'结算槽==落格槽'), 循环里 break 管'别的事'(不 break 的话球落袋后还会被模拟 0.68~1.27s, 结算时刻/白闪/装杯/揭晓全随帧率漂)。",
+  "CLAUDE.md 说 'b.vx 清零' —— 代码里 _frame 落袋处是 b.vx = 0.0(只清横速), landing 结束时才 vx=vy=0; 别把落袋处的 vy 也清掉(那会把落地弹跳抹平)。",
+  "_reveal_deadline 必须**先归零**再 schedule 装杯: 兜底判据里有 'and self._reveal_deadline', 残留的上一轮非零值会让兜底在 0.15s 窗口里提前开火(提前剧透)。",
+  "_on_easter_settled 在跑分期间**不能只 return**, 必须走 _easter_finish() 解锁 —— 只 return 会让 _easter_hold 永不放, 玩家被软锁死。",
+  "reset_balance 强制回 ready 时**不回收**已飞出的球、也不解除 win_fx 演出/_easter_hold 之外的锁; 而 launch() 里有防御性的 _easter_hold=False 作为逃生口。",
+  "settle 的 _easter_egg 分支会 plays-1 和 round_plays-1, 所以彩蛋发球不计一局、也不会把 round_plays 顶到 max_plays。",
+  "_land_hold 的最小值是 max(0.3, LAND_HOLD-0.5)=0.3s, 而 CUP_TRIGGER_DELAY 是 0.15s —— 谁把 _land_hold 调到 0.15 以下, park_ball 就会在装杯演出触发前重掷盘面。",
+  "start_charge 里的 _set_controls_enabled(False) 是 2026-09-18 才补的: 不锁的话蓄力窗口里点档位会'切一半'(高亮走了盘面没走), 点投注能把余额扣成负数。",
+  "arc_dy 在跑分时走 random.Random(BENCH_SEED+1000+球号) 的独立流, 正常发射走全局 random —— 因为全局流的抽取顺序受'球何时落袋'影响, 光 seed 一次不足以复现。",
+  "飞行状态栏三档每帧都在计算 _set_game_status, 靠 _set_label_text 的同值短路才没有每帧重排字形纹理。",
+  "_update_slots 每次都会调 lamps_off() —— 漏掉这一步曾导致指示灯'每局点亮一格、从不熄灭', 几局下来槽上攒出一片红绿点。",
+  "_peg_flash 的条目在 0.30s 后删除; 若钉坐标不在 _peg_cols(换了盘面)则直接删, 否则 col 为 None 会一直空转。",
+  "大字 Label 的 Scale 必须被 canvas.after 的 PopMatrix 夹住 —— Kivy 的 Scale 是持久变换且本项目子控件画布是绝对坐标, 不夹会把 HUD 五行按 sc 缩放位移(看起来凭空消失)。",
+  "canvas.clear() 会把子控件 canvas 一起摘掉, 所以 _redraw 末尾必须 _restack_overlays() 重挂(顺序: 板面 < 中奖杯 < 中奖大字)。"
+ ],
+ "notes": "范围: android/main.py 的 class RootWidget(13263 起) 中与\"一局玩法\"相关的部分。行号均为该文件绝对行号。\\n\\n一句话主干: 发射键 on_press → start_charge(上锁/蓄力) → _frame 的 charging 分支每帧累加 power 并画力度条/弹簧/棘轮音 → on_release(或空格 50ms 去抖、或 3s 兜底) → launch(): 扣款、arc_dy 抖动弧面、launch_ball、state=flying → _frame 的 flying 分支按固定步长累加器逐物理步 advance_flight, 逐帧消费事件位播碰撞音, 落袋即 break → 第一次触地立刻 settle(账务/灯/白闪/入袋音 + 排定装杯与揭晓闭包) 并 state=landing(横向弹簧+重力+地板回弹) → landed(等 _land_hold 过且杯子空闲且无彩蛋锁) → park_ball 重掷盘面回 ready。\\n\\n设计上最值得记的三条不变量: ① 结算==落格恒定成立(结算槽号只由 b.x 算出, 球落哪算哪); ② 揭晓(大字/余额/语音)三件事共用同一个 _win_seq+_reveal_done 幂等闸和同一个闭包, 主路径与兜底可安全赛跑; ③ 所有\"变灰/变色\"都只写 background_color 或画布 Color, 绝不碰 .color/.disabled/.font_size(那是字形纹理重排, 本模块的性能红线)。\\n\\n未覆盖(不在本次范围): 跑分/高压测试的整条链(_auto_launch_tick/_run_benchmark/_hp_*)、加载页 _LoadVeil、WinPileFX 装杯演出内部、物理层 advance_flight/physics_step 的具体碰撞、音效烘焙与音色表。",
+ "subsystem": "RootWidget 玩法主干(蓄力发射/飞行/落地结算状态机)",
+ "uncovered": [
+  "物理层 advance_flight/physics_step 的碰撞与结算返回(文件前段, 不在 RootWidget)",
+  "WinPileFX 中奖玻璃杯演出内部(tick/reveal_at/_pump_reveal 的完整时序)",
+  "GameArea._redraw 的完整板面绘制(钉子阵/隔板/弧面/槽的分段构建)",
+  "跑分链 _auto_launch_tick/_run_benchmark/_show_bench_dim 与玩法状态的耦合细节",
+  "_LoadVeil 加载页与 Sfx 音效队列的调度细节",
+  "set_bet/set_rtp 的存档与语音节流(只覆盖了它们对 state=='ready' 的守卫)",
+  "_show_round_end 的弹窗文案与历史记录结构",
+  "触摸层的 LandLayer 旋转/坐标逆变换本身"
+ ]
+}

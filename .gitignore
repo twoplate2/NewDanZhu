@@ -1,0 +1,16 @@
+.buildozer/
+bin/
+*.apk
+__pycache__/
+*.pyc
+Thumbs.db
+.DS_Store
+
+# ⚠️ **本工程加的**(老版那份没有这几行) —— 老版 `temp/` 有 2145 个文件却**一个都没进仓库**,
+#    靠的是"作者从来不 git add 它"。新版 `temp/` 是**过程稿与诊断脚本**(README 写明
+#    "不进 git、不是交付物"), 而 `source.include_exts` 含 `py` ⇒ 一旦被提交, 它们会
+#    **跟着 APK 一起打进去**。用规则挡, 不靠纪律。
+temp/
+# `tools/sim_balance.py` 跑一次就会往这儿落 `sim_balance_*.html` + `slot_dist.json`。
+# 老版靠"作者从不 git add android/output/"挡住 —— 同一条"用规则挡, 不靠纪律"。
+tools/output/

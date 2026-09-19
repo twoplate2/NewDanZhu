@@ -1,0 +1,93 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git zip unzip openjdk-17-jdk \
+            python3-pip autoconf libtool pkg-config zlib1g-dev \
+            libncurses-dev libncursesw5-dev libtinfo6 cmake \
+            libffi-dev libssl-dev automake
+
+      - name: Install buildozer & Cython (锁定到 2024 兼容版本)
+        run: |
+          python -m pip install --upgrade pip wheel
+          pip install "cython<3.0" "buildozer==1.5.0"
+
+      - name: Cache Buildozer global cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          # v4: targetSdk 30→33 换代(v3 前缀回退会捞回 targetSdk30 时代的 dist), 强制干净重建
+          key: buildozer-v4-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-v4-${{ runner.os }}-
+
+      - name: 剥掉开发期目录（否则会被 p4a 白打进 APK）
+        # ⚠️⚠️ **这一步不能删。**
+        #    `source.dir = .` 配 `source.include_exts = py,...`
+        #    ⇒ buildozer 1.5.0 的 `_copy_application_sources` 按 `source.include_exts` **收全树**
+        #      （规则：全树 walk → **跳过隐藏路径段** → 过扩展名 → ⚠️ **无扩展名的文件也收**）
+        #    ⇒ 仓库根下任何 .py 都会进 APK。
+        #
+        #    这不是推测：老版 APK 的 `assets/private.tar` 里躺着 `sim_balance.pyc`(29.3 KB)
+        #    和 `bench_no_preflight.pyc`(45.8 KB) —— 两个跟游戏运行毫无关系的工具脚本。
+        #
+        #    本工程实测白进包的字节码（`temp/probe_bytes.py` 编译实测）：
+        #        tests/ 781.6 KB · tools/ 46.0 KB · changelog/_mksum.py 6.2 KB = **833.7 KB**
+        #    对比：出货代码本身才 1252.5 KB —— 白扔的是它的 67%。
+        #
+        #    `temp/` 不在此列：`.gitignore` 已经挡住它，CI 工作区里根本没有。
+        #    `book/` 只有 .md/.html，本就不在 include_exts 里（删了是顺手，不影响体积）。
+        #
+        #    ⚠️ 用 `rm` 而不是 p4a 的 `source.exclude_dirs`：**语义确定、当场可验证**，
+        #       不赌 p4a 的匹配细节（basename？顶层？glob？）—— 本机装不了 p4a，赌不起。
+        #    ⚠️ `tests/` **仍然留在 git 里**（验收台是本工程最值钱的资产）；
+        #       这里删的是 CI 的**工作区副本**，不是仓库内容。
+        #    🔒 由 `tests/pack_scope.py` 守着：删了这行、或新加了含 .py 的目录没列进来、
+        #       或误把出货代码列进来 —— 三种都判红。
+        run: rm -rf tests temp tools book changelog
+
+      - name: Build APK (debug)
+        run: |
+          yes | buildozer android debug
+        env:
+          BUILDOZER_WARN_ON_ROOT: "0"
+
+      - name: Show output
+        run: ls -lh bin/ || true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: plinko-apk
+          path: bin/*.apk
+          if-no-files-found: error
+          retention-days: 30

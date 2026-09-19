@@ -1,0 +1,697 @@
+{
+ "subsystem": "文档与工具里记录的功能/坑（代码之外）— 跳跳的弹珠机（新增：android/CLAUDE.md 虽未在清单中，但它是行为密度最高的一份，已一并盘点）",
+ "features": [
+  {
+   "id": "doc-mainpy-generated",
+   "name": "main.py 是生成物 / 生成器已脱钩",
+   "kind": "silent-invariant",
+   "behavior": "文档两处自相矛盾且以最新的为准：根 CLAUDE.md 与 jiaopjie.md 说「android/main.py 是生成物，勿手改，改源后重跑 tools/build_android_main.py」；android/CLAUDE.md 已知陷阱第一条（2026-09-17 实测）宣布此说法**已作废**——现在重跑生成器只产出 10991 行，而出货的 android/main.py 是 22347 行（高压测试模块、SpeedCurve、_battery_temp_c/_battery_snapshot 只活在 main.py 里），跑一次会**静默抹掉约 8000 行手写代码**；`--check` 现在本来就是 STALE，不是门禁。修改 Android 侧一律直接改 android/main.py。",
+   "trigger": "任何人按旧文档执行 python tools/build_android_main.py",
+   "source": "android/CLAUDE.md:376-383；E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:16-22；android/jiaopjie.md:13-23"
+  },
+  {
+   "id": "fly-passive",
+   "name": "彻底被动下落（无引导/无预定槽/无预演修订/零发射延迟）",
+   "kind": "player-visible",
+   "behavior": "球从竖井竖直上升（碰弧面前 vx=0）→ 弧面缓动带球转向（ARC_EASE_FRAMES=3，接触 3 帧方向每帧 +8.3° 缓动到出口角，出口速度=入射速度不耗能）→ 纯重力抛体穿钉阵自然落袋。玩家投诉「小动物找回家的路」后（2026-08-04）steer 引导/choose_target 预定/预演修订全部删除。文档明确记录「RTP = 盘面数学期望，与落点是否均匀完全解耦」，禁止再引入任何引导。",
+   "trigger": "每一次发射",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:40-59；android/CLAUDE.md:48-59；android/jiaopjie.md:100-116"
+  },
+  {
+   "id": "bounce-visible-gate",
+   "name": "回弹可见性硬门禁（玩家可见口径）",
+   "kind": "player-visible",
+   "behavior": "碰钉像素弹高 ≥10px 占比 ≥25%（实测 26.9%）、≥20px ≥5%（实测 6.1%）、max ≤45px（qachecklist 记 max31px V3）；玩家报「碰钉几乎从不回弹」的根因是弹高被钳到 max 9.1px（小于球视觉半径 12.6）肉眼不可见。文档同时声明：「≤5px 亚可见占比 ≤20%」是**放弃的完美标准**——强制达到需注入向上速度=违反「禁止凭空反物理」。",
+   "trigger": "落袋前钉阵内每发统计",
+   "source": "android/qachecklist.md:23-28,64-82；E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:133"
+  },
+  {
+   "id": "land-must-bounce",
+   "name": "落地必须弹（LAND_BOUNCE_MIN_VY 是撞击速度）",
+   "kind": "player-visible",
+   "behavior": "用户 2026-09-11 定稿「落地的时候必须弹跳下，真跳和假跳都可以，高度别太固定」。文档警告：LAND_BOUNCE_MIN_VY 是**撞击速度**不是回弹速度，回弹=撞击×LAND_E(0.42)；旧值 220 当回弹速度用，实际只弹 4px，74% 的落袋肉眼看不见。现 440 + LAND_BOUNCE_JITTER(0.85,1.15) ⇒ 第一跳 p50≈17px、≥10px 98%、弹 3 次；440 是按最坏随机 (0.85×0.92×0.42×440 → apex 10.4px) 倒推的。",
+   "trigger": "球落袋触地那一步",
+   "source": "android/CLAUDE.md:401-402"
+  },
+  {
+   "id": "landed-final-state",
+   "name": "落袋即终态（槽号与球心 x 落袋后不再变）",
+   "kind": "player-visible",
+   "behavior": "玩家报「弹珠落入1个倍率槽之后跑到其他槽位去了——弹跳的高度比较高，而且是斜着的」。根因：GUI 飞行循环每轮覆盖 landed，只要一帧 dt>16.667ms 就有第二个物理步把 landed 冲成 None，跳过整个落袋分支。修法：physics_step 落袋处清 vx + 贴地（**只清横速、保留 vy**），两个 GUI 落袋即 break。门槛低：PC tkinter after(16) 实测 40.5% 的帧有 ≥2 物理步，跑分阶段单帧最大 dt 625ms。",
+   "trigger": "任何帧率抖动（30fps ≈1~2.3%/发）",
+   "source": "android/CLAUDE.md:393-398；E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:126-132"
+  },
+  {
+   "id": "settle-eq-slot",
+   "name": "落格 == 结算槽（零穿帮）",
+   "kind": "player-visible",
+   "behavior": "settle(i) 的槽号必须等于球第一次触地的格，靠 physics_step 的「落袋即终态」不变量保证，不靠循环写对。地板不是墙、是落袋边界：build_walls 的底边矩形以 WALL_E=0.5 把球弹向上（实测 61% 的落袋 vy<0），现跳过该矩形（if w[1]==FLOOR: continue），跳过是槽号无关的（该矩形从未改过 b.x）。",
+   "trigger": "每次落袋结算",
+   "source": "android/CLAUDE.md:393-400"
+  },
+  {
+   "id": "rtp-tiers",
+   "name": "四档 RTP + 固定格数盘面",
+   "kind": "player-visible",
+   "behavior": "返还档 80%/120%/200%/360%（360% 是 2026-09-10 从 300% 改的）。roll_multipliers 先按 K_DIST[rtp] 掷「本局几个格子有奖」，再 random.sample 选位置、VALUE_DIST 填倍率，RTP 由 _solve_p2 闭式反解配平，四档实测中奖率 24.1%/35.6%/43.4%/78.7%。RTP 专项实测（12000 发/格）：0.810/1.220/1.992/3.022，固定力度档也全在 ±0.05 内。⚠️ 文档禁止用 E[K]/9 估中奖率（坏盘重抽对 k 有偏，偏低约 1pp）。",
+   "trigger": "切档 / 每局开新盘面",
+   "source": "android/qachecklist.md:49-62；android/CLAUDE.md:56-59"
+  },
+  {
+   "id": "hidden-rtp",
+   "name": "隐藏返还率彩蛋档（长按 3 秒解锁）",
+   "kind": "player-visible",
+   "behavior": "长按「期望返还比例」标签 RTP_UNLOCK_HOLD=3.0s（2026-09-12 从 5s 改）→ 弹窗四横排四选一 + 确认，档位 1000%/2000%/5000% + 「关闭隐藏」。六条定稿规则：①每次长按都弹（旧的 _rtp_unlocked 标志只置真不置假，已整删，唯一真源是 rtp_btns 的键）②点选项只选中，点确定才生效 ③默认选中当前档（常规档时高亮「关闭隐藏」）④「关闭隐藏」摘掉全部隐藏档按钮 + 回到 max(RTP_TIERS)=360%，**本来就是常规档时什么都不做**（玩家点名的细节）⑤只留当前一个隐藏档按钮 ⑥防重入闸门开在「建弹窗」那端（_on_title_touch_down 是 Window 级触摸观察者，模态弹窗拦不住）。不持久化：冷启动后不存在，切任务回来还在（保存侧照常写盘、读侧按 _regular_rtp() 白名单丢弃）。语音 voice_rtp_hide_{1000,2000,5000} 必须走 set_rtp(..., silent=True) 否则被 voice_rtp_ 互斥抢掉。",
+   "trigger": "长按返还比例标签 3 秒",
+   "source": "android/CLAUDE.md:127-172；tools/fx_probe.py [19] 段"
+  },
+  {
+   "id": "win-pile-show",
+   "name": "中奖玻璃杯装杯演出（时序链）",
+   "kind": "player-visible",
+   "behavior": "落袋 t=0 立刻播声音/落账/指示灯/槽位白闪（一个字没挪）→ CUP_TRIGGER_DELAY=0.15s 才 play_win → WINDUP=0.5s 后杯子进场（杯子可见进场 = settle+0.65s）→ 弹珠雨（颗数=倍率是硬承诺，投注档=球色 1绿/10蓝/50红/100紫）→ 装满静止 → 等玩家点击 → 0.25s 淡出。进场错峰：压暗 0.30 起、杯子 0.32 起（0.18s），0.50 落位正好接上雨钟；杯子从上方 +56 逻辑px 降入、0.92→1.0 放大。整场雨前移 RAIN_ANCHOR=0.12 / RAIN_SHIFT_MAX=0.55（把「杯子就位→首球入画」的空档从 0.44~0.55s 压到 0.12s）。揭晓 = 最后一颗球**第一次触地** + REVEAL_DELAY=0.4s（让最后几下落地的声音先播完，不被中奖琶音盖掉）。",
+   "trigger": "落在非零倍率槽",
+   "source": "android/CLAUDE.md:174-201,269-333；E:\\AI_Tools\\other\\DanZhu\\todolist.md:5-16"
+  },
+  {
+   "id": "win-pile-exit-click",
+   "name": "装杯退场由玩家点击触发（result 段故意无超时）",
+   "kind": "player-visible",
+   "behavior": "装满后一直停着——不点就不走，切后台一分钟回来也原样留着。最短停留 HOLD_BASE=0.6s（最后一颗球落定+0.6s 之前点击无效；球还在落时 mode 还不是 result，同样无效）。点击入口挂在 _on_title_touch_down 最前面并裸 return（不再触发标题/返还率的长按计时）。**出口分两种**：pending/win（球还在飞，玩家没话语权）用 FX_MAX_SEC=9s 硬兜底；result（装满静止）**故意没有任何时间兜底**，谁要加超时先回去问玩家。跑分例外：auto_close=True 时到点自己走（否则第一次中奖就钉死，3 发发不满）。0.6s 之前按倍率分档的 HOLD_TIERS/HOLD_STEP 已整个删除（会和点击逻辑打架，且 +0.05s 低于可辨差）。",
+   "trigger": "装满静止期间玩家点击屏幕任意位置",
+   "source": "android/CLAUDE.md:190-201,263-267,309-314；tools/fx_probe.py [20] 段"
+  },
+  {
+   "id": "win-pile-dim",
+   "name": "压暗覆盖「整块屏幕减去游戏区」（板面 + HUD 五行）",
+   "kind": "player-visible",
+   "behavior": "玩家报「装弹珠时背景灰化不够」。DIM_ALPHA=HUD_ALPHA=0.68（刻意同一常数，同屏两档会打架）。覆盖面用 RootWidget._build_hud_dim() 在 self.canvas.after 里放上下两块矩形盖住「整块屏幕减去游戏区」，_relayout_hud_dim 每帧摆位、_sync_hud_dim 每帧从 WinPileFX.dim_alpha(HUD_ALPHA) 取值统一写（该调用必须排在 game_area.tick_draw() **之后**）。视口必须读 self.parent，不能按 self.x/width 反推。绘制次序钉死：后层玻璃 → 压暗 → 杯口环补画 → 球 → 前层玻璃；后半个杯口环（RIM_BACK_FRAC=166/920，含杯底环 694..808）用 RIM_BAND_STRIPS=12 段纵向渐变补画（顶部 RIM_BAND_ALPHA_TOP=0.55 线性升到分界处 1.0）。",
+   "trigger": "中奖装杯演出期间",
+   "source": "android/CLAUDE.md:203-257；tools/fx_probe.py [11] 段"
+  },
+  {
+   "id": "win-pile-bounce-vib",
+   "name": "装杯震动 = 落地音（同一次节流判定）",
+   "kind": "player-visible",
+   "behavior": "玩家要求「弹珠落入容器时设备应该震动，震动和落地音效同步」。实现挂在 sfx.play(...) 的返回值上：if play(...): _vibrate_tick(gain)。**绝不能让震动自己再判一次时间/自己计数**。参数刻意又短又不满：10~18ms / 振幅 80~220（随撞击强弱），10ms 是手机马达启动时间下限。副作用（有意为之）：音效已关时 play 返回 False ⇒ 也不震（本作只有一个反馈开关）。不设次数上限：10 次/秒 × 2~4 秒照震。只在 Android 生效。",
+   "trigger": "装杯期每一次落珠发声",
+   "source": "android/CLAUDE.md:433-437；tools/fx_probe.py [12] 段"
+  },
+  {
+   "id": "win-pile-bounce-vol",
+   "name": "装杯落珠音量（只调 boost，不动合成增益）",
+   "kind": "player-visible",
+   "behavior": "玩家报「装杯音量太小」：原来只有 0.25~0.72，而同一个波形主游戏给到 clamp(vy/500, 0.3, 1.0) 能到满幅。修法是 BOUNCE_GAIN_BOOST=1.8 + [BOUNCE_GAIN_LO, BOUNCE_GAIN_HI]（两跳 base/amp 是 BOUNCE_A1_*/BOUNCE_A2_*）。文档禁令：要调就调这个倍率，**别动 _sfx_bounce() 的合成增益**（波形主游戏共用），也别动全局 SFX_MASTER。落地音只靠节流 BOUNCE_THROTTLE=0.10 限速、不按颗数截断（曾经的 BOUNCE_BUDGET=24 上限实代价：×20 后段静音 1.4s、×50 1.8s、×100 2.3s）。",
+   "trigger": "落珠触底发声",
+   "source": "android/CLAUDE.md:426-432；tools/fx_probe.py [14] 段"
+  },
+  {
+   "id": "easter-egg",
+   "name": "彩蛋：弹珠返回发射槽 → ×2 装杯 + 弹窗",
+   "kind": "player-visible",
+   "behavior": "彩蛋走 _easter_hold 全套锁（它不设 _land_hold，不锁的话 park_ball 会在 landed_at+0.6s 跑掉重掷盘面）。顺序钉死：先播 ×2 装杯 → 全部落定 → 弹对话框（_on_easter_settled）→ 玩家点确定 → 解锁；_on_easter_settled 有 _easter_hold 守卫，玩家中途按重置又发了一发（launch 会清锁）就不再弹窗盖在新一局上。此路径**不设状态栏文字**（结果全交给弹窗说）；播报只有一条：语音档播 voice_easter_{1,10,50,100}，否则播 ×2 轻赢琶音。",
+   "trigger": "球意外回到发射槽",
+   "source": "android/CLAUDE.md:423-425"
+  },
+  {
+   "id": "round-limit",
+   "name": "防沉迷轮次（Android 独有）",
+   "kind": "player-visible",
+   "behavior": "每轮最多 N 次发射（20/50/100 可选，默认 50），达上限弹总结窗口 + 语音播报（voice_round_end_{N} + 数字朗读 + voice_round_suffix 队列拼接，5ms 间隔），播完自动重置。轮次历史持久化最近 100 条，重启不丢。PC 版无防沉迷。",
+   "trigger": "每轮发满 N 发",
+   "source": "android/README.md:12-15；android/jiaopjie.md:414"
+  },
+  {
+   "id": "persist-config",
+   "name": "配置持久化字段与白名单",
+   "kind": "player-visible",
+   "behavior": "落盘 JSON 实测字段：max_plays / rtp_target / bet / balance / round_plays / plays / hits（另有 fps_cap_setting、power_grain）。读侧逐字段类型+取值域校验：max_plays ∈ (20,50,100)、rtp_target ∈ _regular_rtp()、bet ∈ PRESETS=[1,10,50,100]、balance ≥0、round_plays ∈ [0,max_plays]。**声设置与隐藏档不持久化**（保存侧照常写盘、读侧丢弃）。历史：round_history / bench_history / hp_history 各最近 100 条。",
+   "trigger": "启动读取 / 状态变化写盘",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\plinko_config.json；android/main.py:20565-20607；android/CLAUDE.md:156-158"
+  },
+  {
+   "id": "voice",
+   "name": "语音播报（edge-tts 预录）",
+   "kind": "player-visible",
+   "behavior": "63 条语音（含若干切换提示与数字片段；qingkuang.md 记 61 条 TTS）。两态开关：音效已开（含语音播报，默认）→ 音效已关；**声音设置不持久化**。场景：中奖 voice_win{payout}（15 种，替换 win 琶音）/ 余额不足 voice_nomoney（替换 error，throttle 3.0s）/ 轮次结束拼接 / 轮次设定 voice_round_set_{N} / 手动重置 voice_reset_progress（throttle 1.5s）/ 声音切换 voice_mode_{sfx,off}。voice_lose 有意不接入（合成 lose 更中性）。数字朗读 22 个独立片段（0~9 / 十百千万 / 两），队列拼接（每片 duration+5ms 间隔 Clock.schedule_once），不拼接 PCM。语音互斥仅对 UI 交互生效（voice_rtp_/voice_bet_/voice_mode_ 三类 3.0s），结果/轮次序列不受影响。",
+   "trigger": "各交互与结算时刻",
+   "source": "android/README.md:103-116；android/CLAUDE.md:116-125；tools/generate_voice.py:35"
+  },
+  {
+   "id": "sfx-bank",
+   "name": "音效清单与触发时机（哪个音什么时候响、增益多少）",
+   "kind": "player-visible",
+   "behavior": "DESIGN.md 列出 39 个音效的主频/时长/节流：peg0..5 撞钉 1040~1880Hz 六档 85ms/节流38ms；wall0/1 撞墙 185/225Hz 130ms/55ms；div0/1 撞隔板 430/505Hz 105ms/55ms；rail 天花板弧钟形 760Hz 340ms/220ms；launch 640→150Hz 280ms；top0/1 顶部碰撞 520/610Hz（apex 转向触发，一次性闩锁）；ratchet0..5 蓄力 380~870Hz 50ms（间隔 250→70ms）；charge_full 满蓄力 178+1260Hz 190ms；riser 入袋前上滑 300→780Hz 260ms（必须带 _crossed 状态标志，否则球出生在槽区就误触）；pocket 入袋 138Hz 200ms；bounce 槽底弹跳 172Hz 120ms/50ms；win0~4 中奖 3/4/5/6/7 音琶音 850~1530ms（x10 加 C3 低音、x20 加号角+和弦+碎星）；lose 下行 F4→C4 rms0.068；coin 计分滚动 2280Hz 35ms/55ms；bead0/1/2 金雨到账 1960/2320/2760Hz 50ms/45ms；click 940Hz 35ms；error 155Hz 280ms/400ms；cash 重置 7 枚硬币 550ms；ready 新球就位 255Hz 160ms。发射音量分级：哑火 SFX_MISFIRE_GAIN/MAX 0.35→0.50，成功 SFX_LAUNCH_GAIN/MAX 0.60→0.80；满蓄力后每 CHARGE_HOLD_SEC=0.60s 轻响 charge_full(gain 0.40)。",
+   "trigger": "见各条触发点",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\DESIGN.md:114-188；E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:64-68；E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:248-258"
+  },
+  {
+   "id": "sfx-flight-removed",
+   "name": "flight 音效已移除（发射后只有顶部碰撞一声锚点）",
+   "kind": "player-visible",
+   "behavior": "发射后不再有持续飞行/滚动音：launch 之后直到首次撞钉之间只有顶部碰撞 top 一声作为听觉锚点。FLIGHT_ENV 谷在 0.9s（转向 apex），首钉收尾 1.2s，FLIGHT_GRAIN_END=0.58。玩家实听原话「刚开始飞行和穿过弧形槽是两个音效，而且不连续，穿弧那个不自然」——同一物理过程被拆成两次触发=设计冗余。",
+   "trigger": "每次发射",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\DESIGN.md:157-158,142-155；E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:100"
+  },
+  {
+   "id": "spring-ui",
+   "name": "弹簧可视化 / 力度条哑火红线 / 发射按钮三态",
+   "kind": "player-visible",
+   "behavior": "地板下方暗色凹槽内 Z 字形弹簧（上横→斜线→下横），线宽 1.5px、跨度 32px、灰蓝→金黄渐变，2 条→1 条随蓄力压缩，释放后 0.5s 平滑回弹。力度条在竖井内右侧 y=406-616，哑火区间有红线标识（power < MISFIRE_POWER=0.15 哑火不扣珠）。发射按钮：充电时深棕 #8B6914、哑火区间红色，蓄力百分比文字已移除。重置按钮 on_press 闪亮 + toast 28sp「珠子数量已重置」+ 语音。",
+   "trigger": "按住/松开发射按钮或空格",
+   "source": "android/README.md:31-39"
+  },
+  {
+   "id": "fx-text",
+   "name": "文字/槽位/指示灯反馈",
+   "kind": "player-visible",
+   "behavior": "中奖 48sp 金色大字（BIG_TEXT_LIFE=1.8s，原 3.0s）+ 槽位白闪 300ms + 落袋浮字（0.9s 上升淡出）+ 余额数字滚动 0.5s；x10+ 大奖滚分、coin 55ms 一声。投中指示灯每槽一个圆点，**「中了就绿 / 未中红」，不按倍率取色**（按倍率取色会有两个毛病：slot_color(5) 恰好 == COL_FIRE，x5 中奖和未中一模一样；且倍率槽色块本来就是 slot_color(该格倍率)，灯再上同色是重复信息）。换盘面必须熄灭全部投中指示灯（玩家报的「点了不消失」）。",
+   "trigger": "落袋结算 / 换盘面",
+   "source": "android/CLAUDE.md:453-456；E:\\AI_Tools\\other\\DanZhu\\DESIGN.md:203-215；tools/fx_probe.py [21] 段"
+  },
+  {
+   "id": "landscape",
+   "name": "横屏策略：按物理屏比例分流 + 四件套",
+   "kind": "platform-glue",
+   "behavior": "按开机量一次的短边÷长边分流：16:9 及更宽的屏（平板）四方向重力感应 + 横窗时按「等效竖屏窗口」布局以屏幕中心整体旋转 ±90° 铺满；比 16:9 瘦长的手机锁竖屏（正竖+倒竖 180°），横拿不旋转。四件套缺一不可：manifest screenOrientation=fullSensor + resizeableActivity=true（p4a/hook.py 注入）/ targetSdk 33 / 运行时方向守卫每 0.7s 重申（宽屏 FULL_SENSOR，瘦长机 SENSOR_PORTRAIT(7)）/ LandLayer+RotPopup 反旋转层（触摸逆变换）。病根：SDL 每次启动/回前台自报竖屏顶掉 manifest，ZUI 只认运行时请求；「锁竖屏」在 Android 12L+ 大屏=被 letterbox 成小窗，是死路。已知边界：转屏瞬间有一帧级重排。",
+   "trigger": "启动 / 回前台 / 转屏 / 每 0.7s",
+   "source": "android/README.md:70-101；android/jiaopjie.md:44-46"
+  },
+  {
+   "id": "vibrate",
+   "name": "中奖震动（Android 独有）",
+   "kind": "player-visible",
+   "behavior": "x2 起中奖震动 45/75/110/150ms（按赔率升档），振幅 255（VIBRATE 权限，buildozer.spec 声明）。桌面 --smoke/--selftest 都测不到真震动，只能靠 fx_probe [12] 钉住调用的次数与时刻。",
+   "trigger": "落袋中奖",
+   "source": "android/README.md:43-46；android/jiaopjie.md:88"
+  },
+  {
+   "id": "bench-panel",
+   "name": "游戏内跑分面板与历史（长按标题 3 秒）",
+   "kind": "player-visible",
+   "behavior": "长按标题进跑分。口径 = 纯 Python 物理单线程，每轮 0.7s × 5 轮取中位；结果页四行优先看：1% Low 定位 / 最慢帧 / 低于 60 FPS 的帧 / 文字纹理重建总数与来源。物理固定 60 步/秒（与屏幕刷新率无关），每发约 254~264 步。Android 支持最高请求 165Hz（0.7.12），实际是否 165Hz 必须看面板的「屏幕 Hz / Android 模式请求 Hz」。帧率曲线带阶段条 + 逐帧日志可复制/保存（MediaStore）。历史最近 100 次。⚠️ 算步/秒别踩坑：benchmark_trajectories 返回的 frames 是 runs 轮总和，须取 fps_list 中位数，直接 total_frames/duration 会虚报 5 倍（实踩过）。",
+   "trigger": "长按标题 3 秒 / 隐藏档弹窗里的跑分入口",
+   "source": "android/README.md:48-68；android/jiaojie.md:1-30；tools/fx_probe.py [23][24] 段"
+  },
+  {
+   "id": "version-line",
+   "name": "隐藏弹窗的版本 / 构建日期行",
+   "kind": "player-visible",
+   "behavior": "格式钉死为「跳跳的弹珠机 vX.Y.Z」+「于 YYYY年MM月DD日 HH:MM 制作」（fx_probe [13] 用正则钉），**出包必须 bump buildozer.spec 的 version**——文档说它是「装的是哪个包」的唯一肉眼证据（APK 文件名含版本）。",
+   "trigger": "打开隐藏档弹窗",
+   "source": "android/CLAUDE.md:24-26；tools/fx_probe.py [13] 段"
+  },
+  {
+   "id": "audio-ready-gate",
+   "name": "冷启动音频就绪闸门（首次安装没声音）",
+   "kind": "platform-glue",
+   "behavior": "必须逐个确认 101 个音频样本（40 个程序合成 + 61 条 TTS，22050Hz/16bit/mono，约 5.5MB）已解码完才放玩家进游戏：对每个样本做 0 增益 play() 试播 + 立刻 stop()，返回非 0 才算能播。原因：SoundPool.load() 是异步的，没解码完时 play() 返回 0 且**静默什么都不做**（症状=「音效都在、就是不响」，首次安装打开必然全静音、第二次就有）。实测：骁龙 8+ Gen 1/Android 13 上每次 play() 29~33ms、101 次 = 3.0~3.5s（热启动等待的 95.8% 在这里）；8 Elite Gen 5/Android 16 只要 3ms/次。机制（AOSP 已核实）：kPlayOnCallingThread 在 Android 11~14 为 true（15 改 false），同一 soundID 才复用 AudioTrack。**绝不能把玩家卡住**：就绪闸门有 6 秒硬上限，到点无条件放行；冷启动可以慢（用户原话「冷启动改成 60 秒我都能接受」），热启动必须快。已否掉的方案：多线程并行试播（实测无效）、加第二个 SoundPool、降采样/裁静音、setOnLoadCompleteListener 当闸门（跨线程 JNI 失灵 ⇒ 全库永久静音）。",
+   "trigger": "每次启动（含热启动）",
+   "source": "android/qingkuang.md 全文；tools/fx_probe.py [18] 段（两条同名 [18]）"
+  },
+  {
+   "id": "keep-screen-on",
+   "name": "跑分防息屏（FLAG_KEEP_SCREEN_ON 取错类）",
+   "kind": "platform-glue",
+   "behavior": "两个独立原因导致防息屏完全失效且**静默**（except: pass 吞掉）：①真正执行安卓常亮标志时取了 android.view.WindowManager，而 FLAG_KEEP_SCREEN_ON 定义在嵌套类 android.view.WindowManager$LayoutParams，pyjnius 读字段失败 ⇒ addFlags/clearFlags 根本没执行；②「开始模拟测试」的防息屏只挂在后半段黑屏（_show_bench_dim），前面的最长 20 秒预热 + 第一阶段屏幕渲染跑分没有任何保护。2026-09-16 已修：改从 LayoutParams 取常量 + 整个测试生命周期开始就开启常亮。附带：CPU 高压测试的频率采样窗口改按绝对墙钟固定 1Hz 采集 359 点（原「读完 sysfs 再等 0.5 秒」真机曾出现 424 点）。为什么现有自测没发现：桌面测试只查 Python 变量与字符串搜索，从没验证常量属于哪个 Java 类。",
+   "trigger": "进入跑分 / CPU 高压测试",
+   "source": "android/jin_xiumian.md 全文"
+  },
+  {
+   "id": "bench-affinity",
+   "name": "跑分线程锁核（消除核间迁移）",
+   "kind": "platform-glue",
+   "behavior": "物理跑分开始前读当前线程允许的 CPU 集合，按 cpuinfo_max_freq（不可读时回退 scaling_max_freq）识别最高性能簇，仅在确认存在异构频率簇时把**跑分工作线程**收窄到该簇，跑分结束或异常时恢复原亲和性（与 60fps 强制锁的 finally 并列）。理由：120/120 的五轮范围 6067（相对中位 36.2%）而 60/60 只有 1403（8.5%），且纯算术探针从中位 35.72M 降到 22.77M（1.58 倍）——同一工作线程拿到的核心性能变了。必须无权限/sysfs 不可读/单一频率簇时安全降级，并把「是否锁定、原集合、目标集合、频率依据/失败原因」写进帧率日志（避免把请求当事实）。不改变正常游戏的调度策略。",
+   "trigger": "物理跑分开始/结束",
+   "source": "android/youhua.md 全文"
+  },
+  {
+   "id": "boot-veil",
+   "name": "冷启动 veil / presplash / 音频烘焙同步",
+   "kind": "platform-glue",
+   "behavior": "冷启动先显加载遮罩（VEIL_TITLE=\"跳跳的弹珠机\"、标题颜色分级 VEIL_TITLE_COLORS、VEIL_TITLE_IN_SEC/LEAD/MAX_SEC，MAX_SEC 与 Sfx.SFX_READY_TIMEOUT 必须相等），进度用 StencilPush 裁剪，`_veil.tick(self.sfx.audio_ready())` 推进；presplash.png 必须 1080×1920 且 ≤32KB（fx_probe [18] 钉）。PC 版音效跑后台 daemon 线程（窗口秒开），Android 版 Sfx(sync=True) **同步烘焙后建 UI**（冷启动不空窗，~3s）。",
+   "trigger": "冷启动",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\DESIGN.md:99-101；tools/fx_probe.py [18] 段；android/README.md:164-166"
+  },
+  {
+   "id": "text-tex-cache",
+   "name": "文字纹理缓存与预热（HUD 长帧优化）",
+   "kind": "silent-invariant",
+   "behavior": "用 CoreLabel 烘纹理 + 按需缓存替换 Label 的逐帧重排/光栅/上传（_TEXTEX_PER_LABEL=64 上限、_TEXEX_ON、_texex_apply/put），状态栏固定文案（入场、弹跳、即将入袋、发射、未中）预热为固定纹理，只剩纹理交换。**不打 tag 的 Label 不进缓存（预热白做）**；空文字不进缓存；`_TEXUPD_ACTIVE` 关闭时直接 return False。配套的还有字号预热表 _FONT_WARM_SIZES / FIT_SCALES+FIT_FINE / 字体缓存上限约 64。绩效账：新方案必须不改变正常游玩文字、颜色、更新时机。",
+   "trigger": "常驻",
+   "source": "android/jiaojie.md:43-58；tools/fx_probe.py [11] 段后半, [24] 段"
+  },
+  {
+   "id": "reveal-once",
+   "name": "揭晓是「一次性投递事件」（幂等闸只有一处真源）",
+   "kind": "silent-invariant",
+   "behavior": "2026-09-10 严重回归：86% 的中奖局丢音。根因是把揭晓判定写在 if self.mode == \"win\" 分支里，而揭晓时刻（触地+0.4）通常晚于 win→result 切换点（触地+0.185~0.323）⇒ mode 先跳走 ⇒ 一次性事件再也判不到；后果不是少一个音，而是 _on_done 挂到下一局才被重入保护放出来——「中奖后不再发射」的局没有下一局 ⇒ 中奖音永久丢失。**正确形状**：所有 mode 迁移走完，末尾统一调 _pump_reveal(now)，只认绝对时刻 + _done_fired 单向闩，与 mode 解耦；幂等闸只能有一处真源（在 settle() 的 _on_settled 里，同时盖住语音）；兜底 deadline 与主路径共用同一个闭包 _settle_cb。门禁盲区：[1]~[9] 全测值域，全绿也照样 86% 丢音——要用「投递语义」门禁（fx_probe [10]：每局恰好放一次 / 3 帧内 / 收尾不留挂账）。",
+   "trigger": "每个中奖局的揭晓时刻",
+   "source": "android/CLAUDE.md:283-305；tools/fx_probe.py [10] 段"
+  },
+  {
+   "id": "single-truth-sources",
+   "name": "单一真源族（多处各判必然静默脱钩）",
+   "kind": "silent-invariant",
+   "behavior": "文档逐条点名的「只能有一处真源」：hold_for(m)（现在恒返回 HOLD_BASE，expected_sec/request_close/fx_probe 全从它取值——曾硬编码 0.45，尾巴从 0.45 改到 0.60 时静默脱钩，兜底提前触发导致数字/语音提前剧透）；_closing_at（退场零点，0=还没收到关闭请求，必须在 play_win 里显式复位、在 _abort() 里一并归零）；dim_alpha()（压暗的唯一取值口，返回的是本帧真正画上去的那个数，idle 直接返回 0，两边不能各自 time.time() 采样两次）；上滑音触发必须带 _crossed 状态标志（球出生 y=637 本来就 > RISER_Y，坐标阈值会让它发射第一帧就响）；震动与落地音共用一次节流判定。",
+   "trigger": "改装杯/揭晓/压暗相关逻辑时",
+   "source": "android/CLAUDE.md:245-253,271-282,316-323,433-434"
+  },
+  {
+   "id": "layers-mode-branch",
+   "name": "_layers() 必须按 mode 分支（等待期恒返回静止态）",
+   "kind": "silent-invariant",
+   "behavior": "_closing_at/_settled_at 初值是 0.0，退场曲线不看 mode 会算出天文数字 → clamp 成 1 → 整场装杯按「退场终态」渲染（全透明 + 上浮 52px），到 T 才弹回。**没有收到点击时 _layers() 必须恒返回 (1,1,1,0)**。pending/win 两个分支必须在退场分支之前 return（别调分支顺序）。tick() 的 pending 分支**不能有 if self._dirty 掐帧**，否则错峰动画整段只画一帧。--selftest 和 fx_probe 的 [6] 现在管这段曲线：单调性 / 解锁那刻归零 / 进场收在 (1,1,1,0) / ENTER_CUP_AT+ENTER_CUP_DUR <= WINDUP / 几何红线。",
+   "trigger": "改 _layers()/tick() 时",
+   "source": "android/CLAUDE.md:316-330；E:\\AI_Tools\\other\\DanZhu\\todolist.md:126-129；tools/fx_probe.py [6] 段"
+  },
+  {
+   "id": "win-pile-hard-constraints",
+   "name": "装杯硬约束（几何/时长/资源红线）",
+   "kind": "silent-invariant",
+   "behavior": "①位置只能朝上：杯底在逻辑 y=578、槽区隔板顶 606，只有 28px 余量，往下位移 >28 就压住倍率槽；②缩放必须 bw/bh 同比例（_map 的 x 走 _abw、y 走 _abh、球半径走 _abw），只缩一个球会变椭圆或从杯口冒出去；③动画只能写 _ab* 临时字段，绝不写回 _bx/_by（那是投影基准，且 _sync_geom 绑在 size/pos 上）；④不许加美术资源/粒子库、不许改音效合成配方；⑤运行期零物理、不持有 Clock（切后台回来直接跳终态）、绝不软锁；⑥改 CUP_W 前先量 PNG 内容边界（1600 宽里真实内容只占 x 48~1552）；⑦RESULT_HOLD+RESULT_FADE 的和 0.45 是「解锁前的尾巴」，只能调内部分配不能改和；⑧WINDUP=0.50 是用户定案的进场总窗口。",
+   "trigger": "改装杯参数/资产时",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\todolist.md:109-129；E:\\AI_Tools\\other\\DanZhu\\android\\jiaopjie.md:166-175；android/CLAUDE.md:324-326,438-439"
+  },
+  {
+   "id": "input-lock",
+   "name": "输入锁：触摸层吞掉，不再动 Button.disabled",
+   "kind": "silent-invariant",
+   "behavior": "演出/飞行期锁输入靠触摸层吞掉（on_touch_down 返回 True），不再逐个禁用 Button.disabled——后者会让按钮丢失个性样式，且 _set_controls_enabled(True) 恢复时会用统一颜色覆盖 RTP/投入按钮的选中高亮（histroy.md 记录的两个 bug 同一根因）。按钮底色有唯一取值口 _restyle_buttons()，不可用时保留身份色，dim_rgb 分离度有硬指标（亮度间隔 ≥15、分隔 ≥40、倍率间隔 < 间隔）。",
+   "trigger": "飞行/演出/跑分期间",
+   "source": "tools/fx_probe.py [25][25b] 段；E:\\AI_Tools\\other\\DanZhu\\histroy.md:270-285"
+  },
+  {
+   "id": "canvas-semantics",
+   "name": "Kivy canvas 层级语义与 canvas.clear 陷阱",
+   "kind": "silent-invariant",
+   "behavior": "①GameArea._redraw() 的 canvas.clear() 会把**子控件的 canvas 一起摘掉**（叠加层「指令都在、屏幕没有」，不报错）⇒ 每次重画板面后必须 _restack_overlays() 把中奖杯与大字的 canvas 按序重新 add 回末尾，判据 canvas.indexof(child.canvas) == -1。②Kivy 子控件的 canvas 是**绝对（窗口）坐标**，父级不做平移。③child.canvas.after 画在该子控件自己的 canvas 与它全部子控件之上；parent.canvas.after 画在整棵子树之上——所以 HUD 压暗挂每行自己的 canvas.after，而 RootWidget.canvas.after（_bench_dim_* 的 0.72）会盖住 GameArea 里的中奖大字，不能拿来做 HUD 压暗。",
+   "trigger": "改板面重绘/叠加层/压暗时",
+   "source": "android/CLAUDE.md:415-421；android/README.md:254-257"
+  },
+  {
+   "id": "clock-callback-signature",
+   "name": "Clock 回调必须能收 1 个位置参数",
+   "kind": "silent-invariant",
+   "behavior": "零参签名在真机启动 0.7s 必闪退，桌面测不出（fx_probe [1] 是红线门禁）。同源坑：用 GUI 定时器（root.after / Clock.schedule_once）做音效节奏，在无 mainloop 的端到端测试里会静默失效（中奖音 0 次触发）——音效的时间关系应该**烘进波形**（在波形头部留静音），数据即节奏。用探针替换 RootWidget 方法时替换函数**必须同名**（Kivy Clock 按方法名持有弱引用，改名 AttributeError）。",
+   "trigger": "写任何 Clock.schedule_* 回调",
+   "source": "tools/fx_probe.py 头部 docstring + [1] 段；android/BUILD_APK.md §3.23；E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:385-391"
+  },
+  {
+   "id": "rng-isolation",
+   "name": "随机流隔离与同种子确定性",
+   "kind": "silent-invariant",
+   "behavior": "①音效合成用私有 random.Random(SFX_SEED)，与游戏随机流物理隔离、每次启动音色一致；**别用 getstate/seed/setstate 共享全局 RNG**（后台线程烘焙时会回滚主线程推进的随机状态）。②iter_bank() 按固定顺序 yield，**顺序即音色**——共用 _ARNG 随机流，新增音效必须追加末尾。③预演/真发的确定性 = 同种子**各自新建 rng**，不是共享 rng 实例（共享实例串行时预演消耗后状态已变，真发轨迹不同）。④Ball._rng 是撞钉扰动流，同种子逐帧一致。",
+   "trigger": "改音效配方 / 加音效 / 加确定性测试",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:66,79；E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:393-399；android/CLAUDE.md:407"
+  },
+  {
+   "id": "event-bits",
+   "name": "事件位协议必须端到端（发出端 + 消费端）",
+   "kind": "silent-invariant",
+   "behavior": "EV_PEG=1 撞钉 / EV_CEIL=2 天花板 / EV_WALL=4 撞墙 / EV_DIV=8 隔板 / EV_ARC=16 导流弧（静音事件，仅折角豁免+接触率统计，GUI 播轻「擦」声 rail gain 0.18）。blood lesson：撞钉音效从来没响过——文档写了协议，_collide_pegs 里根本没有置位那一行，而 _frame() 只读 PEG 位；飞行全程唯一的音效来源从头到尾静音（现在 selftest 有「碰撞事件覆盖率」门禁，撞钉触发率 <90% 直接判失败）。另一条：EV_ARC 静音=幽灵装置，玩家看到球在虚空变向——关键交互事件必须有反馈。几何被细分的碰撞体（天花板弧细分 20 段的 rail）节流必须按「一次物理接触」（220ms）而不是「一次碰撞检测」来定。",
+   "trigger": "改碰撞/物理/音效接线时",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:71-75；E:\\AI_Tools\\other\\DanZhu\\histroy.md:199-212,295-312；E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:295-313"
+  },
+  {
+   "id": "audio-backend",
+   "name": "播放后端四级降级与音量策略",
+   "kind": "platform-glue",
+   "behavior": "优先级：SoundPool(Android) > winmm _WaveOut(8 声道，非阻塞 0.16ms) > _WinsoundOut(SND_MEMORY|SND_ASYNC 单声道) > 静音（不烘焙、零开销）。**声道全忙时直接丢弃而不抢占**（waveOutReset 要 10ms，会撑爆 16ms 帧预算；丢掉一声撞钉听不出来，卡一帧看得出来；真实对局 drops=0）。实测慢路径：waveOutOpen 8.8ms/次（后台线程 warm() 预开全部声道）、waveOutReset 10ms/次；优化前后 40 次连发 323ms(8.09ms/次) → 20ms(0.50ms/次)。WAVEHDR 结构体必须用 c_void_p/c_uint32 声明、不要用 wintypes（非 Windows import 就炸，破坏降级）；送出的 buffer 必须保活到播完。音量 = 撞击法向速率映射（低于 SFX_MIN_SP 不发声，到 SFX_REF_SP 满音量，gain 量化 10~11 档并缓存缩放后的 PCM）；撞钉按速率选音色变体 + ±1 随机抖动防机枪感；SFX_MASTER=0.85，各音效峰值 0.15~0.70 留叠加余量。**混音按 rms 排队不按 peak**（riser 初版 peak 只有 0.26 却是全库第二响）。",
+   "trigger": "每次发声",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\DESIGN.md:103-113,175-183；E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:215-258,376-399；E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:69"
+  },
+  {
+   "id": "sfx-synth",
+   "name": "音效合成管线与配方（零资源文件）",
+   "kind": "player-visible",
+   "behavior": "6 个基元做完全部合成：_noise(单极点低通，幅度补偿 1/sqrt(lp)) / _add_partials(指数衰减正弦分音，衰减到 -80dB 提前 break) / _add_chirp(相位累加，不能 sin(2πft)，否则频率变化时相位跳变爆音) / _add_noise / _add_bell(整数分音 1/2/3/4.02，高次 tau ×0.55/0.34/0.22) / _reverb(4 条梳状反馈延迟 23.1/29.7/37.1/41.1ms)。_pack 归一化到目标峰值 + **非对称淡入淡出：淡入 0.6ms（长了会杀掉打击瞬态，「叮」变「嘟」）、淡出 5ms（否则尾部截断「哒」爆音）** + 软削波转 16bit。音色规则：非谐分音=金属、整数分音+高次快衰减=乐音、lp 管亮暗、tau 管快慢。SR=22050Hz/16bit/单声道。曾否定的做法：Beep（只有方波/阻塞/同时只能响一个）、对混合后整段做低通（会削掉分音亮度）、混响原地反馈（会糊掉干声）。",
+   "trigger": "启动烘焙一次",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\DESIGN.md:88-101；E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:161-233"
+  },
+  {
+   "id": "sfx-thresholds",
+   "name": "音效阈值 / 节流 / 增益量化表",
+   "kind": "player-visible",
+   "behavior": "发声下限 SFX_MIN_SP：peg45 / ceil60 / wall70 / div45 px/s（轻擦不发声，否则一堆细碎杂音）；满音量参考 SFX_REF_SP：peg900 / ceil1300 / wall700 / div700 px/s（映射到 gain 0.30~1.0）；节流：peg38 / wall·div55 / rail220 / coin55 ms。gain 量化成 10~11 档并缓存缩放后的 PCM。物理层只记录「撞了什么、多猛」（b.events 位 + b.amp 法向速率），音量/阈值/节流/音色变体全部在音效层——调音不用碰物理。",
+   "trigger": "碰撞事件消费",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:244-258；E:\\AI_Tools\\other\\DanZhu\\DESIGN.md:167-183"
+  },
+  {
+   "id": "fx-probe-gates",
+   "name": "fx_probe 门禁编号 ↔ 玩家可见行为对照表",
+   "kind": "dev-tool",
+   "behavior": "跑法 PYTHONIOENCODING=utf-8 python tools/fx_probe.py。编号（缺号=已下线）：[1] Clock 回调签名（零参=真机启动即闪退）→ [2] 玻璃纹理可加载+尺寸（1600×920，订正前 800×460 钉死）+[2b] 球贴图 128×128/整图回退/远侧环补画层 → [3] 球纹理 4 档投注色 + 7 档堆形颗数=倍率 且同(颗数,种子)逐球心可复现 + 离线坐标表一致 + 表空回退仍能堆 100 颗 + 档位清单无第二份手抄本 → [4] 球堆缓存 FIFO 上限 128（原型无上限，长局会一直涨）→ [5] 时长自洽（expected_sec 只许偏高不许偏低：x100 有 3.9% 的局曾估短）+ 揭晓=触地+REVEAL_DELAY + 揭晓晚于末声 + x2 停留 ≥0.50s → [6] 进场/退场曲线单调/解锁归零/收在(1,1,1,0)/等待期恒静止/几何红线 → [7] 空档（杯子就位→首球入画 ≤0.20s；不能有球开局就画在半空）→ [8] 落定阶段横向不越界（纯竖直回弹）→ [10] 揭晓投递语义（每局恰好一次/3 帧内/不留挂账）→ [11] 压暗覆盖与绘制层级（零重叠零缺口/视口变宽铺满/_sync_hud_dim 在 tick_draw 之后/绘制次序用真 _redraw 指令表定位）+ 文字纹理缓存接线 → [12] 落珠震动=落地音（时刻逐个相同）→ [13] 版本/构建日期行格式 → [14] 装杯落珠音量下限 → [17] 落袋即终态 + 落地必弹 + 飞行循环落袋即 break → [18] 冷启动音频就绪（首次安装没声音：闸门/明细/语音就绪/静默降级/冷启动耗时文案/veil 标题与 resplash 尺寸）→ [18] 装杯发牌顺序随机 + 拓扑合法 → [19] 隐藏档弹窗（每次都弹/不叠弹窗/默认选中/关闭隐藏/语音只播新那条/语音清单三方一致）→ [20] 装杯退场等玩家点击（干等 12s 仍是 result/最短停留前后受理/点击后走现成 0.25s 曲线/跑分例外）→ [21] 换盘面熄灭投中指示灯 → [22] 受击压扁方向解耦 → [23] 成绩页慢帧归因按各阶段总帧数归一化 → [24] 帧率曲线阶段条 + 逐帧日志复制/保存 + 慢帧账（等屏幕/CPU 频率/GC/进程态/文字重建来源/冷字号测量）→ [25] 输入锁用触摸层吞掉 → [25b] 按钮底色唯一取值口 + 不可用保留身份色 → [26] 装杯球层 PushMatrix/PopMatrix 配对且不卷进前层玻璃 → [28] 远侧环独立层 over 必须画在压暗之后、补画之前。",
+   "trigger": "改装杯/UI/音频后端/跑分后",
+   "source": "tools/fx_probe.py（3241 行，逐段 print 标题 + check 名称）"
+  },
+  {
+   "id": "sim-balance",
+   "name": "sim_balance.py — 余额/破产模拟器",
+   "kind": "dev-tool",
+   "behavior": "验证四档 RTP 下 1000 珠起始、每发投 100 珠、每轮固定 20 发的余额分布，输出 output/sim_balance_*.html（零依赖内联 JS）。指标：破产率/存续率/亏率/中奖率/×50×100 落地率/平均最大回撤/破产前发数中位/终局余额分布（log10 分箱）/净赚。落格分布用测得的 slot_dist.json 缓存（物理改动才需重测）。",
+   "trigger": "python sim_balance.py [--headless]",
+   "source": "android/sim_balance.py:1-13,118-207"
+  },
+  {
+   "id": "build-generator",
+   "name": "build_android_main.py 拼接生成器（现已作废/STALE）",
+   "kind": "dev-tool",
+   "behavior": "顺序 [head, b1..b7, backends, pile3d, android_part_pile, ui]，从 plinko.py 原样抽取常量/几何/物理/音效合成/selftest + 手写段拼接。`--check` 只校验 main.py 与源同步（当前本来就 STALE）。生成器不做任何去重，同名模块级变量**静默覆盖**（实踩：_BALL_TEX 撞上 ui 段同名变量被重置成 None → 首次中奖 AttributeError，新分片名字一律加前缀）。⚠️ 按最新文档，**绝对不要运行它**（会抹掉约 8000 行）。",
+   "trigger": "改 plinko.py/tools 源后（历史流程）",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:16-22；android/BUILD_APK.md §3.26；android/CLAUDE.md:376-383"
+  },
+  {
+   "id": "bake-pile-data",
+   "name": "bake_pile_data.py 离线坐标表",
+   "kind": "dev-tool",
+   "behavior": "球堆逐球坐标离线烘成表，启动时分帧预烘。门禁钉住「离线坐标表与现算逐位一致」——改了球堆参数必须重跑 bake_pile_data.py，否则静默用旧几何。",
+   "trigger": "改 pile3d 球堆参数后",
+   "source": "tools/bake_pile_data.py；tools/fx_probe.py [3] 段（\"改了球堆参数必须重跑 bake_pile_data.py\"）"
+  },
+  {
+   "id": "voice-generator",
+   "name": "generate_voice.py — edge-tts 语音再生成（联网）",
+   "kind": "dev-tool",
+   "behavior": "PHRASES 表 = 音效键 → (文案, lead_ms)，voice=zh-CN-XiaoxiaoNeural，输出 android/voice/*.wav（61/63 条）。fx_probe [19h] 有「语音清单三方一致」门禁：generate_voice.PHRASES / voice/ 目录 / main.py 里的键必须对得上。运行需联网。",
+   "trigger": "改语音文案时",
+   "source": "tools/generate_voice.py:25-35,200-204；tools/fx_probe.py [19] 段"
+  },
+  {
+   "id": "sfx-tools",
+   "name": "--sfxtest / --dumpwav / --smoke / --selftest 命令族",
+   "kind": "dev-tool",
+   "behavior": "python main.py（桌面预览 540×960）/ --selftest（无界面门禁自测，改完必跑，**偶发 3σ 假失败重跑一次**）/ --smoke（自动冒烟+截图到 %TEMP%/plinko_smoke）/ --landscape（桌面模拟横屏反旋转 1740×1000）/ --nosound / -m py_compile。PC 版另有 --demo（20 发全链路）/ --sfxtest（逐个试听 ~30s，最后按实测时刻模拟一次完整发射）/ --dumpwav。",
+   "trigger": "开发循环",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:26-35；android/README.md:126-134；E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:279-285"
+  },
+  {
+   "id": "qa-checklist",
+   "name": "QA 检查清单的可量化验收项（4a~4k）",
+   "kind": "dev-tool",
+   "behavior": "文档把用户诉求转成可度量门禁，禁止「1px 也算」式口径。设计准则四条：物理自然为主干 / 允许小概率戏剧性 / **禁止凭空反物理**（磁力/瞬移/穿墙/穿帮/凭空横向移动，出现即失败）/ 量化证据须由专家证明对人类合适。手感门禁：4a 回弹可见性 ≥10px≥25%、≥20px≥5%、max≤45px；4b 弹高 p90 ≥12px 且有 >30px 尾部；4c 弹高 CV ≥0.1；4d 落袋前 vy 自然加速 p50≈305px/s；4e 减速比 p50 ∈0.45~0.85（实测 0.74）；4f 滞留帧 ≤10/发；4g 横向稳定性（底部 vx<80 突增>280 次数=0，500 发严判据）；4h 首钉 x 跨度 ≥45px（实测 54~57px，余量薄需盯）；4i 相邻帧碰钉 p50 ≤1 次/发；4j 单钉滞留 max ≤30 帧（现 14）；4k 弧面接触 =1 次/发 占比 ≥98%。用户已报告的四条显性问题（1a 碰钉几乎从不回弹/1b 落地最后变慢/1c 底部凭空横向移动/1d 钉子与边界融合）各带根因与复验标准。",
+   "trigger": "每次改物理/手感后逐项实测",
+   "source": "android/qachecklist.md:1-108"
+  },
+  {
+   "id": "sound-doc-inconsistency",
+   "name": "音效总数在文档间不一致（36/39/46/40）",
+   "kind": "silent-invariant",
+   "behavior": "同一套音效库在不同文档里被记成不同数字：根 CLAUDE.md「46 个 16bit PCM（含 bead0/1/2 + cup0..3/cupland）」、DESIGN.md「39 个」、README.md 与 yinxiao.md「36 个 / 11.7 秒」、qingkuang.md「40 个程序合成的短音 + 61 条 TTS」。重写时必须以**代码里 iter_bank() 的真实条目**为准，不能照抄任何一份文档。同类不一致还有：下落节奏门禁减速比 0.45~0.80（根 CLAUDE）vs 0.45~0.85（qachecklist）、滞留帧 ≤30/发（根 CLAUDE）vs ≤10/发（qachecklist）、ARC_OUT_ANGLE 25°（PC 文档）vs 35°（android 实际）。",
+   "trigger": "重写音效/物理时对照文档",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\CLAUDE.md:65；E:\\AI_Tools\\other\\DanZhu\\DESIGN.md:114；E:\\AI_Tools\\other\\DanZhu\\README.md:26；E:\\AI_Tools\\other\\DanZhu\\android\\qingkuang.md:11；android/jiaopjie.md:190"
+  },
+  {
+   "id": "pile-variety",
+   "name": "球堆「每局形状明显不同」的未解需求",
+   "kind": "player-visible",
+   "behavior": "球堆是**生成期一次性算完的静态几何**，运行期只做投影查表 + 时基插值（零物理、零重算，这是架构不是偏好）。玩家原话「当前的珠子，每次下落都是固定的位置，很呆板，不够灵气」。实测根因：代码里 4 个堆形变体只影响一个随机抖动，变体间每颗球位移平均只有 1.29 像素而球径 100.5 像素（差 1.3%），肉眼完全不可辨——**同一个倍率中两次，玩家看到的是同一张图**；而守着这件事的自动化测试只断言「两个变体列表不相等」，1.3 像素就骗过了它。已做的一步（也是当前水平线）：把变体改成整堆绕杯轴旋转 0°/60°/120°/180°（零容量代价，7 档几何断言全过），但旋转只改相位、不改形状（h 值谱/离轴距离谱/最近邻三维距离谱一个数都没变）。7 条硬约束：球半径固定（源码里静默兜底「装不下就把半径乘 0.94 重试」是红线）/ 颗数=倍率 / 运行期零物理 / 最坏不能崩（9 秒硬兜底，锁住输入玩家只能杀进程）/ 生成期成本几十毫秒（x100 现在桌面 19ms）/ 只能用 Python 标准库 / 演出总时长不能变长太多（x2≈2.56s、x100≈4.75s，而飞行中位 4.24s）。",
+   "trigger": "每次中奖装杯",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\球堆需求说明.md 全文；tools/pile3d.py:22,320,346"
+  },
+  {
+   "id": "bench-history-io",
+   "name": "日志复制/保存与跑分历史持久化",
+   "kind": "player-visible",
+   "behavior": "跑分逐帧日志可复制到剪贴板（btn.text 变「已复制」）与保存（Android 走 MediaStore + getBytes，桌面走文件），保存路径抛异常要捕获不崩。跑分记录字段用 bench_history 那套键，与现场路径共用同一套键名；表头与数据行必须共用同一套列宽（_HW）。历史各保留最近 100 条。",
+   "trigger": "跑分结果页操作",
+   "source": "tools/fx_probe.py [24] 段尾；android/main.py:4680,13144,16878-16881"
+  },
+  {
+   "id": "gate-hygiene",
+   "name": "门禁自身的卫生规则（统计功效/记账/阴性对照/空转）",
+   "kind": "silent-invariant",
+   "behavior": "四条都是被实踩出来的：①**统计功效**——RTP 门禁曾 30% 假失败（单发赔付 σ≈3，n=4000 时均值标准误 ≈0.047 与 ±0.05 门禁同量级 = 1σ 检验），提到 n=40000（标准误 0.015，3σ）后 5/5 稳过。②**先记账再打印**——check() 原来 print 在前、FAIL.append 在后，而 Windows 控制台默认 GBK，详情里带 ⚠/⇒ 时 print 抛 UnicodeEncodeError ⇒ 后面几百条断言一条都不跑（看起来像门禁跑到一半崩了）；一条断言失败绝不许影响后面的断言。③**阴性对照**——写门禁要把改动改回坏的样子确认它真的会红（实踩：dim_alpha 的 idle 守卫那条用 _settled_at=0.0 的夹具删掉守卫也不会红）。④**空转的门禁比没有门禁更坏**——它冒充覆盖（v0.8.69：PC 夹具没给 bank，PC 支第一句 if self.bank 就 AttributeError 被吞，三条 PC 断言恒假、一直在红却红得毫无意义）。另：接线断言要用**几何**判据，别数某个调用出现几次（把 self._row_dim(top) 复制五遍照样数出 5）；文本断言一律读**出货文件** android/main.py 而不是 tools/ 源（生成器没重跑会给出包假绿灯）。",
+   "trigger": "写/改任何门禁时",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:401-408；tools/fx_probe.py:30-42；android/CLAUDE.md:344-357,384-392"
+  },
+  {
+   "id": "fx-probe-baseline",
+   "name": "fx_probe 出货侧基线不是全绿（18 条红）",
+   "kind": "dev-tool",
+   "behavior": "PYTHONIOENCODING=utf-8 python tools/fx_probe.py 的验收标准是「**FAIL 清单逐条同名、一条不新增**」，当前基线 18 条红（玻璃图/球贴图 mipmap ×5、PC 成绩页措辞 ×6、音频后端行、FpsCurve 阶段标签等，都与高压测试无关）。不带 PYTHONIOENCODING=utf-8 会在总结行抛 UnicodeEncodeError，别被那个 traceback 骗了。",
+   "trigger": "跑 fx_probe 后判读结果",
+   "source": "android/CLAUDE.md:384-392"
+  },
+  {
+   "id": "unverified-leads",
+   "name": "两条未验实的性能线索（48kHz fast track / MediaCodec 批解码）",
+   "kind": "platform-glue",
+   "behavior": "线索 1：AudioTrack.cpp 里 track 采样率 ≠ 设备输出采样率 ⇒ 直接剥掉 AUDIO_OUTPUT_FLAG_FAST 掉进 normal mixer（慢路），而样本是 22050Hz、设备原生通常 48000Hz ⇒ 很可能一直在走慢路；代价 WAV 体积 ×2.18，零成本验证法是 adb logcat | grep AUDIO_OUTPUT_FLAG_FAST 看有没有 denied 警告。线索 2：绕开 SoundPool 自己用同一个 MediaCodec 批解码，一次 JNI 调用同步带回失败名单，不受串行队影响，预估 ≈0.2s；但判据会从「能播」变成「能解码」（混音/路由没被验过），**要项目所有者签字**。已否掉的还有「动那个 6 秒硬上限」「换更快的机器」「静音循环焐热 SoundPool」。",
+   "trigger": "继续优化热启动",
+   "source": "android/qingkuang.md:73-97"
+  },
+  {
+   "id": "doc-is-not-code",
+   "name": "「文档描述的协议 ≠ 代码实现的协议」——文档会随参数调优而失真",
+   "kind": "silent-invariant",
+   "behavior": "多次血泪：①CLAUDE.md 写着「撞钉：_collide_pegs 设事件位」，代码里根本没这一行（音效全程静音）；②CLAUDE.md/DESIGN.md 都写「球撞天花板弧→弹向左入场」，实测撞弧率只有 0.1%，真相是 CROSS_K 越顶弹簧在 y<190 就把球往左拽、从弧左端外侧约 12px 擦过（穿越 y=108 时 x 中位数 442）；③弧面注释写「接触段 25°」，实算 32.5°（旧几何残留）。教训：不要基于文档推断物理行为，写个 5 行脚本打印实际坐标；参数注释写完要跑脚本验证。",
+   "trigger": "任何时候拿文档当事实",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\histroy.md:199-212,100-103；E:\\AI_Tools\\other\\DanZhu\\yinxiao.md:295-313"
+  },
+  {
+   "id": "stale-artifacts",
+   "name": "已过期的文档/工具清单（别当当前值）",
+   "kind": "dev-tool",
+   "behavior": "①android/CLAUDE.md 的行号与 main.py 实际代码有几处对不上（start_charge 未立即禁控件、哑火累加器在循环外、stall 位移检测在循环外、ARC_OUT_ANGLE 是 35° 不是 25°）；②bench_no_preflight.py 是旧版物理快照（G=1200、LAUNCH 1180/1220、含 steer_ball + SLOT_BRAKE、无 EV_ARC），不能外推到当前无引导物理；③sim_balance.py 的盘面模型 docstring 说「与 plinko.py 完全一致」但早期版本用 Bernoulli 模型（现已改为直接 import plinko.roll_multipliers）；④project_steer_refactor.md 是 2026-08-03 历史快照，参数已被后续演进覆盖；⑤三处盘面生成逻辑曾互不一致。",
+   "trigger": "查历史参数/复用旧脚本时",
+   "source": "android/jiaopjie.md:178-198；E:\\AI_Tools\\other\\DanZhu\\android\\sim_balance.py:79"
+  },
+  {
+   "id": "player-reported-bugs",
+   "name": "文档记录的玩家报过的 bug 清单（定稿规则的来源）",
+   "kind": "player-visible",
+   "behavior": "①「小动物找回家的路」→ 彻底被动化，删除引导/预定槽/预演修订；②「弹珠落入1个倍率槽之后跑到其他槽位去了，弹跳又高又斜」→ 落袋即终态；③「碰钉几乎从不回弹」→ E_SLOW/E_FAST 0.70/0.40 + PEG_BOUNCE_VY_MAX 300 + 摩擦 0.95/0.97 + 掠射向上 150；④「落地最后一段时间速度变慢」→ 删 SLOT_BRAKE（每帧 vy×0.65 拉到 31px/s 爬行）；⑤「接近底部出现极大速度凭空横向移动」→ 侧向逃逸后重新限幅 vx；⑥「钉子和界面边界发生融合」→ 贴墙钉圆心移进场区（距墙 3px）；⑦「刚开始飞行和穿过弧形槽是两个音效，而且不连续」→ 删 flight 音效、包络抄实测速度曲线；⑧「中奖后不再发射的局中奖音永久丢失」→ 揭晓按投递语义重写；⑨「落进容器后消失得太快，没有回味」→ 拆开 _last_touch 与 _last_settle；⑩「装弹珠时背景灰化不够 / 弹珠绘制精度不够有点模糊」→ HUD 压暗 + 玻璃 PNG 提到 1600×920（并实测否决了球纹理 d=256）；⑪「上边缘的内侧和外侧颜色差异较大」→ 杯口环补画分段纵向渐变；⑫「弹珠落入容器时设备应该震动，震动和落地音效同步」；⑬「装杯音量太小」；⑭「点了投中指示灯不消失」；⑮「在表演弹珠落容器的时候…每次下落都是固定的位置，很呆板」。",
+   "trigger": "重写时的回归清单",
+   "source": "E:\\AI_Tools\\other\\DanZhu\\histroy.md、todolist.md、todolist_fx_clarity.md、球堆需求说明.md、android/qachecklist.md、android/CLAUDE.md 通篇"
+  }
+ ],
+ "constants": [
+  {
+   "name": "RTP_UNLOCK_HOLD",
+   "value": "3.0",
+   "meaning": "长按返还比例标签解锁隐藏档的秒数（2026-09-12 从 5.0 改）"
+  },
+  {
+   "name": "RTP_TIERS / RTP_HIDDEN",
+   "value": "[0.80,1.20,2.00,3.60] / [1000%,2000%,5000%]",
+   "meaning": "常规四档 + 三个隐藏档；关闭隐藏回到 max(RTP_TIERS)=360%"
+  },
+  {
+   "name": "HOLD_BASE",
+   "value": "0.6",
+   "meaning": "装杯装满后最短停留（=点击生效最早时刻）；原 HOLD_TIERS/HOLD_STEP 分档已删"
+  },
+  {
+   "name": "REVEAL_DELAY",
+   "value": "0.4",
+   "meaning": "揭晓 = 最后一颗球第一次触地 + 0.4s（让最后几下落地的声音先播完）"
+  },
+  {
+   "name": "CUP_TRIGGER_DELAY",
+   "value": "0.15",
+   "meaning": "落袋 t=0 播声音，0.15s 后才 play_win（杯子可见进场 = settle+0.65s）"
+  },
+  {
+   "name": "WINDUP",
+   "value": "0.50",
+   "meaning": "结算后先停 0.5s 让槽位白闪/绿灯先被看见（用户定案）；进场总窗口"
+  },
+  {
+   "name": "ENTER_DIM_AT/DUR · ENTER_CUP_AT/DUR",
+   "value": "0.30/0.16 · 0.32/0.18",
+   "meaning": "进场压暗与杯子的错峰时刻/窗口；ENTER_CUP_AT+DUR 必须 ≤ WINDUP"
+  },
+  {
+   "name": "ENTER_RISE / ENTER_SCALE",
+   "value": "56 / 0.92→1.0",
+   "meaning": "杯子从上方 +56 逻辑px 降入并放大（22 是因为贴图极透读不出来才加的）"
+  },
+  {
+   "name": "EXIT_LIFT / EXIT_SCALE / RESULT_FADE / EXIT_DIM_LEAD",
+   "value": "52 / 0.90 / 0.25 / 0.04",
+   "meaning": "退场上浮/缩小/淡出时长/压暗层提前撤（「灯先亮回来、道具后撤走」）"
+  },
+  {
+   "name": "RESULT_HOLD + RESULT_FADE",
+   "value": "0.45（和不可改）",
+   "meaning": "解锁前的尾巴；expected_sec / _reveal_deadline / fx_probe 全按这个和算"
+  },
+  {
+   "name": "RAIN_ANCHOR / RAIN_SHIFT_MAX",
+   "value": "0.12 / 0.55",
+   "meaning": "整场雨前移：把「杯子就位→首球入画」的空档从 0.44~0.55s 压到 0.12s"
+  },
+  {
+   "name": "DIM_ALPHA == HUD_ALPHA",
+   "value": "0.68",
+   "meaning": "板面与 HUD 压暗同一常数（同屏两档会打架；_bench_dim_* 的 0.72 是另一套）"
+  },
+  {
+   "name": "FX_MAX_SEC",
+   "value": "9",
+   "meaning": "pending/win 段的硬兜底；result 段故意无超时（只能玩家点击退出）"
+  },
+  {
+   "name": "RIM_BAND_STRIPS / RIM_BAND_ALPHA_TOP / RIM_BACK_FRAC",
+   "value": "12 / 0.55 / 166÷920",
+   "meaning": "后半个杯口环补画：12 段纵向渐变，顶部 alpha 0.55 线性升到分界处 1.0；含杯底环 694..808"
+  },
+  {
+   "name": "BIG_TEXT_LIFE",
+   "value": "1.8s（原 3.0s）",
+   "meaning": "中奖大字生命；装杯改成等点击后会飘进下一局蓄力期（已在文档里标为待决）"
+  },
+  {
+   "name": "_PILE_CACHE_MAX",
+   "value": "128（FIFO，不是 LRU）",
+   "meaning": "球堆缓存上限（原型无上限、文档曾写 12，都错）"
+  },
+  {
+   "name": "球纹理 d / 玻璃 PNG",
+   "value": "128（每档色）/ 1600×920（design 的 2×）",
+   "meaning": "玻璃是 PNG 资产提到 2× 修的「模糊」；球纹理 d=128→256 实测收益中位差 1/255≈0，明令不做"
+  },
+  {
+   "name": "球堆几何（x100）",
+   "value": "球半径50.23 / 层间距82.03 / 4层 / 19-26-31-24 / 杯口324 / 上限307.8",
+   "meaning": "密排三角格逐层枚举（层间距 1.633r、层内 √3r×1.02 奇偶错半格），3D→2D 纯纵剪 K2=0.20 无透视；x100 生成 19ms（桌面）"
+  },
+  {
+   "name": "球堆容量兜底",
+   "value": "spec.r *= 0.94（最多 4 次）",
+   "meaning": "装不下就原地缩小半径重试——需求文档把它标为红线（同一倍率不许出现两种球径）"
+  },
+  {
+   "name": "LAND_E / LAND_BOUNCE_MIN_VY / LAND_BOUNCE_JITTER / 回弹上限",
+   "value": "0.42 / 440（撞击速度，非回弹速度）/ (0.85,1.15) / 220",
+   "meaning": "第一跳 p50≈17px、≥10px 98%、弹 3 次；440 按最坏随机 0.85×0.92×0.42×440 → apex 10.4px 倒推"
+  },
+  {
+   "name": "物理节奏（文档表）",
+   "value": "60 步/秒 · 每发约 254~264 步",
+   "meaning": "物理固定 60Hz 与屏幕刷新率无关；165Hz 单帧预算 6.06ms，桌面 SoC 约 11516 步/秒、Y700 ≈10000 步/秒"
+  },
+  {
+   "name": "SFX_MIN_SP / SFX_REF_SP",
+   "value": "peg45/ceil60/wall70/div45 · peg900/ceil1300/wall700/div700 px/s",
+   "meaning": "发声下限（轻擦不发声）与满音量参考速率（映射到 gain 0.30~1.0）"
+  },
+  {
+   "name": "节流",
+   "value": "peg38 / wall·div55 / rail220 / coin55 / BOUNCE_THROTTLE 0.10 s",
+   "meaning": "防连发糊成噪音；rail 特别大是因为天花板弧被细分成 20 段、一次接触会多次置位"
+  },
+  {
+   "name": "发射/蓄力增益",
+   "value": "SFX_LAUNCH_GAIN/MAX 0.60/0.80 · SFX_MISFIRE_GAIN/MAX 0.35/0.50 · CHARGE_HOLD_SEC/GAIN 0.60/0.40",
+   "meaning": "哑火与成功两档发射音量；满蓄力后每 0.60s 轻响 charge_full"
+  },
+  {
+   "name": "合成参数",
+   "value": "SR=22050Hz/16bit/单声道 · 淡入 0.6ms / 淡出 5ms · 混响梳状 23.1/29.7/37.1/41.1ms · SFX_MASTER=0.85",
+   "meaning": "非对称淡入淡出是最不直观又最影响质感的参数；混音按 rms 排队不按 peak"
+  },
+  {
+   "name": "winmm 慢路径",
+   "value": "waveOutOpen 8.8ms/次 · waveOutReset 10ms/次 · waveOutWrite 0.16ms · 8 声道",
+   "meaning": "帧预算 16ms ⇒ 后台预开声道 + 全忙直接丢弃不抢占（优化后 40 次连发 323ms→20ms）"
+  },
+  {
+   "name": "冷启动音频就绪",
+   "value": "101 个样本（40 合成 + 61 TTS）/ 5.5MB / 6 秒硬上限",
+   "meaning": "逐个 0 增益试播确认；骁龙 8+ Gen 1 上 29~33ms/次 = 3.0~3.5s，8 Elite Gen 5 只要 3ms/次"
+  },
+  {
+   "name": "预设与初始值",
+   "value": "START_BEADS=1000 · DEFAULT_BET=10 · PRESETS=[1,10,50,100] · 每轮 20/50/100（默认 50）",
+   "meaning": "余额/投注档；落盘字段 max_plays/rtp_target/bet/balance/round_plays/plays/hits"
+  },
+  {
+   "name": "震动",
+   "value": "中奖 45/75/110/150ms（振幅 255）· 装杯落珠 10~18ms / 振幅 80~220",
+   "meaning": "两套震动：长震=大奖；短脉冲=珠粒落杯（马达启动时间 10~20ms，10ms 是下限）"
+  },
+  {
+   "name": "BOUNCE_GAIN_BOOST",
+   "value": "1.8",
+   "meaning": "装杯落珠音量倍率（原来只有 0.25~0.72；要调就调它，别动 _sfx_bounce 的合成增益）"
+  },
+  {
+   "name": "MISFIRE_POWER",
+   "value": "0.15",
+   "meaning": "低于此力度哑火：不扣珠、播哑火音（0.35→0.50）；力度条有哑火红线标识"
+  },
+  {
+   "name": "ARC_EJECT_ANGLE / ARC_EASE_FRAMES / ARC_VISUAL / ARC_E",
+   "value": "12 / 3 / 1.4 / 0.50",
+   "meaning": "电磁弹射器出口角 / 缓动带球帧数 / 碰撞半径=视觉半径（球渲染 12.6 vs 碰撞 9）/ 弧面法向反弹"
+  },
+  {
+   "name": "调试常驻量",
+   "value": "MAX_FALL_SEC 4.0 · STALL_RETRY_SEC 1.2 · STALL_MAX_RETRY 10",
+   "meaning": "卡死兜底：位置不动 ≤1px/帧 超 4s 强制结算"
+  },
+  {
+   "name": "fx_probe 门禁编号",
+   "value": "[1][2][2b][3][4][5][6][7][8][10][11][12][13][14][17][18]×2[19][20][21][22][23][24][25][25b][26][28]",
+   "meaning": "编号有缺号（[9]/[15]/[16]/[27] 等已下线）；py 头部 docstring 只列了 1~5，实际已扩到 28 段"
+  },
+  {
+   "name": "fx_probe 当前基线",
+   "value": "18 条 FAIL",
+   "meaning": "验收标准是「FAIL 清单逐条同名、一条不新增」；须带 PYTHONIOENCODING=utf-8 跑"
+  }
+ ],
+ "gotchas": [
+  "⚠️ 绝对不要再跑 tools/build_android_main.py：它现在只能重建 10991 行，而出货的 android/main.py 是 22347 行，跑一次静默抹掉约 8000 行手写代码（高压测试/SpeedCurve/电池快照）；`--check` 本来就是 STALE，不是同步依据。",
+  "文档之间互相矛盾的数字不要照抄：音效数 36/39/40/46 四种说法、减速比门禁 0.45~0.80 vs 0.45~0.85、滞留帧 ≤30 vs ≤10、ARC_OUT_ANGLE 25° vs 35°。以代码为准。",
+  "「文档描述的协议 ≠ 代码实现的协议」——撞钉事件位从来没被置过（音效全程静音）、「球撞天花板」实测只有 0.1%（其实是从弧左端外侧 12px 擦过）。不要基于文档推断物理行为。",
+  "落地弹跳：LAND_BOUNCE_MIN_VY 是**撞击速度**不是回弹速度，回弹=撞击×LAND_E(0.42)；旧值 220 当回弹速度用只弹 4px，74% 的落袋肉眼看不见。",
+  "落袋处只能清 vx 不能连 vy 一起清，也不能只清 vy 不清 vx——前者把落地弹跳抹平（≥10px 从 26% 掉到 0%，且**没有门禁覆盖**，属静默回归），后者实测仍然红。",
+  "result 段（装满静止）故意没有任何时间兜底，出口只有玩家点击；谁要给它加超时，先回去问玩家——加了会让「不点就一直在」失效。",
+  "_layers() 必须按 mode 分支、等待期恒返回 (1,1,1,0)；_closing_at/_settled_at 的初值 0.0 会让退场曲线算出天文数字并 clamp 成终态，而 --selftest 和 fx_probe 的 [6] 不碰这里时出错完全静默。",
+  "tick() 的 pending 分支不能有 if self._dirty 掐帧，否则错峰动画整段只画一帧。",
+  "HUD 压暗不能退回「每行各盖一块」（五行之间的 spacing/padding 是窗口背景，62px 的缝会成全场最亮；横屏时是 6 条贯通全高的竖亮线），也不能用 RootWidget.canvas.after（会盖住中奖大字）。",
+  "杯口环补画不能按「alpha>60 的像素」挑（back 里杯体和杯底也有 alpha>60 的像素，会把薄纱一起捞回来），必须按贴图行段切；也不能整条一个 alpha（会成硬切台阶）。",
+  "压暗层与 HUD 压暗的两处取值不能各自 time.time() 采样两次；dim_alpha() 是唯一取值口，_sync_hud_dim() 必须排在 game_area.tick_draw() 之后。",
+  "揭晓判定绝不能挂在某个 mode 分支里（86% 中奖局丢音），幂等闸只能有一处真源；改 tick()/settle() 的揭晓逻辑后必跑 fx_probe [10]。",
+  "hold_for / _closing_at / dim_alpha / _crossed 状态标志 都是单一真源：别在别处写死秒数、别用坐标阈值表达「到了某个阶段」（球出生 y=637 本来就满足槽区阈值）。",
+  "不要用 GUI 定时器（Clock.schedule_once / root.after）做音效节奏——无 mainloop 的端到端测试里会静默失效（中奖音 0 次触发）；时间关系要烘进波形。",
+  "Clock 回调必须能收 1 个位置参数，零参签名在真机启动 0.7s 必闪退而桌面测不出。",
+  "音效合成不要用全局 random、也不要用 getstate/seed/setstate 共享 RNG（后台线程会回滚主线程的随机状态）；iter_bank 顺序即音色，新增音效一律追加末尾。",
+  "混音按 rms 排队、不按 peak（持续正弦的 rms/peak≈0.58，撞击音只有 0.18~0.20，差 3 倍；riser 初版 peak 全库倒数却是全库第二响）。",
+  "淡入淡出必须不对称：淡入 4ms 会把整个噪声瞬态杀掉，「叮」变「嘟」；正确是淡入 0.6ms、淡出 5ms（防尾部截断爆音）。",
+  "装杯震动的节流必须与落地音共用同一次判定（挂在 sfx.play 的返回值上），震动自己再判一次时间必然漂移，玩家会「听到响但手上没感觉」。",
+  "装杯音量只调 BOUNCE_GAIN_BOOST，别动 _sfx_bounce() 的合成增益（波形主游戏共用）也别动 SFX_MASTER。",
+  "装杯落珠不要设次数上限（BOUNCE_BUDGET 的代价是 ×100 后段静音 2.3s）；震动同理不设上限。",
+  "GameArea._redraw() 的 canvas.clear() 会把子控件 canvas 一起摘掉（不报错），每次重画后必须 _restack_overlays()；Kivy 子控件 canvas 是绝对窗口坐标、父级不做平移。",
+  "canvas.after 的层级：child.canvas.after 盖住该子控件全部子控件、parent.canvas.after 盖住整棵子树——别用 RootWidget.canvas.after 做全屏压暗（会盖住中奖大字）。",
+  "输入锁用触摸层吞掉，不要动 Button.disabled（会在恢复时用统一颜色覆盖 RTP/投入的选中高亮，且重置按钮的独立配色会被 COL_BTN 覆盖）。",
+  "_PILE_CACHE 是 FIFO 上限 128（不是 LRU，也不是文档写的 12）。",
+  "球堆容量兜底会原地把 spec.r 乘 0.94 重试（最多 4 次）——同一倍率不许出现两种球径，这是需求文档的红线；而 4 个「堆形变体」实测只差 1.29px/球径 100.5（1.3%），且旧测试只断言「两个变体列表不相等」，1.3 像素就骗过了它。",
+  "玻璃 PNG 分辨率被 fx_probe [2] 钉死 (1600,920)，换回 1× 当场变红；生成器 wingui/assets/generate_glass_tumbler.py 已用 SCALE=8 超采样，提分辨率只需改 _save() 的输出尺寸。球纹理 d 别再想 128→256（实测收益≈0，代价 ×4）。",
+  "4 张生成纹理都没挂 add_reload_observer（Kivy 文档明写生成纹理须自行重载），Android 切后台/息屏丢 GL context 时球可能变空白——领域文档标为「一行代码，建议加」但**尚未核实是否已落地**。",
+  "防息屏的 FLAG_KEEP_SCREEN_ON 取自 android.view.WindowManager$LayoutParams，不是 WindowManager；且整段被 except: pass 吞掉 ⇒ 真机上既不难退也没日志。桌面自测（只查 Python 变量 + 字符串搜索）永远测不出来。",
+  "不要把 tools/ 下的源文件当作门禁基线：文本断言一律读出货的 android/main.py；而 fx_probe 的当前基线**本来就是 18 条红**，验收口径是「FAIL 清单逐条同名、一条不新增」。",
+  "门禁要能真失败：一条断言失败绝不许影响后面的断言（check() 必须**先记账再打印**，Windows 控制台 GBK 下 print 带 ⚠/⇒ 会抛 UnicodeEncodeError 把整个套件腰斩）；接线断言用几何判据而不是数调用次数；每条新门禁都要做阴性对照。",
+  "随机量的门禁必须算标准误（RTP n=4000 时是 1σ 检验、30% 假失败；提到 n=40000 才是 3σ）。",
+  "别用「复制 GUI 循环」的方式写不变量门禁——复制品只会测它自己，而出货路径才是出问题的那条。",
+  "音效数不清的具体条目、语音条数（61/63）、以及 fx_probe 每段的完整断言细节，本文只提炼到「编号 ↔ 行为」粒度。",
+  "start_charge 是否立即禁用控件：android/CLAUDE.md 说「必须立即调」、jiaopjie.md 实测说「没有调」——两文档冲突，且 android/main.py 已大改（22347 行），需回代码核实。"
+ ],
+ "uncovered": [
+  "BUILD_APK.md 只读了标题索引（3.1~3.27 共 27 条 tkinter→Kivy 移植弯路的内容未逐条提炼，只取了 §3.23 Clock 签名 / §3.24 canvas.clear / §3.25 绝对坐标 / §3.26 生成器覆盖 四条）。",
+  "android/CLAUDE.md 虽已通读关键段（语音/隐藏档/装杯/验证标准/已知陷阱），但它的 main.py 内部结构行号表（46-115 行）与 471 行全文未逐行核对，其中可能还有未提取的行为。",
+  "球堆需求说明.md 的开放问题没有结论：多晶/多取向堆积方案是否成立、「有序度低→密度低→装不下 100 颗」的推理链漏洞未证伪，也没有任何一版落地。",
+  "高压测试模块 / SpeedCurve / 电池温度快照 只活在 android/main.py 里（77 处「高压测试」、20 处 SpeedCurve），只有 jin_xiumian.md 与 youhua.md 从侧面提到，缺少一份正面的功能说明。",
+  "qingkuang.md 的两条线索（22050→48000Hz 重采样拿回 fast track、用 MediaCodec 自批解码）标注为「未验实」，我没有验证真机是否已试过或已落地。",
+  "todolist_fx_clarity.md §4.1 的 HUD 压暗 / glass 1600×920 / fx_probe [2] 断言同步 三条落地项：android/CLAUDE.md 显示 1600×920 已落地，但 HUD 压暗的实现路径与「新盲区」是否已加门禁未核实。",
+  "youhua.md 的跑分线程锁核（_cpufreq / sched_setaffinity）只有「本次优化」的描述，未见真机验收数据（120/120 与 60/60 各三次的离散度对比）。",
+  "fx_probe 我只提取了段标题与 check 名称（约 300 条断言），每条的判据细节/夹具构造/阴性对照记录没有逐条读。",
+  "generate_voice.py 的 PHRASES 表（61 条文案）与 voice/ 目录、main.py 键名三方是否当前一致，未实跑 fx_probe [19h] 验证。",
+  "PC 版（plinko.py）与 Android 版的差异清单：文档只说「PC 无防沉迷、无中奖杯、tkinter after(16) 无累加器」，是否有其他行为分叉未盘。",
+  "根项目 tools/ 下的 fx_probe.py.bak / .bak_20260914 / android_part_ui.py.bak 三个备份的差异未看，可能记录了被回退的行为。"
+ ],
+ "notes": "本子系统盘的是「文档与工具」，所以行为的事实源是**文档**而不是代码——这些文档记录的绝大多数是**玩家报过的 bug + 定稿的规则 + 门禁口径**，正好是重写时最容易漏掉的部分（重写者只读代码不会知道「result 段为什么故意没有超时」「_reveal_win 为什么不能挂在 mode 分支里」「为什么不能只清 vy」）。\n\n三条最值钱的结论：\n\n1. **文档与代码已经脱钩，且方向明确**：`android/main.py`（22347 行）已不再由 `tools/build_android_main.py`（只能重建 10991 行）生成，`--check` 是 STALE。所有旧文档里的「勿手改 main.py」「行号表」（jiaopjie.md 那张 4445 行的表）都已过期。重写时以 `android/main.py` 为准，文档只用于取「为什么」。\n\n2. **门禁体系是本项目真正的规格书**：`--selftest`（RTP/被动飞行/哑火/下落节奏/事件覆盖/音效体检）+ `tools/fx_probe.py`（28 段、约 300 条断言）+ `android/qachecklist.md`（1a-1d/3a-3f/4a-4k 量化口径）三层。fx_probe 的头 docstring 只列了 1~5，实际已扩到 [28] 且编号有缺号；它的当前基线**不是全绿（18 条 FAIL）**，验收口径是「逐条同名、一条不新增」。文档反复强调两件事：门禁必须做**阴性对照**（改回坏的样子确认会红），以及**空转的门禁比没有门禁更坏**。\n\n3. **「单一真源」是本项目的第一设计律**：hold_for / _closing_at / dim_alpha / _crossed / 揭晓幂等闸 / 震动节流，文档为每一条都写了「两处各判必然静默脱钩」的血泪（其中揭晓那次造成 86% 的中奖局丢音）。重写时若保留「同一种数据在两条路径上各算一遍」的结构，这些 bug 会全部复现。\n\n音效清单是最完整的一段规格（DESIGN.md 给了 39 个音的主频/时长/节流/配方，yinxiao.md 给了 10 条合成原则与全部弯路），但**音效总数在四份文档里是 36/39/40/46 四种**——重写必须以 `iter_bank()` 的真实条目为准。\n\n最后一条元教训（histroy.md 反复出现）：「文档描述的协议 ≠ 代码实现的协议」——撞钉事件位、天花板碰撞、弧面角度都曾长期是错的。盘文档能拿到**意图和血泪**，但拿不到**现值**；每个数值都必须回代码或跑脚本复核。"
+}
