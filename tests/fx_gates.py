@@ -1325,6 +1325,36 @@ def main():
                   "(90.0% = 2868300 ÷ 该簇上限 3187000)—— 两个源的量不同, 屏上不许共用"
                   "「利用率」三个字",
                   " ".join(_plain3.split("\n")[1:]))
+            # ---- 路径 C: cpuidle **计数器冻结** ⇒ 整块降级(真机实测的形状) ----
+            # 这台 TB323FU 上核 6/7 的 cpuidle 计数器是**冻结的**: 1 秒里 state0/state1
+            # 增量都是 0, 而设备闲着 ⇒ 会印出一个**看起来完全合理的假数**「利用率 100.0%」
+            # (而频率只有 1132M)。判据 = 用频率分辨"真满载"与"计数器坏了"。
+            BC._cpu_util_reset()
+            _keep_ri = BC._read_int_file
+            _base_ft = {7: {2868300: 100}, 4: {1372500: 100}, 5: {1372500: 100},
+                        6: {1372500: 100}, 0: {1000: 100}, 1: {1000: 100},
+                        2: {1000: 100}, 3: {1000: 100}}
+            try:
+                BC._read_cpuidle_us = lambda _c: {0: 1000000}
+                BC._read_int_file = lambda _p: 500000      # 当前频率 == 最低档 ⇒ 判冻结
+                BC._read_freq_time = lambda: dict(_base_ft)  # freqtime 的**基线**
+                BC._live_cpu_freq_line()                   # 第 1 次: cpuidle 立基线(warm)
+                _CLK["v"] += 1.0                           # cpuidle 原样不动 ⇒ Δidle = 0
+                BC._live_cpu_freq_line()                   # 第 2 次: 判冻结 ⇒ 降级, freqtime 立基线
+                _CLK["v"] += 1.0
+                # ⚠️ 第 3 次之前**必须让 freqtime 的值动** —— 替身如果返回常量, 两次采样相同
+                #    ⇒ `Δ = 0` ⇒ 该核被跳过 ⇒ 永远 warm(看起来像降级失败, 其实是夹具没动)。
+                BC._read_freq_time = lambda: {k: {f: t + 100 for f, t in v.items()}
+                                              for k, v in _base_ft.items()}
+                _got4 = BC._live_cpu_freq_line()           # 第 3 次: freqtime 出数
+            finally:
+                BC._read_int_file = _keep_ri
+            _plain4 = re.sub(r"\[/?color[^\]]*\]", "", _got4)
+            check("频率利用" in _plain4 and "利用率" not in _plain4.replace("频率利用", ""),
+                  "**cpuidle 计数器冻结(Δidle==0 且频率停在最低档)⇒ 整块降级到 freqtime、"
+                  "口径词跟着换** —— 不许把「利用率」和「频率利用」混在同一屏上"
+                  "(玩家会拿两个不同口径的数互相比); 也不许把那个假的 100.0% 印出去",
+                  " ".join(_plain4.split("\n")[1:]))
             BC._cpu_util_reset()
             BC._read_cpuidle_us = lambda _c: {}
             BC._read_freq_time = lambda: {}

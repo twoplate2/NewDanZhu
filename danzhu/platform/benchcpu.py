@@ -992,6 +992,8 @@ _CPU_UTIL_T = {}         # {源名: 上一次采样的墙钟}
 _CPU_UTIL_DIAG = {}      # {源名: 读不到的原因}  ⚠️ **必须纯 ASCII** —— 字库是子集, 新中文会变
                          #    豆腐块(这个工程为它让过两次路:「摄氏度」→「度」、「瓦」→「每W跑分」)
 _CPU_UTIL_LOGGED = [False]
+# 本次差分里**判为不可信**的核(见 `_cpu_util_delta` 里那条判据)。每次差分开头清空。
+_CPU_UTIL_SUSPECT = []
 _CPU_UTIL_NOW = [time.monotonic]     # 时钟槽: 门禁替身注入(PC 上跑不了真差分)
 # ⚠️ 窗口跨太久 ⇒ **这一帧不印数**: cpuidle/cpufreq_stats 在**深睡时不累计**
 #    (实测 `Σ time_in_state` 只覆盖 23% 的 uptime) ⇒ 跨一个含深睡的间隔做差, 量到的是长期
@@ -1055,6 +1057,11 @@ def _cpu_util_delta(_src, _cur):
        —— 后者要由调用方除以**该簇自己的上限**才是百分比。这个差异**只由 `_CPU_UTIL_KIND`
        表达**, 不许在别处再判一次。
     """
+    # ⚠️⚠️ **必须在两个早退 `return` 之前清** —— 放晚了就是这个形状的 bug:
+    #    cpuidle 判冻结(填了 SUSPECT)⇒ 调用方 `continue` ⇒ 换到 freqtime ⇒ **换源要重立基线
+    #    ⇒ 早退 `return {}`** ⇒ 那一句 `del` 根本没执行 ⇒ SUSPECT 还是 cpuidle 填的那一份
+    #    ⇒ 调用方看到 `if _CPU_UTIL_SUSPECT:` 仍为真 ⇒ **把 freqtime 也 continue 掉** ⇒ 整块死。
+    del _CPU_UTIL_SUSPECT[:]
     _now = _CPU_UTIL_NOW[0]()
     _prev = _CPU_UTIL_PREV.get(_src)
     _pt = _CPU_UTIL_T.get(_src)
@@ -1066,6 +1073,7 @@ def _cpu_util_delta(_src, _cur):
     if _dt <= 0 or _dt > _CPU_UTIL_MAX_GAP_SEC:
         return {}                            # 时钟倒了 / 跨了深睡 ⇒ 这个差不是"现在"
     _out = {}
+    del _CPU_UTIL_SUSPECT[:]
     for _c, _d in _cur.items():
         _p = _prev.get(_c)
         if not _p:
@@ -1083,6 +1091,26 @@ def _cpu_util_delta(_src, _cur):
                 _idle += _dv
             if _bad:
                 continue
+            if _idle == 0:
+                # ⚠️⚠️ **`Δidle == 0` 有两种可能, 必须分辨** —— 2026-09-20 真机实测:
+                #    这台 TB323FU 上 **核 6/7(性能核)的 cpuidle 计数器是冻结的**:
+                #    整整 1 秒里 `state0`(WFI) 与 `state1` 增量**都是 0**, 而设备闲着
+                #    (只有 adb 在读) ⇒ 屏幕上印出「利用率 **100.0%**」而频率只有 **1132M**
+                #    (最低档附近) —— **一个看起来完全合理的假数**。核 0-5 同期正常
+                #    (idle 增量 ≈ 墙钟)。
+                #    ⚠️ 结构上已排除"算法错": `state0` 是 **WFI** 不是 POLL/active,
+                #       两个状态、单位微秒, 与 Chromium 的做法逐条一致
+                #       (`Active = wall_delta − core_idle`, 用 CLOCK_MONOTONIC, 第一轮跳过)。
+                #       ⇒ **错在数据源本身**, 不是算错了。相关内核形态: 簇被排除后
+                #       `state_idx` 停在最浅状态 / `cpuidle_enable_device()` 漏调
+                #       `poll_idle_init()` 让 state0 的 sysfs 属性由全零条目建成。
+                #    ⇒ **判据 = 用频率分辨"真满载"和"计数器坏了"**:
+                #       真满载时调频器会给高频; 计数器坏了的话频率仍**停在最低档**。
+                _f = _read_int_file(_FREQ_BASE % _c + "scaling_cur_freq")
+                _mn = _read_int_file(_FREQ_BASE % _c + "scaling_min_freq")
+                if _f and _mn and _f <= _mn * 1.15:
+                    _CPU_UTIL_SUSPECT.append(_c)
+                    continue                 # 这个核不出数
             _out[_c] = max(0.0, min(100.0, 100.0 * (1.0 - (_idle / 1e6) / _dt)))
         else:
             _tot = _acc = 0.0
@@ -1130,6 +1158,13 @@ def _cpu_util_by_core():
             _CPU_UTIL_PREV.pop(_s, None)
             _CPU_UTIL_T.pop(_s, None)
         _vals = _cpu_util_delta(_s, _cur)
+        if _CPU_UTIL_SUSPECT:
+            # ⚠️⚠️ **有核的 cpuidle 计数器被判不可信 ⇒ 整块降级到下一个源**(见
+            #    `_cpu_util_delta` 里那条判据: 这台 TB323FU 上核 6/7 的计数器是冻结的)。
+            #    ⚠️ **为什么不逐核混着印**: 屏上同时出现两个口径的数是**最危险**的 ——
+            #       玩家会拿它们互相比, 而它们根本不是同一个量(一个真时间占比、一个频率利用)。
+            _CPU_UTIL_DIAG["cpuidle"] = "frozen"
+            continue
         return (_vals, _CPU_UTIL_KIND[_s], "ok" if _vals else "warm")
     _CPU_UTIL_SRC[0] = None                  # 全废
     # ⚠️ **留一条痕, 只记第一次**: 屏上那一段现在会印 `--(原因)`, 而完整的原因表是给
