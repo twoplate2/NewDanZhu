@@ -9,6 +9,7 @@ LandLayer / RotPopup / FpsCurve / GlyphLabel / SpeedCurve，以及曲线轴用�
 """
 
 import math
+import time
 import sys
 
 from kivy.animation import Animation
@@ -30,6 +31,7 @@ from ..config import (COL_BALL, COL_BTN_OFF, COL_FIRE, COL_GRAY, COL_SUB,
                       hex_rgb)
 from ..platform.device import _device_is_wide
 from .text import (_GLYPH_ATLAS, _GLYPH_HIT, _GLYPH_MAX_CHARS, _GLYPH_MISS,
+                   _GLYPH_WAITERS, _GLYPH_WAIT_MAX, _glyph_chars_ok, _glyph_warm_done,
                    _POPUP_N, _glyph_key, _glyph_quads, _glyph_rec)
 
 
@@ -455,7 +457,13 @@ class GlyphLabel(Widget):
     bold = BooleanProperty(True)
     fit_box = BooleanProperty(False)      # True: 像 HUD 那样排在"控件矩形"里(余额用)
 
-    def __init__(self, color=(1, 1, 1, 1), **kw):
+    def __init__(self, color=(1, 1, 1, 1), wait_bake=False, **kw):
+        # ⚠️ `wait_bake`(余额行用): 建标签时**图集还在分帧预热**那一档必然还没烘出来 ——
+        #    此时**等**而不是**永久退化**(见 `_glyph_sync` 里那段)。
+        #    ⚠️ 默认 False: 中奖大字保持原语义(一局里要么图集要么老路, 不撤回),
+        #       那是"逐像素比对要可测"的要求, 不能被这条新路带跑。
+        self._wait_bake = bool(wait_bake)
+        self._wait_t0 = 0.0
         self._rgba0 = tuple(color)
         self._glyph_alpha0 = float(self._rgba0[3])
         self._quads = None
@@ -516,8 +524,25 @@ class GlyphLabel(Widget):
             self._quads = None
             for _r in self._grects:
                 _r.size = (0.0, 0.0)
+            # ⚠️⚠️ `wait_bake` 的三条分岔 —— 缺一条就是"永久空白"或"永久退化"二选一:
+            #   ① 预热**还没跑完** ⇒ **等**(可能是我们这一档还没轮到)。`_degrade()` 是
+            #      **回不去**的, 在这儿退一次 = **收益静默归零**(且不报错)。
+            #      预热跑完时 `_glyph_flush_waiters()` 会叫醒我们重试。
+            #   ② 预热**已跑完** ⇒ 这一档是**真的没有**(不在可达集 / 门禁否掉了) ⇒ 退化。
+            #   ③ 等太久 ⇒ 兜底退化 —— 预热链若被异常打断, `_glyph_warm_done()` 永远为假,
+            #      没有这条就是**余额永久空白**。
+            # ⚠️ 等待还必须先过 `_glyph_chars_ok`: 那一刻手里**没有 `rec`**(档还没烘),
+            #    查不了"这一档有没有这个字"。含汉字的串等多久都等不出来 ⇒ 当场退化。
+            if (self._wait_bake and not _glyph_warm_done()
+                    and _glyph_chars_ok(self.text)):
+                if self._wait_t0 <= 0.0:
+                    self._wait_t0 = time.time()
+                    _GLYPH_WAITERS.append(self)
+                if time.time() - self._wait_t0 < _GLYPH_WAIT_MAX:
+                    return
             self._degrade()
             return
+        self._wait_t0 = 0.0
         self._quads, self._text_w = _q
         _GLYPH_HIT[0] += 1
         self._glyph_place()

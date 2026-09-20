@@ -72,6 +72,31 @@ class UiMixin(object):
         lbl.bind(size=lambda w, *_: setattr(w, "text_size", w.size))
         return lbl
 
+    def _mk_balance_lbl(self, text):
+        """余额行 —— 走**字形图集**(`GlyphLabel`)⇒ 零 `填纹`; 建不起来就逐字退回普通 `Label`。
+
+        ⚠️ 为什么**只有这一行**能走: `_GLYPH_CHARS = "0123456789+"` 只有数字和加号, 而余额是
+           纯数字。`stats_lbl`(「累计N投N中」)含汉字 ⇒ `_glyph_quads` 必返回 `None` ⇒ 走不了。
+           日志里「重建来源」是 **余额 9 · 统计 5** ⇒ 这一行就是那 9 次。
+        ⚠️⚠️ **绝不在这里预检图集**(`if _glyph_rec(...) is not None`) —— 本行在**布局期**就建好,
+           而图集是启动后**分帧**预热的 ⇒ 那一刻必然还没烘出来, 预检等于**永远退回 Label**,
+           而且不报错(收益静默归零)。
+        ⚠️ `wait_bake=True` 是这条路的**前提**: 让 `GlyphLabel` 在图集没就绪时**等**而不是
+           **永久退化**(`_degrade` 回不去)。预热跑完会 `_glyph_flush_waiters()` 叫醒它。
+           三条分岔(还没烘完 ⇒ 等 / 已烘完仍没有 ⇒ 退化 / 等超时 ⇒ 兜底退化)全在
+           `GlyphLabel._glyph_sync` 里。
+        ⚠️ `fit_box=True` = 排在"控件矩形"里, 与老路 `halign='left'` + `text_size=size` 同位 ——
+           就是 `GlyphLabel.fit_box` 注释里点名"余额用"的那一档。
+        """
+        try:
+            from .widgets import GlyphLabel
+            return GlyphLabel(text=text, font_size=sp(19), bold=True,
+                              color=hex_rgb(COL_BALL) + (1,), fit_box=True,
+                              wait_bake=True, size_hint_x=None, width=dp(80))
+        except Exception:
+            return self._mk_label(text, "19sp", COL_BALL, "left", True,
+                                  size_hint_x=None, width=dp(80))
+
     def _fit1(self, w, base=None, inset=0.0):
         """把控件 w 的字号调到"当前文字**恰好一行**放得下"的最大档, 返回实际字号。
 
@@ -548,8 +573,7 @@ class UiMixin(object):
         self._bead_lbl = self._mk_label("弹珠：", "15sp", COL_TEXT, "left", True,
                                        size_hint_x=None, width=dp(48))
         info.add_widget(self._bead_lbl)
-        self.balance_lbl = self._mk_label(str(self.game.balance), "19sp", COL_BALL,
-                                          "left", True, size_hint_x=None, width=dp(80))
+        self.balance_lbl = self._mk_balance_lbl(str(self.game.balance))
         _tag_texupd(self.balance_lbl, "余额")
         info.add_widget(self.balance_lbl)
         self.stats_lbl = self._mk_label("", "15sp", COL_TEXT, "center", True,

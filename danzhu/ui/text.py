@@ -1315,6 +1315,46 @@ _GLYPH_MAX_KEYS = 8              # 只 2 档, 给足余量; 上限是"别再撑�
 _GLYPH_MAX_CHARS = 12            # 最长串 `+10000`(投注 100 x x100)
 _GLYPH_HIT = [0]
 _GLYPH_MISS = [0]                # 退化次数 —— **收益归零是静默的, 所以必须记账**
+# ⚠️ **图集预热链是否已经跑完**(烘完最后一档)。给 `GlyphLabel(wait_bake=True)` 用:
+#    余额行在**布局期**就建好了, 而图集是启动后**分帧**预热的 ⇒ 建标签那一刻这一档必然
+#    还没烘出来。此时**不许永久退化**(退化是回不去的, 收益静默归零), 但也不能无限等 ——
+#    预热链一旦跑完, 还没烘出来的档就是**真的没有**(字号不在可达集里 / 门禁否掉了),
+#    这时必须退化。两者靠这个标志分开。
+_GLYPH_WARM_DONE = [False]
+# 正在等图集的标签。预热跑完时**主动**叫它们重试一次 —— 光靠"下一次 text 变化"不够:
+# 余额在那之后可能一直不变, 那就永远空白了。
+_GLYPH_WAITERS = []
+# 等多久还没等到就放弃(秒)。**兜底**: 预热链要是被异常打断, `_GLYPH_WARM_DONE` 永远不会置位,
+# 没有这条就是"余额永久空白"。远大于正常预热时长(实测 <1 秒), 不会误伤。
+_GLYPH_WAIT_MAX = 3.0
+
+
+def _glyph_warm_done():
+    return _GLYPH_WARM_DONE[0]
+
+
+def _glyph_chars_ok(text):
+    """串里每个字符都在字形图集的字符集里吗 —— **只看字符集, 不看字号档**。
+
+    ⚠️ 与 `_glyph_quads` 的分工不能混: 那个要拿到 `rec`(字号档) 才查得了; 而
+       `wait_bake` 要回答的是"**值得为它等图集吗**" —— 那一刻档还没烘出来, 手里没有 `rec`。
+       汉字串(「累计N投N中」)等多久都等不出来, 必须**当场退化**, 不能傻等。
+    """
+    if not text:
+        return False
+    return all(_c in _GLYPH_CHARS for _c in text)
+
+
+def _glyph_flush_waiters():
+    """预热跑完 ⇒ 叫所有等待中的标签重试一次。**先换出列表再叫** —— 被叫的那个若还是
+    没等到会再把自己登记回来, 不清空就是死循环。"""
+    _ws = list(_GLYPH_WAITERS)
+    del _GLYPH_WAITERS[:]
+    for _w in _ws:
+        try:
+            _w._glyph_sync()
+        except Exception:
+            pass
 
 
 def _glyph_key(fs, bold):
@@ -1458,6 +1498,10 @@ def _glyph_keys_reachable(rw):
 def _glyph_warm_step(area):
     """`prebake_step` 里一次烘一档(自链式, 别一帧烘完 —— 一帧 11 次字形表 = 一记长帧)。"""
     if not _GLYPH_ON:
+        # ⚠️ 开关关着也要置"跑完" —— 否则 `wait_bake` 的标签会以为图集永远在烘,
+        #    一直等下去 ⇒ **余额行永久空白**。关着 = 这一档永远不会有, 该退化就退化。
+        _GLYPH_WARM_DONE[0] = True
+        _glyph_flush_waiters()
         return False
     _rw = getattr(area, "game", None)
     if getattr(_rw, "_glyph_keys", None) is None:
@@ -1472,6 +1516,9 @@ def _glyph_warm_step(area):
         if _r is not None:
             _glyph_put(_fs, _bd, _r)
         return True
+    # 全部烘完: 置标志 + 叫醒等待中的标签(它们那会儿还查不到这一档)。
+    _GLYPH_WARM_DONE[0] = True
+    _glyph_flush_waiters()
     return False
 
 
