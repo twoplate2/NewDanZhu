@@ -93,9 +93,9 @@ SFX_APEX_Y_HI = 22.0         # 满蓄力的转向高度, 实测
 
 # 老版 main.py:5683 / 1374 —— 与玩法无关, 但它们是 config 存档的字段, 读/写两侧都要同一份。
 # ⚠️ `FPS_CAP_DEFAULT` 必须与 `config.py` 那份**同步** —— 两处都是存档字段的真源, 只改一处
-#    就是"读写两侧不同一份"(本工程栽过的形状)。`max(...)` 而不是写死 185, 是为了让
+#    就是"读写两侧不同一份"(本工程栽过的形状)。`max(...)` 而不是写死具体数字, 是为了让
 #    `FPS_CAP_OPTIONS` 变动时两边自动跟。理由("默认 = 面板最高档")写在 `config.py` 那一段。
-FPS_CAP_OPTIONS = (60, 90, 120, 144, 165, 185)
+FPS_CAP_OPTIONS = (60, 90, 120, 144, 165, 240)
 FPS_CAP_DEFAULT = max(FPS_CAP_OPTIONS)
 POWER_GRAINS = ("每帧", "每5秒")
 POWER_GRAIN_DEFAULT = "每帧"

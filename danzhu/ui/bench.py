@@ -115,6 +115,61 @@ _FRAME_THR = [0.0]
 _THREAD_TIME = getattr(time, "thread_time", None) or time.process_time
 
 
+def _flight_segments(frames):
+    """把逐帧记录切成「每一发飞行」的段, 返回 `[(长度ms, 起帧号, 止帧号), ...]`。
+
+    长度 = 那一段里所有「飞行 + 落袋」帧的帧间隔之和(装杯演出**不算** —— 见下面的说明)。
+
+    ## 判据只有一个: `_SINCE_LAUNCH`(帧记录第 [8] 项)**严格回落**
+
+    `_SINCE_LAUNCH` 由 `_frame_timed` **每次调用** +1, 而记它的是 `_on_flip`(**每次呈现**)。
+    两者频率不同(调度档 185Hz / 呈现跟随面板)⇒ **相邻两个呈现帧完全可能读到同一个值**。
+    所以:
+
+        `== 0`   ✗ 发射那一帧记下来的可能是 **1 而不是 0**(清零与 `+= 1` 的先后不保证)
+                  ⇒ 整场只切出一段
+        `<=`     ✗ **相等也算回落** ⇒ 窗口开头凭空多一段(2026-09-20 玩家报的那个 bug)
+        `<`      ✓ 一次真发射必然把计数从上千打到 0/1, 恒递减;
+                     而"相等"只可能出现在**同一发之内**, 那时不该切
+
+    ## 窗口两头的半截怎么处理
+
+    · **开头**: 第一段**没有前锚**(窗口从上一次发射的**半空中**开始) ⇒ 那半截是**残缺的飞行**,
+      计进去会把均值拉低 ⇒ **整段丢掉**(`_cur is None` 期间到达的飞行帧直接忽略)。
+      ⚠️⚠️ **这一条必须配 `_cur is not None` 的累加守卫** —— 少了它, 窗口从半空中开始时
+      `_cur` 还是 `None`, 第一个飞行帧就把 `None + float` 抛出去(**2026-09-20 真的这么崩过一次**)。
+    · **结尾**: 最后一段**没有后锚**, 但它多半是完整的(球飞完才进装杯/蓄力) ⇒ 保留。
+
+    ⚠️ 只在 `_bench_frames` 上跑, 是**纯函数**(不改任何状态) —— 所以 `tests/` 能直接拿合成序列测它。
+
+    ## 为什么只累加「飞行 + 落袋」
+
+    跑分用的是固定盘面(`BENCH_BOARD`), **每一发都中奖** ⇒ **每一发都会演装杯**; 而下一发要等
+    `state == ready` 才发 ⇒ 照"两次发射的间隔"切出来的段**里面全是装杯时间**
+    (实测能把每发时长从 ~0.5 秒撑到 6 秒以上, 玩家一眼看出不对)。
+    标签取 `_f[1]`(`_bench_tag()`): 「落袋」是飞行的尾巴(**球还在动**), 「装杯」才是那个演出。
+    """
+    segs = []
+    cur, prev, start, last = None, None, None, None
+    for _i, _f in enumerate(frames or ()):
+        if len(_f) < 9:
+            continue
+        _sl = _f[8]
+        if prev is not None and _sl < prev:        # 严格回落 = 新的一发
+            if cur is not None:
+                segs.append((cur, start, _i))
+            cur, start = 0.0, _i
+        _tag = _f[1] if len(_f) > 1 else ''
+        # ⚠️ `cur is not None` 这个守卫**不能省** —— 见 docstring 里那条崩溃记录。
+        if cur is not None and _tag in ('飞行', '落袋'):
+            cur += float(_f[0] or 0.0)
+        prev = _sl
+        last = _i
+    if cur is not None:
+        segs.append((cur, start, last))
+    return [s for s in segs if s[0] > 0]
+
+
 def _bench_menu_desc():
     """跑分菜单里那段说明的正文。
 
@@ -1866,29 +1921,12 @@ class BenchMixin(object):
             #    **很可能已经是 1 而不是 0** ⇒ `== 0` 一次都不成立 ⇒ **整场只切出一段**
             #    (那一段 = 整个采样窗口)。改成"当前值 <= 上一个值"就开新段: 0 跟 1 都能认出来,
             #    而飞行中计数器只增不减 ⇒ 不会误切。
-            _fl_ms = []
-            _seg = None
-            _prev_sl = None
-            for _f in (getattr(self, "_bench_frames", None) or []):
-                if len(_f) < 9:
-                    continue
-                _sl = _f[8]
-                if _prev_sl is None or _sl <= _prev_sl:   # 回落 = 新的一发
-                    if _seg is not None:
-                        _fl_ms.append(_seg)
-                    _seg = 0.0
-                # ⚠️⚠️ **只累加"球真的在动"的帧**(飞行 + 落袋), **把装杯演出排除掉**:
-                #    跑分用的固定盘面每一发都中奖 ⇒ **每一发都会演装杯**, 而下一发要等
-                #    `state == ready` 才发 ⇒ 按"两次发射的间隔"切出来的段**里面全是装杯时间**
-                #    (实测能把每发时长从 ~0.5 秒撑到 6 秒以上)。
-                #    ⚠️ 标签取 `_f[1]`: 「落袋」是飞行的尾巴(球还在动), 「装杯」才是那个演出。
-                _tag = _f[1] if len(_f) > 1 else ''
-                if _tag in ('飞行', '落袋'):
-                    _seg += float(_f[0] or 0.0)
-                _prev_sl = _sl
-            if _seg is not None:
-                _fl_ms.append(_seg)
-            self._render_flight_ms = [x for x in _fl_ms if x > 0]
+            # ⚠️⚠️ 那个 `<=` **本身就是 bug**(相等也算回落), 2026-09-20 已改成严格 `<`。
+            #    完整的判据推导 + 窗口两头的处理 + 那次崩溃的记录, 全在 `_flight_segments()`
+            #    的 docstring 里 —— **切段逻辑现在只有那一份**, 这里和诊断行都调它。
+            #    原来是两处各写一遍(判据必须"保持一致"), 那正是本工程最防的"两份会漂"的形状。
+            self._render_flight_ms = [v for v, _a, _b in
+                                      _flight_segments(getattr(self, "_bench_frames", None))]
 
             s = sorted(gaps)
             # 真平均 = 总帧数 / 总耗时；旧版误把中位数标成“平均”，外部工具无法对照。
@@ -2915,6 +2953,31 @@ class BenchMixin(object):
                       "   ← 成绩面板那一档读的就是这个数(面板把门槛印成帧/秒)"
                       % (1000.0 / _th_ref, len(_below90) + len(_refband),
                          len(_below90), len(_refband)))
+        # ---- 飞行分段的**逐段**清单(诊断用) ----
+        # ⚠️ 为什么单独印: `flight_ms` 是「各段之和 ÷ 段数」, 而它**只印均值** ——
+        #    均值对不上时分不出是"段分多了"还是"段本身短了"(两者的修法相反)。
+        # ⚠️ 起因(2026-09-20): 玩家发现新旧两版差 25%(老 4.1 秒 / 新 3.3 秒), 而
+        #    `flight_ms` 的算法、`_bench_tag()`、`_SINCE_LAUNCH` 的自增与归零点
+        #    **逐行核对完全等价**, `trace_parity` sha1 也逐位相同 ⇒ 差异只可能在**分段**上。
+        #    这一行把每段的**起帧→止帧**与**长度**都印出来, 一眼就能判。
+        # ⚠️⚠️ **它和上面那个真值现在共用 `_flight_segments()`** —— 原来是两处各写一遍
+        #    "必须保持一致的判据", 而判据一改就得记得改两处。已合并成一份。
+        try:
+            _kept = _flight_segments(getattr(self, "_bench_frames", None))
+            # ⚠️ 原来这里印的是「切出 N 段(其中 M 段>0)」—— 那个 N 是**含零长度假段**的原始数。
+            #    判据修好之后 `_flight_segments` 自己就把零长度的滤掉了, 两者恒等,
+            #    再印两个数只会让人以为还有一个"隐含的段数" ⇒ 只印一个。
+            _lines.append("# ★ 飞行分段: 切出 %d 段 · 均值 %.2f 秒"
+                          % (len(_kept),
+                             (sum(v for v, _, _ in _kept) / len(_kept) / 1000.0) if _kept else 0.0))
+            # ⚠️ 这里印的是【起帧→止帧】两个号。原来只印一个号、还标成「起始帧号」——
+            #    而那个号其实是**结束**帧号, 照那个标签读会算出
+            #    "段长 4.14 秒却只跨了 0 帧"这种自相矛盾的账。
+            _lines.append("#   逐段(起帧→止帧):秒  %s"
+                          % ' · '.join('%d→%d:%.2f' % (a, b, v / 1000.0)
+                                       for v, a, b in _kept[:12]))
+        except Exception:
+            pass
         # ★ **面板窗口 vs 日志窗口** 的自证行。
         # ⚠️ 为什么必须有: 面板读 `_bench_diag` 的 `n` / `win_ms`, 而日志头这两个数是从
         #    `gaps` 现算的 —— **两边各算一遍**, 正是本工程反复栽的脱钩形状。印在同一行上,
@@ -3253,10 +3316,17 @@ class BenchMixin(object):
         # ⚠️ 桌面 `thread_time` 精度只有 15.6ms, 这台机器上主线程那一列基本是台阶
         #    —— 分流**只能在真机上看**。
         _self_ms, _thr_ms, _top1, _snd_n, _vib_n = [], [], [], [], []
+        _sl_n = []
         for _i in range(len(gaps)):
             _rec = _fr[_i] if _i < len(_fr) else ()
             _self_ms.append(float(_rec[5]) if len(_rec) > 5 else 0.0)
             _thr_ms.append(float(_rec[7]) if len(_rec) > 7 else 0.0)
+            # ⚠️ **`_SINCE_LAUNCH` 必须印出来** —— 它是「飞行分段」那个指标的**唯一自变量**
+            #    (`_render_flight_ms` 就是拿它的**回落**切段), 而它以前**只活在内存里**。
+            #    后果: 面板印一个「飞行平均持续 X 秒」, 而**从日志上没有办法复核这个 X** ——
+            #    2026-09-20 玩家报"新旧两版差 25%"时, 我手上只有均值, 只能靠反推。
+            #    印出来之后, 段落怎么切的、每段多长, 拿计算器就能自己验一遍。
+            _sl_n.append(int(_rec[8]) if len(_rec) > 8 else -1)
             # 发声/震动是**逐帧**计的, 而且发声那个计数在**节流闸门之后** —— 数的是"真的播了",
             # 不是"想播"。所以它能直接回答玩家问的那句「卡的那一下是不是正在响/正在震」。
             _snd_n.append(int(_rec[3]) if len(_rec) > 3 else 0)
@@ -3521,12 +3591,12 @@ class BenchMixin(object):
         # ⚠️ 新列**只能加在末尾**: 前面几列的位置被 `_bench_frames` 的下标和外部脚本按号取,
         #    插在中间会让旧解析器静默错位(比报错更难发现)。
         _lines.append("# 每行: 帧间隔毫秒,阶段,文字重建,_frame自算ms,主线程ms,发声,震动,最大子步骤,"
-                      "等屏幕ms,差ms,上一帧body_ms,别的线程CPUms")
-        _lines.extend("%.2f,%s,%d,%.2f,%.2f,%d,%d,%s,%.2f,%.2f,%.2f,%.2f"
-                      % (g, t, x, s, m, sn, vb, b, w, gp, pb, ot)
-                      for g, t, x, s, m, sn, vb, b, w, gp, pb, ot
+                      "等屏幕ms,差ms,上一帧body_ms,别的线程CPUms,距本发发射帧数")
+        _lines.extend("%.2f,%s,%d,%.2f,%.2f,%d,%d,%s,%.2f,%.2f,%.2f,%.2f,%d"
+                      % (g, t, x, s, m, sn, vb, b, w, gp, pb, ot, sl)
+                      for g, t, x, s, m, sn, vb, b, w, gp, pb, ot, sl
                       in zip(gaps, tags, tex, _self_ms, _thr_ms, _snd_n, _vib_n, _top1, _adv,
-                             _gap_ms, _prev_body, _othr))
+                             _gap_ms, _prev_body, _othr, _sl_n))
         return "\n".join(_lines) + "\n"
 
     def _copy_bench_log(self, btn=None):

@@ -40,12 +40,16 @@ class PlinkoApp(App):
         #    (Kivy 主循环起来才会 flip), 这里正好。漏了它的后果是**静默**的:
         #    `_FRAME_SWAP` 恒为 0.0, 面板「flip 阻塞了多少毫秒」和「尾·回调 / 尾·空档」恒为空。
         try:
-            from .text import _ondraw_wrap, _swap_wrap
+            from .text import _loopseg_wrap, _ondraw_wrap, _swap_wrap
             _swap_wrap()
             # ⚠️ `_ondraw_wrap` 与 `_swap_wrap` **同一条规矩**(必须晚于窗口建立、
             #    早于任何一次 flip), 所以挂在同一处。它把「尾·空档」里的
             #    `Window.on_draw`(画布遍历 + GL 提交)单独切出来 —— 见那个函数的说明。
             _ondraw_wrap()
+            # ⚠️ 主循环里**其余没埋点的几步**(输入派发 / 画布刷新前 / Builder.sync)。
+            #    2026-09-20 加的: `body` 涨的那 ~0.95ms 不在任何已有格子里, 只能在这一段。
+            #    见 `text._loopseg_wrap` 的说明(**只对 1/8 的帧计时**)。
+            _loopseg_wrap()
         except Exception:
             pass
         if platform != "android":

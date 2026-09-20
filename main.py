@@ -36,7 +36,13 @@ os.environ["KIVY_ORIENTATION"] = "Portrait PortraitUpsideDown Landscape Landscap
 # 绕过桌面合成器, 实测反而把 60Hz 显示器从稳定 60fps 拖成约 50fps。高刷显示器开启 vsync
 # 会自然按其刷新率呈现; Android 则由 Window/显示模式请求优先提升到 165Hz。
 from kivy.config import Config        # noqa: E402
-Config.set("graphics", "maxfps", "120")
+# ⚠️ 这个值只是**建窗口时**的初值 —— 权威值由 `danzhu/platform/device.py:_apply_fps_cap()` 在
+#    `App.build()` 里(起循环**之前**)按「min(屏幕最高档, Android系统峰值, 玩家档位)」重设,
+#    所以这里写多少都不会真正决定呈现帧率。
+#    ⚠️ 但**不许留一个跟 `config.FPS_CAP_MAX` 不一样的字面量**: 原来写死的是 120, 而默认档
+#       早已改成"跟面板最高档"(= `FPS_CAP_MAX`), 于是两个数看起来互相矛盾, 下一个读代码的人
+#       会以为 120 才是默认档。跟着改, 别让它再漂。
+Config.set("graphics", "maxfps", "240")
 Config.set("graphics", "vsync", "1")
 
 import tempfile                       # noqa: E402

@@ -838,6 +838,122 @@ def _ondraw_wrap():
         pass
 
 
+def _probe_owner(obj, attr):
+    """取「真正该被包的那个**类**」—— Kivy 的 `Clock` / `Builder` **不是它们的本体类**。
+
+    ⚠️⚠️ **2026-09-20 实测抓到的静默失效**：`type(kivy.clock.Clock)` 是
+       `<class 'kivy.context.ProxyContext'>` —— 一个**代理对象**, 不是 `ClockBase`。
+       于是 `getattr(type(Clock), "tick", None)` 是 **None**, 而本文件里每一个包装器
+       都是「取不到就静默 return」的形状 ⇒ **一声不响地什么都不做**。
+       ⇒ `_clock_wrap()` 就是这么死的: `_CLOCK_END` **从来没被写过**,
+         「尾·空档」那一格一直靠 `_swap_wrap` 的兜底退回合并的「尾」。
+       ⚠️ 门禁 `tests/fx_gates.py:2852` 只查**源码里有没有这几个字符串** —— 查不出来。
+
+    ⇒ 正确的取法是**顺着一个已绑定的方法往回找宿主**:
+       `Clock.tick_draw` 是 `<bound method ClockBaseBehavior.tick_draw of <ClockBase object>>`,
+       所以 `type(Clock.tick_draw.__self__)` 才是真类。
+       拿不到就退回 `type(obj)`(`Window` 那种不是代理的照常可用)。
+    """
+    try:
+        m = getattr(obj, attr, None)
+        owner = getattr(m, "__self__", None)
+        if owner is not None and not isinstance(owner, type):
+            return type(owner)
+    except Exception:
+        pass
+    return type(obj)
+
+
+# 主循环「其余几步」的**取样闸**: 只对 `LOOPSEG_EVERY` 分之一的帧计时。
+# ⚠️⚠️ **为什么必须取样** —— 有硬证据: 早先给 `_frame` 里加 4 个 `_brk_add`
+#    (约 2µs/帧, 只占 6ms 的 0.03%) **就把节拍模式从 A 翻到了 B**。
+#    这个系统对"每帧多出来的那个常数"极度敏感, 每帧都计时很可能把要观察的现象本身压掉。
+_LOOPSEG_N = [0]
+_LOOPSEG_ON = [False]
+LOOPSEG_EVERY = 8
+
+
+def _loopseg_wrap():
+    """给 Kivy 主循环里**唯一没有埋点**的那几步计时。
+
+    ⚠️ **为什么非要这一刀** —— 2026-09-20 实测: 165Hz + `cap=120` 下应用会从
+       "Kivy 自己睡"(模式 A, `1%Low` ≈119) 掉进"被 vsync 钉住"(模式 B, ≈112),
+       **触发是 `body` 越过 `0.4/fps = 3.333ms` 那条闸门**。
+       而 `body` 涨的那 ~0.95ms **不在任何已有格子里**:
+
+           `_frame` 自算  平 ~0.35ms      `Window.on_draw`  平 0.40ms
+           `等屏幕`       单独量着(是结果不是原因)      `别的线程CPU`  平 0.07~0.11ms
+           GC 32 秒共 9ms   文字纹理重建 全程 12 次     Canvas 指令数 平(on_draw 平就是证据)
+
+       ⇒ 它只能落在 `kivy/base.py:379-395` 这几步里(每帧严格这个顺序):
+
+           Clock.tick()          ← 只有 `_frame_timed` 那一小段被量到
+           self.dispatch_input() ← **没量**
+           Builder.sync()        ← **没量**
+           Clock.tick_draw()     ← **没量**(所有 timeout=-1 的 trigger, 含 Label 纹理重建)
+           Builder.sync()        ← **没量**
+           window.dispatch('on_draw')   ← 量了(尾·on_draw)
+           window.dispatch('on_flip')   ← 量了(等屏幕)
+
+    三格名字: `环·输入` / `环·绘前` / `环·同步`。
+    ⚠️ 它们与 `尾·on_draw` / `等屏幕` **不重叠**, 与 `自算` 也不重叠, 但**都在 `body` 里面**
+       —— 读的时候按"谁大"看, 不要去凑总和。
+
+    ⚠️ 三条与 `_ondraw_wrap` 相同的规矩:
+       ① 包的是**类上的**方法(`type(EventLoop).dispatch_input`), 不是实例属性;
+       ② 埋点**绝不能让主循环抛** —— 全程 try/except;
+       ③ **必须由启动路径调一次**(`app.py`, 挨着 `_ondraw_wrap()`)。漏了是**静默**的。
+    """
+    def _tick_gate():
+        """本帧要不要量。**只在 `dispatch_input` 里推进一次**(它是循环里最早的那一步)。"""
+        _LOOPSEG_N[0] = (_LOOPSEG_N[0] + 1) % LOOPSEG_EVERY
+        on = _LOOPSEG_N[0] == 0
+        _LOOPSEG_ON[0] = on
+        return on
+
+    def _wrap(cls, attr, tag, gate):
+        _orig = getattr(cls, attr, None)
+        if _orig is None or getattr(_orig, "_probe_wrapped", False):
+            return
+
+        def f(self, *a, **k):
+            if not _TEXUPD_ACTIVE[0]:
+                return _orig(self, *a, **k)
+            on = gate() if gate else _LOOPSEG_ON[0]
+            if not on:
+                return _orig(self, *a, **k)
+            _t0 = time.perf_counter()
+            try:
+                return _orig(self, *a, **k)
+            finally:
+                _brk_add(tag, _t0)
+
+        f._probe_wrapped = True
+        f.__name__ = attr
+        try:
+            setattr(cls, attr, f)
+        except Exception:
+            pass
+
+    try:
+        from kivy.base import EventLoop
+        _wrap(type(EventLoop), "dispatch_input", "环·输入", _tick_gate)
+    except Exception:
+        pass
+    try:
+        from kivy.clock import Clock as _KC
+        # ⚠️ 必须走 `_probe_owner`: `type(Clock)` 是 ProxyContext, 直接取会拿到 None
+        #    (2026-09-20 踩到, 见那个函数的说明)。
+        _wrap(_probe_owner(_KC, "tick_draw"), "tick_draw", "环·绘前", None)
+    except Exception:
+        pass
+    try:
+        from kivy.lang.builder import Builder as _B
+        _wrap(_probe_owner(_B, "sync"), "sync", "环·同步", None)
+    except Exception:
+        pass
+
+
 def _clock_wrap():
     """给 `Clock.tick` 的**结束**盖一个时间戳 —— 「尾」三分段的中间那一刀。
 
@@ -846,7 +962,11 @@ def _clock_wrap():
     """
     try:
         from kivy.clock import Clock as _KC
-        _ccls = type(_KC)
+        # ⚠️⚠️ 这里原来写的是 `type(_KC)` —— 而它是 `kivy.context.ProxyContext`, 不是 ClockBase,
+        #    `getattr(..., "tick", None)` 恒为 **None** ⇒ 这个包装器**从来没生效过**,
+        #    `_CLOCK_END` 一次都没写过(2026-09-20 实测抓到的静默失效)。
+        #    必须走 `_probe_owner` 顺着绑定的方法找回真类。
+        _ccls = _probe_owner(_KC, "tick")
         _corig = getattr(_ccls, "tick", None)
         if _corig is None or getattr(_corig, "_probe_wrapped", False):
             return

@@ -15,8 +15,8 @@ import sys
 import threading
 import time
 
-from ..config import (FPS_CAP_DEFAULT, FPS_CAP_FALLBACK, FPS_CAP_OPTIONS, FPS_CAP_PC,
-                      _FPS_INFO, _FPS_USER_CAP)
+from ..config import (FPS_CAP_DEFAULT, FPS_CAP_FALLBACK,
+                      FPS_CAP_OPTIONS, FPS_CAP_PC, _FPS_INFO, _FPS_USER_CAP)
 
 # 老版用的是 `from kivy.utils import platform`; 桌面没有 kivy 也必须能 import ⇒ 取不到就
 # 用等价判定(与 audio/backend 的 `_detect_platform` 同口径)。
@@ -137,7 +137,11 @@ def _cpufreq_stop():
 
 
 def _fps_user_cap():
-    """当前用户选择的上限；异常值永远回到 120，避免坏存档把循环设成 0。"""
+    """当前用户选择的上限；异常值/坏存档一律回到 `FPS_CAP_DEFAULT`，避免把循环设成 0。
+
+    ⚠️ 文档串原来写的是"回到 120" —— 那是 `FPS_CAP_DEFAULT` 还等于 120 时的旧文案，
+       现在回的是 `FPS_CAP_DEFAULT`(跟面板最高档)，**别照那句话去改代码**。
+    """
     try:
         cap = int(_FPS_USER_CAP[0])
         return cap if cap in FPS_CAP_OPTIONS else FPS_CAP_DEFAULT
@@ -346,6 +350,18 @@ def _apply_fps_cap():
     _FPS_INFO[0] = float(hz or 0.0)
     _FPS_INFO[1] = cap
     _FPS_INFO[2] = requested_hz
+    # ⚠️⚠️ **这里原来有一段「165Hz 面板专用: 把生效档降到 118」的特判, 2026-09-20 已删。**
+    #    它确实有效(实测 `1%Low` 122 vs 112), 但三条理由让它不值 —— **别再捡回来**:
+    #      ① **帮不到最需要它的人**: 判据是"玩家从没手动选过档"(`_fps_user_cap() ==
+    #         FPS_CAP_DEFAULT`), 而 0.8.81 之前的默认档就是 **120** ⇒ 老存档里存着 120 的
+    #         玩家判据不成立、**特判不生效**, 他会一直停在 120。**恰好漏掉最需要它的那批人。**
+    #      ② **判据本身分不清两种情况**: "玩家明确把滑条拖到顶格"与"从没选过"在存档里
+    #         长得一模一样(初值就是 `FPS_CAP_DEFAULT`)。
+    #      ③ 一个"只对某个面板、只对某种存档状态生效"的例外, 维护成本大于它买到的那点分数
+    #         —— 撤的时候已经发现有两处注释/一处 changelog 还在论证旧的 120, 两条测试基线
+    #         (`ast_parity` / `sig_parity`)也忘了重采。
+    #    ⇒ 要试这条路的玩家**自己在设置里选 120 档**(`FPS_CAP_OPTIONS` 里有)。
+    #    ⇒ 完整实测账(含 118 是最优档的证据)见 `changelog/2026-09-20.md` 第 30/40/41 条。
     # ⚠️⚠️ **跑分/高压期间按到 `_BENCH_FPS_FORCE`**(见那段说明)。闸门**必须挂在这儿**
     #    —— 这是"帧率上限"唯一的生效点。散在各调用点的话, 跑分途中任何一次
     #    `_apply_fps_cap`(弹窗关闭 / 切回前台)都会把上限**悄悄恢复**, 而日志上看不出来。

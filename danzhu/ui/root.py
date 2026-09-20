@@ -136,6 +136,20 @@ class RootWidget(BenchMixin, PlayMixin, UiMixin, BoxLayout):
             self._bench_msg_rect = Rectangle(texture=self._bench_msg_lbl.texture,
                                              pos=(0, 0), size=(0, 0))
         self.bind(size=self._relayout_bench_dim, pos=self._relayout_bench_dim)
+        # ⚠️⚠️ **试过 `Clock.interupt_next_only = True`, 实测无效, 已撤 —— 别再试一遍。**
+        #
+        # 它管的是 `_check_ready` 里两个"吞掉睡眠"的地方 (`kivy/clock.py:860-868/920-933`):
+        # 打开后 `sleeptime` 不再被「下一个事件的到期时间」封顶, 且普通定时事件不再取消睡眠。
+        # **动机是对的** —— 165Hz 面板 + cap=120 下应用会从"Kivy 自己睡"(周期 ≈6.1ms)
+        # 掉进"被 vsync 钉住"(≈6.06ms), 两个模式的 `1%Low` 差 6%。
+        #
+        # **但 2026-09-20 实测它不解决问题, 而且有代价**(同台子同档位各 7~8 轮):
+        #     · 「模式 A 的比例」看着从 4/8 升到 5/7 —— 那是**中位数造成的假象**:
+        #       翻转的轮次(B→A 或 A→B)都被算成 A, 真正**稳定**待在 A 的只有 2/7
+        #     · **A 组的实际分数反而从 119.3 掉到 114.9(−4%)** —— 普通 Clock 事件要等
+        #       睡眠结束才跑, 代价落在这里
+        #     · A→B 翻转**照旧发生**(3/7)
+        # ⇒ 判据要取「**稳定 A 的比例**」和「A 组的分数」, **不能取"按中位分类的比例"**。
         Clock.schedule_interval(self._frame_timed, FRAME_TICK_DT)
         # 中奖杯的球纹理/球堆预热: 分帧摊在启动后做, 别等中奖那一刻现算(低端机单档
         # d=128 纯 Python 合成要 100~200ms, 一次做完就是几个长帧, 而这动画的全部意义

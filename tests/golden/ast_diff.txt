@@ -14,7 +14,7 @@ DIFF       _await_ready                       18325cc9ed
 DIFF       _bench_counters_begin              b9a56503a0
 DIFF       _bench_counters_end                5758585227
 DIFF       _bench_done                        bca3f86d9a
-DIFF       _bench_frame_log                   4d21f1a2da
+DIFF       _bench_frame_log                   20db2041e8
 ONLY_NEW   _bench_history_text                3679c4ba07
 DIFF       _bench_restore_board               377c5d7ba0
 ONLY_NEW   _bench_running                     644bbdb055
@@ -25,6 +25,7 @@ DIFF       _bench_tag                         fe09b602c6
 ONLY_NEW   _brk_install                       35f497b664
 DIFF       _build_ui                          d33a6fb3ca
 DIFF       _check_title_hold                  2f7b308013
+DIFF       _clock_wrap                        e445e731e1
 ONLY_OLD   _close_rtp_hidden                  c0e503e2cd
 ONLY_NEW   _controls                          59a7b800b4
 ONLY_NEW   _detect_platform                   97ec1a4251
@@ -34,6 +35,8 @@ ONLY_OLD   _easter_finish                     818a7611da
 ONLY_NEW   _easter_popup                      10f06bb434
 ONLY_NEW   _emit                              18a49d0ab2
 DIFF       _enter_immersive                   c570d5085c
+DIFF       _finish_render_sample              19267734de
+ONLY_NEW   _flight_segments                   2b74e5b450
 DIFF       _frame                             9dc42e7031
 DIFF       _glass_over                        2f722da1e2
 DIFF       _glass_textures                    2d61b8fe16
@@ -45,6 +48,7 @@ ONLY_NEW   _live_cpu_freq_line                4f00c99164
 DIFF       _load_config                       3f01e48a4d
 DIFF       _load_history                      8ea0a2467d
 ONLY_NEW   _log_settle                        ce55b38d89
+ONLY_NEW   _loopseg_wrap                      0b2ba0af86
 DIFF       _on_easter_closed                  c492b50540
 ONLY_OLD   _on_easter_settled                 9e7df2f58d
 DIFF       _on_key_down                       8fde188e42
@@ -57,6 +61,7 @@ DIFF       _play_charge_sound                 7235c0b50f
 DIFF       _play_events                       cd59a905a9
 DIFF       _play_round_end_voice              a0ccc1f2e8
 DIFF       _play_voice_sequence               48af90814c
+ONLY_NEW   _probe_owner                       0cbe87c49b
 DIFF       _probe_verdict                     c66e268052
 DIFF       _prog_text                         c8f96abfbf
 ONLY_NEW   _pump_timers                       1b85e48c76
@@ -114,7 +119,7 @@ ONLY_NEW   begin_bench_hold                   81f3892864
 ONLY_NEW   begin_rtp_hold                     59b6cc9041
 DIFF       benchmark_trajectories             369107d7c3
 ONLY_NEW   bet                                497f8b772f
-DIFF       build                              e29e649a85
+DIFF       build                              b6e7890160
 ONLY_NEW   check_title_hold                   02f8fd1675
 ONLY_NEW   click                              2d992b22fb
 ONLY_NEW   close_rtp_hidden                   1e6848fa9e
