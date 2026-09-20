@@ -44,7 +44,7 @@ source.include_patterns = fonts/*.otf,voice/*.wav,assets/*.png
 # ⚠️ **每次提交都要 +1**（玩家 2026-09-19 定的规矩）—— 一次提交一个号，不跳号、不连跳。
 #    上面这段"versionCode 不许联动"说的是 **android.numeric_version 不许动**，
 #    跟这里的字符串递增是两码事：version 纯显示，随便加。
-version = 0.8.104
+version = 0.8.105
 android.numeric_version = 1000000
 
 requirements = python3,kivy==2.3.0,pyjnius
