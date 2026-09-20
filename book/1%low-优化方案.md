@@ -207,12 +207,35 @@ T = (11/15)/cap   cap=120 → 6.111   cap=144 → 5.093   cap=165 → 4.444   ca
 
 | 事 | 说明 |
 |---|---|
+| ⭐⭐ **跑当前工作区的代码**（**不用重出 APK**） | 见下 —— 这是 2026-09-20 才解开的，它把模拟器从「只能看清问题」变成「能验证改进」 |
 | **装 arm64 APK** | ✅ 有 ARM 转译 —— `adb install` 返回 `Success: streamed 42763536 bytes` |
 | **跑整套跑分** | ✅ 32.09 秒 / 3852 帧跑满，画面正常 |
 | **拿完整逐帧日志** | ✅ 存到 `/sdcard/Download/plinko_fps_<时间戳>.txt`，`adb pull` 即可 |
-| **离线反复分析** | ✅ 见 `temp/_emu_analyze.py`（本方案事实 #13~#19 都是它算的） |
-| **验证「游戏在真 Android 上跑不跑得起来」** | ✅ |
+| **离线反复分析** | ✅ `tools/emu/ab_compare.py` / `temp/_emu_analyze.py` |
 | ⭐ **刷到 120Hz 跑** —— **默认 60Hz 时行为与真机不像，刷到 120 就同形了** | ✅ 见下 |
+
+### ⭐⭐ 不用重出 APK 就能跑新代码（`tools/emu/push_code.sh`）
+
+**为什么能**（逐条实测过）：
+
+| # | 事实 | 怎么验的 |
+|---|---|---|
+| ① | APK 是 **debuggable**（CI 跑 `buildozer android debug`）⇒ **`run-as` 能进应用私有目录** | `adb shell run-as org.danzhu.tiao id` → `uid=10052(u0_a52)` |
+| ② | p4a 把 Python 代码解压在 `/data/data/<pkg>/files/app/`（**`.pyc`，legacy 布局**） | `danzhu/config.pyc` / `main.pyc` / `p4a/hook.pyc` |
+| ③ | **只在首次启动解压**，之后不覆盖 | push 一个标记文件 → 重启两次 → **它还在** |
+| ④ | `.pyc` 的 magic **一致**（本机 Python 3.11 = APK 里的） | 两边都是 `a70d0d0a` |
+| ⑤ | 模块树**一致** | 设备 30 个 `.pyc` ↔ 本工程 30 个 `.py`，**差集为空** |
+
+**⇒ 本地 `compileall -b` → 打包 → `run-as` 覆盖 → 重启 = 模拟器上跑当前工作区代码。**
+
+⚠️ **三条边界**：
+1. **日志头里的 `v0.8.xx` 不代表推的代码版本**（它读 `buildozer.spec`，那个不在 `app/` 里）
+   ⇒ **验证代码版本只能看行为，不能看版本号。**
+2. 不换资源（`assets/` `fonts/` `voice/`）与 `_python_bundle`（Python 本体）。
+3. **只对 debug APK 有效**（release 包 `run-as` 会被拒）；出货仍走 CI。
+
+**回滚**：`bash tools/emu/push_code.sh --restore`（回滚 `danzhu/`；`main.pyc`/`p4a/` 当时没单独备份，
+要回滚它们得 `adb install -r` 重装）。
 
 ### ⭐ 必须刷到 120Hz（默认 60Hz 时这个模拟器**不像真机**）
 
