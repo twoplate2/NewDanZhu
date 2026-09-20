@@ -3664,6 +3664,30 @@ def main():
           "到了 `_TBL_PREBUILD_AT` **之前**不建表 —— 别和 `play_win`/`_make_balls` 挤同一帧",
           "_tbl_ok=%s (ts=%.3f < %.3f)" % (_early._tbl_ok, WFX._TBL_PREBUILD_AT * 0.5,
                                            WFX._TBL_PREBUILD_AT))
+    # ⚠️⚠️ **连续帧不能反复建表**(2026-09-20 真机日志挖出来的**活锁**)。
+    #    `_tbl_build` 末尾把 key 设成"有效" ⇒ 下一帧 `_tbl_key_ok` 必为真 ⇒ 若那时掉到
+    #    `_tbl_drop()`, 就把刚建的表作废 ⇒ 再下一帧又建 ⇒ **每 2 帧一轮**。
+    #    指纹**只在连续多帧上才看得见**(单点调用恰好错过), 所以这条判据必须连跑。
+    _loop = _fx_at(WFX._TBL_PREBUILD_AT + 0.02)
+    _nb = {"n": 0}
+    _keep_build = WinPileFX._tbl_build
+
+    def _counting_build(self, *a):
+        _nb["n"] += 1
+        return _keep_build(self, *a)
+
+    try:
+        WinPileFX._tbl_build = _counting_build
+        for _i in range(10):
+            _loop._redraw()
+    finally:
+        WinPileFX._tbl_build = _keep_build
+    check(_nb["n"] == 1 and _loop._tbl_ok,
+          "窗口期内**连续 10 帧只建一次表**, 而且跑完表还在(没被自己作废)—— "
+          "建完那一帧必须**直接 return 保留**; 掉到 `_tbl_drop()` 就是活锁: "
+          "每 2 帧重建 506 个画布指令对象 + 一次 `canvas.clear()`"
+          "(真机指纹: 装杯段 `_frame自算` p99 0.622→1.157ms, 「板面」为最大子步骤的帧 11→39)",
+          "建了 %d 次 · _tbl_ok=%s" % (_nb["n"], _loop._tbl_ok))
 
     _due = _fx_at(WFX._TBL_PREBUILD_AT + 0.02)      # 窗口内、离截止(a_dim>0)还有余量
     _due._redraw()

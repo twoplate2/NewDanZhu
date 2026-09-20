@@ -1410,9 +1410,24 @@ class WinPileFX(Widget):
                 _ts = time.time() - (self._t0 - WINDUP)
                 if _ts >= _TBL_PREBUILD_AT:
                     _tbt, _tft, _tfbt = _glass_textures()
-                    if not self._tbl_key_ok(_tbt, _tft, _tfbt):
-                        self._tbl_build(_tbt, _tft, _tfbt)
+                    if self._tbl_key_ok(_tbt, _tft, _tfbt):
+                        # ⚠️⚠️ **表已经建好了 ⇒ 本帧什么都不做, 直接 return。**
+                        #    少了这一条就是**活锁**(2026-09-20 真机日志挖出来的):
+                        #    `_tbl_build` 末尾把 `_tbl_ok/_tbl_balls/_tbl_tex` 全设成"有效",
+                        #    于是**下一帧 `_tbl_key_ok` 必为真** ⇒ 掉到下面的 `_tbl_drop()`
+                        #    ⇒ 把刚建的表作废 ⇒ 再下一帧 key 又假 ⇒ 又建 …… **每 2 帧一轮**,
+                        #    每轮重建 506 个画布指令对象 + 一次 `canvas.clear()`。
+                        #    指纹(真机日志): 装杯段 `_frame自算` p99 **0.622 → 1.157ms**、
+                        #    max **2.52 → 5.02ms**, 「板面」为最大子步骤的帧 **11 → 39**,
+                        #    且那些帧**间隔恰好 2 帧**。
+                        #    ⚠️ 退场**不受影响**: 那时 `mode` 已是 `result`(状态机
+                        #      `idle → pending → win → result → idle`), 根本进不了这个分支,
+                        #      照旧走下面的 `_tbl_drop()` ⇒ 红线 3 保持。
                         return
+                    self._tbl_build(_tbt, _tft, _tfbt)
+                    return
+            # ⚠️ 走到这里 = **不是 pending 段的空白窗口**(退场 / idle / 尺寸未定)⇒ 照旧作废。
+            #    红线 3: 少了它, 退出装杯后杯子/压暗会**永久留在画布上**。
             self._tbl_drop()
             return
         self._apply_anim_rect(k, dy)
