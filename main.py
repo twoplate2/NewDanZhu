@@ -37,7 +37,7 @@ os.environ["KIVY_ORIENTATION"] = "Portrait PortraitUpsideDown Landscape Landscap
 # 会自然按其刷新率呈现; Android 则由 Window/显示模式请求优先提升到 165Hz。
 from kivy.config import Config        # noqa: E402
 Config.set("graphics", "maxfps", "120")
-Config.set("graphics", "vsync", "-1")   # ⚠️ 实验态(B 组): 自适应 vsync, 测完改回 "1"
+Config.set("graphics", "vsync", "1")
 
 import tempfile                       # noqa: E402
 
