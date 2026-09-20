@@ -18,7 +18,12 @@
 # ⚠️ 用 `plinko_fps_2*` 而不是 `plinko_fps_*` —— 后者会匹配到「连现有记录一起」存的
 #    `plinko_fps_all_<时间戳>.txt`, 那样脚本会拉到**别人**。
 #
-# 跑法:  bash tools/emu/multi_round.sh [轮数, 默认 4] [文件名前缀, 默认 r]
+# 跑法:  bash tools/emu/multi_round.sh [轮数, 默认 4] [文件名前缀, 默认 r] [包名, 默认新版]
+#
+# ⚠️ **第三个参数是包名** —— 老版 `org.danzhu.plinko`(v0.8.69) 与新版
+#    `org.danzhu.tiao`(v0.8.122) **包名不同、可共存同装**, A/B 就靠它切。
+#    两版的跑分菜单实测**布局逐像素相同**(「开始模拟测试」都在 (310,1044)),
+#    所以下面那几个写死的 tap 坐标对两版都成立。
 set -u
 ADB="/c/Program Files/Netease/MuMu/nx_main/adb.exe"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -29,6 +34,8 @@ cd "$D"
 export MSYS_NO_PATHCONV=1
 N="${1:-4}"
 PREFIX="${2:-r}"          # 输出文件名前缀(A/B 两组分开)
+PKG="${3:-org.danzhu.tiao}"   # 被测包名(老版 = org.danzhu.plinko)
+START="${4:-1}"           # 起始轮号 —— 交替 A/B 时每轮单独调一次, 靠它不覆盖同名文件
 
 # ⚠️⚠️⚠️ **互斥锁 —— 两个实例一起跑会把结果全废掉, 而且是静默的。**
 #
@@ -120,11 +127,12 @@ wait_result() {
   return 1
 }
 
-for i in $(seq 1 "$N"); do
-  echo "=========== 第 $i 轮 / 共 $N 轮 ==========="
+LAST=$((START + N - 1))
+for i in $(seq "$START" "$LAST"); do
+  echo "=========== 第 $i 轮 / 到 $LAST 轮 ==========="
   BEFORE="$(newest)"
-  "$ADB" shell "am force-stop org.danzhu.tiao" >/dev/null 2>&1; sleep 3
-  "$ADB" shell "monkey -p org.danzhu.tiao -c android.intent.category.LAUNCHER 1" >/dev/null 2>&1
+  "$ADB" shell "am force-stop $PKG" >/dev/null 2>&1; sleep 3
+  "$ADB" shell "monkey -p $PKG -c android.intent.category.LAUNCHER 1" >/dev/null 2>&1
   echo "  启动中, 等 32 秒…"; sleep 32
   hold                       # 长按标题 → 跑分菜单
   tap 310 1044 2             # 「开始模拟测试」
@@ -157,6 +165,6 @@ for i in $(seq 1 "$N"); do
 done
 
 echo "=== 全部完成, 汇总 ==="
-for i in $(seq 1 "$N"); do
+for i in $(seq "$START" "$LAST"); do
   [ -f "_emu_${PREFIX}$i.txt" ] && grep -m1 "^# 窗口" "_emu_${PREFIX}$i.txt" | sed "s/^/  ${PREFIX}$i: /"
 done

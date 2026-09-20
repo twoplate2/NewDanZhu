@@ -29,9 +29,16 @@
 #
 # 跑法:  bash tools/emu/set_fps_cap.sh 165
 #        bash tools/emu/set_fps_cap.sh          # 只看当前值
+#        bash tools/emu/set_fps_cap.sh 165 org.danzhu.plinko   # 指定包(老版 A/B 用)
+#
+# ⚠️ 合法档位是**从新版 `danzhu/config.py` 现读**的。老版 0.8.69 是
+#    `(60,90,120,144,165,185)`、新版是 `(60,90,120,144,165,240)` ——
+#    **只有 165 及以下两边都有**。A/B 要钉的就是 165(面板也是 165Hz)。
+#    若哪天要设 240, 得先确认目标包的档位表里有它, 否则应用读存档时会
+#    校验不过、静默回落到它自己的 `FPS_CAP_DEFAULT`(老版 120 / 新版 240)。
 set -u
 ADB="/c/Program Files/Netease/MuMu/nx_main/adb.exe"
-PKG="org.danzhu.tiao"
+PKG="${2:-org.danzhu.tiao}"
 CFG="/data/data/$PKG/files/plinko_config.json"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export MSYS_NO_PATHCONV=1

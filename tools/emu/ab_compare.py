@@ -128,6 +128,49 @@ def main():
         print("  %s 中位 %.1f · 组内极差 %.1f" % (ga, ma, wa))
         print("  %s 中位 %.1f · 组内极差 %.1f" % (gb, mb, wb))
         print("  组间差 %.1f  vs  组内极差 max %.1f" % (abs(ma - mb), max(wa, wb)))
+        # ⚠️⚠️ **配对检验 —— 这是本夹具最灵敏的一条, 别跳过。**
+        #    `ab_rounds.sh` 是**交替**跑的(v69_r3 与 v122_r3 相邻), 交替换包正是为了让
+        #    每一对共享同一段主机状态 ⇒ **逐对求差**把"漂移"这一项直接消掉。
+        #    而"两组各取中位再相减"是**非配对**统计, 漂移全留在噪声里(实测同一个 APK
+        #    连跑 6 轮的极差就有 7.4%)。判据看**符号检验**: 差值符号一致才叫真差异。
+        try:
+            import math as _math
+
+            def _ridx(nm):
+                m = re.search(r"_r(\d+)\.txt$", nm)
+                return int(m.group(1)) if m else None
+
+            _ra, _rb = res[ga][2], res[gb][2]
+            _ma = {_ridx(nm): v for (nm, _h, _f), v in zip(_ra, res[ga][0])}
+            _mb = {_ridx(nm): v for (nm, _h, _f), v in zip(_rb, res[gb][0])}
+            _common = sorted(set(_ma) & set(_mb) - {None})
+            if _common:
+                _d = [_ma[i] - _mb[i] for i in _common]      # 正 = ga 高
+                _k = sum(1 for x in _d if x > 0)
+                _n = len(_d)
+                # 符号检验(双侧, 精确): H0 = 差值正负各半
+                _tail = sum(_math.comb(_n, j) for j in range(max(_k, _n - _k), _n + 1))
+                _p = min(1.0, 2.0 * _tail / (2 ** _n))
+                print("========== 配对检验（%d 对，%s − %s）==========" % (_n, ga, gb))
+                print("  逐对差: %s" % " · ".join("%+.1f" % x for x in _d))
+                print("  中位差 %+.1f · 均差 %+.1f · ga 高的对 %d/%d · 符号检验 p=%.3f"
+                      % (st.median(_d), sum(_d) / _n, _k, _n, _p))
+                # 配对自举: 对"对的集合"重采样(不是对帧重采样)
+                import random as _rnd
+                _r = _rnd.Random(20260920)
+                _bs = []
+                for _ in range(4000):
+                    _s = [_d[_r.randrange(_n)] for _ in range(_n)]
+                    _bs.append(sum(_s) / _n)
+                _bs.sort()
+                print("  配对自举 90%% 区间: %+.1f ~ %+.1f  %s"
+                      % (_bs[200], _bs[3799],
+                         "← 不含 0 ⇒ 有差异" if (_bs[200] > 0 or _bs[3799] < 0)
+                         else "← 含 0 ⇒ 分不出来"))
+                if _n < 5:
+                    print("  ⚠️ 只有 %d 对 —— 符号检验最小可能 p 就是 %.3f, 判不出显著性。加对。" % (_n, 2.0 / (2 ** _n)))
+        except Exception as _e:      # 配对是**增益**, 坏了不许把主判据带下水
+            print("  (配对检验跳过: %r)" % (_e,))
         # ⚠️⚠️ **先比两组离群帧的量级** —— 2026-09-20 的一次 A/B 就是被这个骗的:
         #    B 组看着 +18.8%, 实际是 A 组某一轮撞上一根 177ms 的离群帧。
         #    两组的"最慢一帧"差得多 ⇒ 1%Low 根本不可比, 先去看那一轮为什么有离群。

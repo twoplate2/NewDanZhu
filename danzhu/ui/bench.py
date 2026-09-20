@@ -3604,7 +3604,12 @@ class BenchMixin(object):
                     _n1b = max(1, int(len(_s) * 0.01))
                     _sb = sorted(_s)[-_n1b:]
                     _sm = sum(_sb)
-                    _bs.append(1.0 / (_sm / _n1b) if _sm > 0 else 0.0)
+                    # ⚠️⚠️ **这个作用域里的 `gaps` 是毫秒**(见同函数上面 `_gap_ms = gaps[_i] - _body[_i]`,
+                    #    拿 ms 减 ms) ⇒ 必须是 `1000.0 /`。写成 `1.0 /` 会恒印 "0.1 ~ 0.1" ——
+                    #    2026-09-20 实测 9 份真机日志**每一份**都这样, 而这行的用途恰恰是
+                    #    「这一轮的单点值可不可比」⇒ 恒印 0.1 等于把这个判断力整个删掉。
+                    #    修好后同一份日志是 123.5 ~ 132.8(而不是 0.1 ~ 0.1)。下面子窗口那处同病。
+                    _bs.append(1000.0 / (_sm / _n1b) if _sm > 0 else 0.0)
                 _bs.sort()
                 # ⚠️ **长停顿帧数必须跟分数印在一起**(方案处方 c): 模拟器实测 ——
                 #    两轮同一份 APK, 平均帧只差 1.2%, 而 1%%Low 差 2.16 倍(24.0 vs 51.9),
@@ -3626,7 +3631,7 @@ class BenchMixin(object):
                     _n4 = max(1, int(len(_seg) * 0.01))
                     _s4 = sorted(_seg)[-_n4:]
                     _sv = sum(_s4)
-                    _qs.append(1.0 / (_sv / _n4) if _sv > 0 else 0.0)
+                    _qs.append(1000.0 / (_sv / _n4) if _sv > 0 else 0.0)   # 同上一处: gaps 是毫秒
                 if _qs:
                     _lines.append("#   子窗口(四等分)各自的 1%%Low: %s  ← 差得多 = 这一轮"
                                   "**内部就不稳**, 更别拿去跟别的轮比"
