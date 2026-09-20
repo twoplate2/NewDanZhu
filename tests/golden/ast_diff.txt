@@ -71,7 +71,7 @@ DIFF       _prog_text                         c8f96abfbf
 ONLY_NEW   _pump_timers                       1b85e48c76
 DIFF       _reassert_high_refresh             8ec6c9ee73
 DIFF       _recalc_power_stats                e02c2c3963
-DIFF       _redraw                            e717733d12
+DIFF       _redraw                            5df16f1166
 DIFF       _refresh_mute_btn                  2649213c40
 DIFF       _refresh_stats                     1b878b9294
 DIFF       _remove_rtp_button                 691013b211

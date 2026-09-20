@@ -75,6 +75,16 @@ def hold_for(m):
 
 # ---- 进场/退场 ----
 ENTER_DIM_AT, ENTER_DIM_DUR = 0.30, 0.16
+# ⚠️⚠️ **持久指令表提前建的时刻**(相对 settle 的秒数, 只在 `pending` 段内有效)。
+# 为什么要有这个数: `_tbl_build` 在 x100 时要新建 **506 个画布指令对象**
+# (changelog/2026-09-19 实测: 桌面中位 0.97ms / 最差 6.36ms, 真机更贵), 而它原来**等 `a_dim`
+# 刚 > 0 那一帧**(= `ENTER_DIM_AT` = settle+0.45)才跑 —— 那一刻画面**已经开始压暗**,
+# 重活落在可见帧上。而 `settle+0.15 … +0.45` 这 0.30 秒里**一个像素都没变**
+# (`_redraw` 在 `a_dim<=0 and a_cup<=0` 时直接 `_tbl_drop(); return`) ⇒ 提前建掉, 观感零影响。
+# ⚠️ **为什么不是 0.0**(即 `pending` 第一帧就建): 那一帧还要付 `play_win` + `_make_balls`
+# (`_make_balls` 本身是 100 个 dict + 拓扑排序 + sort) —— 别把两块重活又挤回同一帧,
+# 那正是这次改动要消灭的形状。取 0.10 ⇒ 与它错开约 0.1 秒(≈16 帧), 离截止(0.30)还有 0.20 秒。
+_TBL_PREBUILD_AT = 0.10
 # ⚠️ ENTER_CUP_AT + ENTER_CUP_DUR **必须 <= WINDUP**, 否则 tick() 在 now >= _t0 处硬切到
 #    win 分支返回常量 (1,1,1,0), 进场曲线跑不完就被截断成瞬移。
 ENTER_CUP_AT, ENTER_CUP_DUR = 0.32, 0.18
@@ -1387,6 +1397,22 @@ class WinPileFX(Widget):
         if a_dim <= 0.0 and a_cup <= 0.0:
             # 两边都透明 = 本帧不画(进场最前面那几帧 / 退场最后那几帧)。**必须作废**:
             # 留着旧表的话, 下一帧 alpha 回来时画的是上一段曲线的残留。
+            #
+            # ⚠️⚠️ **2026-09-20: 这个"屏幕上什么都没画"的窗口, 正好用来把持久指令表建掉。**
+            #   原来 `_tbl_build`(x100 ⇒ 506 个画布指令对象)是等 `a_dim` 刚 > 0 那一帧
+            #   (settle+0.45)才跑, 而那一刻画面**已经开始压暗** ⇒ 重活落在可见帧上。
+            #   而这一段(settle+0.15 … +0.45)一个像素都没变 ⇒ 提前建, 观感零影响。
+            #   ⚠️ 时刻由 `_TBL_PREBUILD_AT` 定(见那个常量: 不与 `play_win`/`_make_balls` 挤一帧)。
+            #   ⚠️ **建完必须 `return`, 绝不能接着 `_tbl_drop()`** —— 那会把刚建的表作废、白建。
+            #   ⚠️ 判据里带 `_tbl_key_ok`: 退场最后那几帧也会走到这里, 而那时 `_balls` 没换
+            #     ⇒ 判据为真 ⇒ 照旧 `_tbl_drop()`, 与改造前**逐位同行为**。
+            if self.mode == "pending":
+                _ts = time.time() - (self._t0 - WINDUP)
+                if _ts >= _TBL_PREBUILD_AT:
+                    _tbt, _tft, _tfbt = _glass_textures()
+                    if not self._tbl_key_ok(_tbt, _tft, _tfbt):
+                        self._tbl_build(_tbt, _tft, _tfbt)
+                        return
             self._tbl_drop()
             return
         self._apply_anim_rect(k, dy)

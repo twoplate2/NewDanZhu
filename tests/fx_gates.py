@@ -3590,6 +3590,54 @@ def main():
           "`_BALL_TEX_ROWS` 真的把 512 行切开了(不是退化成一次一档)",
           "每步 %d 行 ⇒ 一档 %d 步" % (_R, (2 * _D + _R - 1) // _R))
 
+    # =====================================================================
+    # [32] 装杯持久指令表: 必须在「屏幕上什么都没画」的窗口里**提前**建好
+    # ⚠️ 2026-09-20: `_tbl_build` 在 x100 时要新建 **506 个画布指令对象**
+    #    (桌面中位 0.97ms / 最差 6.36ms, 真机更贵), 而它原来等 `a_dim` 刚 > 0 那一帧
+    #    (= settle+0.45)才跑 —— 那一刻画面**已经开始压暗**, 重活落在可见帧上。
+    #    而 `settle+0.15 … +0.45` 这 0.30 秒里屏幕上一个像素都没变。
+    # ⚠️ 判据是**行为**(表建没建、什么时候建的), 不是"源码里有没有那个字符串"。
+    # =====================================================================
+    print("\n[32] 装杯持久表: 在「什么都没画」的窗口里提前建(不是等画面开始压暗那一帧)")
+
+    def _fx_at(ts):
+        """造一个 pending 态的 fx, 令"相对 settle 的秒数" = ts。
+
+        ⚠️ `WinPileFX(area)` 的 `area` **只为取 `game.sfx` / `game.bet`**(宿主侧), 造表/绘制
+           这条路一次都没读它 ⇒ 这里给个最小替身就够(与 `_LogHost` 同一个做法)。
+        """
+        _f = WinPileFX(types.SimpleNamespace(game=types.SimpleNamespace(bet=10, sfx=None)))
+        _f.size = (520, 660)
+        _f.mode = "pending"
+        # ⚠️ `_make_balls` 是**设 `self._balls`**、**不返回**(返回 None) —— 别把返回值赋回去,
+        #    那会把 `_balls` 清成 None, 而 `_tbl_build` 立刻 `for _b in self._balls` 炸掉。
+        _f._make_balls(100, 10, 1)                  # 100 颗 ⇒ 建表最贵的那档
+        _f._t0 = time.time() + WFX.WINDUP - ts          # `_layers` 算的是 now-(_t0-WINDUP)
+        return _f
+
+    _early = _fx_at(WFX._TBL_PREBUILD_AT * 0.5)     # 还没到提前建的时刻
+    _early._redraw()
+    check(not _early._tbl_ok,
+          "到了 `_TBL_PREBUILD_AT` **之前**不建表 —— 别和 `play_win`/`_make_balls` 挤同一帧",
+          "_tbl_ok=%s (ts=%.3f < %.3f)" % (_early._tbl_ok, WFX._TBL_PREBUILD_AT * 0.5,
+                                           WFX._TBL_PREBUILD_AT))
+
+    _due = _fx_at(WFX._TBL_PREBUILD_AT + 0.02)      # 窗口内、离截止(a_dim>0)还有余量
+    _due._redraw()
+    _built_in_window = (_due._tbl_ok and _due._tbl_balls is _due._balls)
+    check(_built_in_window,
+          "窗口内**提前建好**了持久表 —— 而且`_tbl_drop()` 没有把它作废掉"
+          "(建完必须 return, 不能接着 drop)",
+          "_tbl_ok=%s · _tbl_balls is _balls=%s"
+          % (_due._tbl_ok, _due._tbl_balls is _due._balls if _due._tbl_ok else "n/a"))
+
+    # 画面开始压暗之后(`a_dim > 0`), 表必须**已经就绪** ⇒ 那一帧不再跑 `_tbl_build`
+    _later = _fx_at(WFX.ENTER_DIM_AT + 0.05)
+    _later._redraw()
+    check(_later._tbl_ok and _later._tbl_balls is _later._balls,
+          "画面开始压暗那一帧表**已就绪**(`_tbl_key_ok` 为真 ⇒ 不走 `_tbl_build`)",
+          "ts=%.2f · _tbl_ok=%s" % (WFX.ENTER_DIM_AT + 0.05, _later._tbl_ok))
+
     print("\n== 结果: %s ==" % ("全部通过" if not FAIL else "失败 %d 项 -> %s" % (len(FAIL), FAIL)))
     return _parity_verdict(FAIL)
 
