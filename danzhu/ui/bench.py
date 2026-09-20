@@ -1187,12 +1187,15 @@ class BenchMixin(object):
         # 「重放冷启动」: 不丢存档地按需复现"初次安装那种局"(见 `_replay_cold_start`)。
         # 玩家提的 —— 那个 bug 一年犯一次、"关掉重开"就自愈, 想抓现场只能卸载重装,
         # 而卸载会清掉余额/轮次。它不新建 Sfx 对象, 所以不碰任何接线, 也不动游戏状态。
-        # 「保存加载日志」: **不上屏**。
-        #    ⚠️ 代码全留着 —— 它是"导出启动日志"的唯一入口, 藏了之后所有诊断都得靠别的路子。
-        #    放回来: 在 `_btn_row` 那两个 add_widget 里加一句 `_btn_row.add_widget(log_btn)`,
-        #    并把上面的 `n_btn` 改成 2(它会单独占一行)。
-        # ⚠️ 它**不违反**这个弹窗的铁律(不许放会动音频栈或游戏状态的按钮):
-        #    这个按钮**只写文件** —— 不碰 Sfx、不碰音频栈、不碰游戏状态, 连读都只读一次快照。
+        # 「保存加载日志」: **已放回版面**(单独占一行)。
+        #    ⚠️⚠️ 这是**有意偏离老版**, 不是还原缺陷 —— 老版自 v0.8.66 起把它藏了
+        #       (见 `tests/recon/10_*.json`), 新版原先原样跟着藏。
+        #       2026-09-20 玩家要它回来: 它是导出启动日志的**唯一入口**, 而启动日志里那些行
+        #       (球纹理分块烘焙 / 音频体检 / 字体预热) **只存在于内存**(`boot._BOOT_LOG`),
+        #       不点这个按钮就永远拿不到 ⇒ 真机上没法验证"摊平尖峰"那类改动。
+        #    ⚠️ 它**不违反**这个弹窗的铁律(不许放会动音频栈或游戏状态的按钮):
+        #       这个按钮**只写文件** —— 不碰 Sfx、不碰音频栈、不碰游戏状态, 连读都只读一次快照。
+        #    ⚠️ 放在 `_btn_row` **之前**: `_btn_row` 里的「确定」要留在最下沿。
         log_btn = Button(text='保存加载日志', font_size='17sp', bold=True,
                          background_normal='', background_color=hex_rgb(COL_BTN) + (1,),
                          size_hint_y=None, height=dp(52))
@@ -1207,13 +1210,14 @@ class BenchMixin(object):
         self._install_fit(replay_btn, ok_btn)
         _btn_row.add_widget(replay_btn)
         _btn_row.add_widget(ok_btn)
+        content.add_widget(log_btn)
         content.add_widget(_btn_row)
         # ⚠️ 高度必须**按内容算**: 实测弹窗内容区 = 弹窗高 − 44px(Kivy 标题栏, 即使 title=''
         #    也吃), 每行 38px(行高 26 + spacing 12)。写死高度的话加一行就会被裁掉尾巴。
         n_lbl = 1 + (1 if _info else 0) + len(rows) + _n_extra    # ⚠️ 那块面板有硬预算
-        # ⚠️ `n_btn` 数的是**按钮行数**(不是按钮个数)。两个按钮现在并排一行 ⇒ 一行。
-        #    放回「保存加载日志」(它单独占一行)时它得跟着 +1。
-        n_btn = 1
+        # ⚠️ `n_btn` 数的是**按钮行数**(不是按钮个数):「重放冷启动」+「确定」并排算一行,
+        #    「保存加载日志」单独一行 ⇒ **两行**。少算一行, 弹窗就短一截、把按钮裁掉。
+        n_btn = 2
         need = (dp(30) + dp(26) * (n_lbl - 1) + dp(52) * n_btn + dp(24)
                 + dp(8) * (n_lbl + n_btn - 1))      # ⚠️ dp(24)=2×padding、dp(8)=spacing,
                                                     #    与上面那行 BoxLayout **必须成对改**

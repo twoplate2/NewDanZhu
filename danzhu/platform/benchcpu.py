@@ -889,23 +889,90 @@ def _live_power_temp_line():
         return ""
 
 
+# `/proc/stat` 上一次采样: {核号: (累计 total jiffies, 累计 idle jiffies)}。
+# ⚠️ **利用率必须靠两次采样的差值算** —— 单次读数里**没有"利用率"这个量**, 只有开机以来的
+#    累计值 ⇒ 这个快照是**必需状态**, 不是缓存。本行每 0.5 秒刷一次, 差值窗口就是那 0.5 秒。
+_CPU_STAT_PREV = {}
+
+
+def _read_proc_stat():
+    """读 `/proc/stat` 的**逐核**累计 jiffies ⇒ `{核号: (total, idle)}`; 读不到返回 `{}`。
+
+    ⚠️ 抽成独立函数**只为让门禁能替身注入** —— PC(Windows)上根本没有 `/proc/stat`,
+       而"无基线不印利用率""绝不编数"这两条纪律在 PC 上也要能被钉住。
+    ⚠️ 口径与 `top` 一致: 空闲 = `idle + iowait`。
+       `total` = **前 8 个字段**之和(user+nice+system+idle+iowait+irq+softirq+steal) ——
+       后面的 `guest`/`guest_nice` **已经计在 user/nice 里**了, 再加一遍就是重复计。
+    """
+    _out = {}
+    try:
+        with open("/proc/stat", "r") as _f:
+            for _ln in _f:
+                _p = _ln.split()
+                if not _p or not _p[0].startswith("cpu"):
+                    continue
+                _nr = _p[0][3:]
+                if not _nr.isdigit():
+                    continue            # `cpu `(全局汇总那行, 不是某个核)
+                _v = [int(_x) for _x in _p[1:9]]
+                while len(_v) < 8:      # 老内核字段少 ⇒ 缺的补 0, 不因为少一个字段整块没有
+                    _v.append(0)
+                _out[int(_nr)] = (sum(_v), _v[3] + _v[4])
+    except Exception:
+        return {}
+    return _out
+
+
+def _cpu_util_by_core():
+    """逐核 CPU 利用率(0~100 的百分数)⇒ `{核号: 百分数}`; **没基线 / 读不到返回 `{}`**。
+
+    ⚠️ **第一次调用必定返回 `{}`** —— 那一次只负责把基线立起来(见 `_CPU_STAT_PREV`)。
+       调用方据此**不印利用率**, 与"频率读不到就不印半张表"是同一条规矩: **绝不编数**。
+    ⚠️ 快照**先换再算**: 不管下面算不算得成, 基线都要往前走 —— 否则一旦某次算不成,
+       "上一次"就变成一个几秒前的陈旧值, 那段时间的利用率会被整段平均掉。
+    ⚠️ `Δtotal ≤ 0` 时**跳过这个核**(两次采样之间一个 jiffy 都没走: 核 offline / 时钟冻结 /
+       两次调用挨得太近) —— 不能拿 `Δtotal = 0` 去做除数。
+    """
+    _cur = _read_proc_stat()
+    if not _cur:
+        return {}
+    _prev = dict(_CPU_STAT_PREV)
+    _CPU_STAT_PREV.clear()
+    _CPU_STAT_PREV.update(_cur)
+    _out = {}
+    for _i, (_tot, _idl) in _cur.items():
+        _pp = _prev.get(_i)
+        if _pp is None:
+            continue
+        _dt = _tot - _pp[0]
+        if _dt <= 0:
+            continue
+        _u = 100.0 * (1.0 - float(_idl - _pp[1]) / float(_dt))
+        _out[_i] = 0.0 if _u < 0.0 else (100.0 if _u > 100.0 else _u)
+    return _out
+
+
 def _live_cpu_freq_line():
     """「启动信息」里那几行实时 CPU 频率 + 可跑核; **读不到就返回空串**(调用方据此整块不出现)。
 
     ⚠️ **这是新版独有的功能(老版没有)** —— 2026-09-19 用户要求, 见 `changelog/2026-09-19.md`
        第 23 条。产品行为超出 1:1 的**唯一**一处, 老版那半边仍守逐位一致。
 
-    形态(每簇一行, 频率写**当前/上限**; 可跑核并进第一行):
+    形态(每簇一行: 频率写**当前**、后面跟该簇**利用率**; 可跑核并进第一行):
         CPU：8 核　1+3+4　　可跑核 0-7
-        　核 7　　1804M/3187M
-        　核 4-6　2400M/2745M
-        　核 0-3　1500M/2016M
+        　核 7　　1804M，利用率 45.2%
+        　核 4-6　2400M，利用率 12.0%
+        　核 0-3　1500M，利用率 8.3%
 
     ⚠️ **金色只给"会变的那个数"**(玩家 2026-09-19 定的两条要求, 背后是同一条原则):
-        · 核数、**当前频率** —— 会变 ⇒ 金色;
-        · **上限频率**、**可跑核** —— 常量 ⇒ 通用色(不着色)。
+        · 核数、**当前频率**、**利用率** —— 会变 ⇒ 金色;
+        · **可跑核** —— 常量 ⇒ 通用色(不着色)。
        两条要求原话:「可跑核不是变量, 改为通用颜色」/
        「核心频率的格式改为 xxxM/yyyM, 那个 yy 肯定是上限」。
+    ⚠️⚠️ **2026-09-20 玩家改了格式**(原话:「改为 `核x-y：XM，利用率xx.x%`」):
+        去掉了 `/上限M` 那一半(`cpuinfo_max_freq` 是常量, 每簇就那么一个数, 占着半行却没信息量),
+        换成**该簇的实时利用率** —— 它才是"这一簇现在到底在不在干活"的答案。
+       ⇒ 底下 fx_gates 里原来钉 `1804M/3187M` 的那条判据**已按新要求改写**, 不是被删掉。
 
     ⚠️ 分组**复用 `audio.backend._cpu_groups()`**(它已经按 `cpuinfo_max_freq` 分好簇) ——
        本工程明令"不新写一份, 两处各写一份必然漂移"。函数体内 import 是为了守住模块头那条
@@ -956,27 +1023,36 @@ def _live_cpu_freq_line():
             #    它在一局里**不会变**(锁核只发生在跑分/高压测试期间), 而本块的金色是留给
             #    **活变量**的 —— 这正是玩家那两条要求背后的同一条原则:
             #      **金色 = 会变的那个数; 通用色 = 常量。**
-            #    (另一条要求「频率改成 当前/上限, 上限不上金色」是同一原则的第二次应用。)
+            #    (同一原则的另两次应用: 09-19「上限频率是常量 ⇒ 不上金色」;
+            #     09-20「利用率是活变量 ⇒ 上金色」—— 后者顺手把上限那半截整个删了。)
             _aff = "　　可跑核 %s" % ",".join(_segs)
         _lines = ["CPU：[color=%s]%d[/color] 核　%s%s" % (_GOLD_MK, _n, _shape, _aff)]
         _any = False
+        # 利用率**整块只采一次**(不是每簇一次): 三个簇共用同一次 `/proc/stat` 差分,
+        # 各读各的会把采样窗口错开, 同一屏上三行其实是三个不同时刻。
+        _util = _cpu_util_by_core()
         for _k, _v in _grp:
             _base = "/sys/devices/system/cpu/cpu%d/cpufreq/" % _v[0]
             _cur = _read_int_file(_base + "scaling_cur_freq")
             # 核号用**范围**而不是逐个列: 「核 4-6」比「核 4 5 6」短, 也不猜"大核/中核"那种语义。
             _rng = ("%d" % _v[0]) if len(_v) == 1 else ("%d-%d" % (min(_v), max(_v)))
-            # ⚠️ 格式 = **当前/上限**(玩家 2026-09-19 定:「xxxM/yyyM, 那个 yy 肯定是上限」)。
-            #    `_k` 就是这一簇的 `cpuinfo_max_freq`, 它是**常量**(不会变) ⇒ **不上金色**,
-            #    只有"当前"(`scaling_cur_freq`, 活变量)上金色 —— 与「可跑核不上金色」同一条原则。
+            # ⚠️ 格式 = **当前频率，利用率**(玩家 2026-09-20 定:「改为 `核x-y：XM，利用率xx.x%`」)。
+            #    原来那半截 `/上限M` 去掉了 —— `cpuinfo_max_freq` 是**常量**, 每簇就那么一个数,
+            #    占掉半行却不提供任何"现在发生了什么"的信息。
             #    ⚠️ 单位保持 `M`(`4608M` 那种), **不是** `Mhz` —— 玩家第一次笔误成 `Mhz`,
             #       第二遍更正为 `M`。别自作主张加单位后缀。
+            # ⚠️ 簇内**取有读数的核平均**(同簇频率一致, 各核差异很小); 一个读数都没有 ⇒ 整段不印,
+            #    不编一个数出来(与本函数"绝不编数"同一条规矩)。
+            _us = [_util[_c] for _c in _v if _c in _util]
+            _ut = ("，利用率[color=%s]%.1f[/color]%%" % (_GOLD_MK, sum(_us) / len(_us))
+                   if _us else "")
             if _cur:
                 _any = True
-                _lines.append("　核 %s　[color=%s]%d[/color]M/%dM"
-                              % (_rng, _GOLD_MK, _cur // 1000, int(_k) // 1000))
+                _lines.append("　核 %s　[color=%s]%d[/color]M%s"
+                              % (_rng, _GOLD_MK, _cur // 1000, _ut))
             else:
-                # 当前频率读不到 ⇒ **只印上限**, 不编一个数出来(与本函数"绝不编数"同一条规矩)。
-                _lines.append("　核 %s　%dM" % (_rng, int(_k) // 1000))
+                # 当前频率读不到 ⇒ 频率位写 `--`, 不编一个数出来(同一条规矩)。
+                _lines.append("　核 %s　--%s" % (_rng, _ut))
         if not _any:
             return ""                                # 一个当前频率都没有 ⇒ 不印半张表充数
         return "\n".join(_lines)

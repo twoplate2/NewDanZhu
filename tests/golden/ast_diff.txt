@@ -32,6 +32,7 @@ DIFF       _check_title_hold                  2f7b308013
 DIFF       _clock_wrap                        e445e731e1
 ONLY_OLD   _close_rtp_hidden                  c0e503e2cd
 ONLY_NEW   _controls                          59a7b800b4
+ONLY_NEW   _cpu_util_by_core                  4dca8cdafd
 ONLY_NEW   _detect_platform                   97ec1a4251
 ONLY_NEW   _dispatch                          d4831e4681
 ONLY_NEW   _dispatch_one                      16a505efe5
@@ -48,7 +49,7 @@ DIFF       _guard_immersive_now               db9494924d
 DIFF       _guard_warm                        af45b7a225
 DIFF       _hide_bench_status                 1f68153597
 DIFF       _hp_done                           130d993d05
-ONLY_NEW   _live_cpu_freq_line                4f00c99164
+ONLY_NEW   _live_cpu_freq_line                dd6100d211
 DIFF       _load_config                       3f01e48a4d
 DIFF       _load_history                      8ea0a2467d
 ONLY_NEW   _log_settle                        ce55b38d89
@@ -69,6 +70,7 @@ ONLY_NEW   _probe_owner                       0cbe87c49b
 DIFF       _probe_verdict                     c66e268052
 DIFF       _prog_text                         c8f96abfbf
 ONLY_NEW   _pump_timers                       1b85e48c76
+ONLY_NEW   _read_proc_stat                    3e52836a3c
 DIFF       _reassert_high_refresh             8ec6c9ee73
 DIFF       _recalc_power_stats                e02c2c3963
 DIFF       _redraw                            5df16f1166
@@ -99,7 +101,7 @@ DIFF       _show_fps_curve                    a33d94a4fa
 DIFF       _show_hp_detail                    b77a640ced
 DIFF       _show_round_end                    6ae57e1d1f
 DIFF       _show_round_settings               ab4c8a45bf
-DIFF       _show_startup_info                 a343b3d883
+DIFF       _show_startup_info                 a7c677cce7
 ONLY_OLD   _smoke                             37af861181
 ONLY_NEW   _snd                               7307020270
 DIFF       _space_fire                        eb268dbd9c

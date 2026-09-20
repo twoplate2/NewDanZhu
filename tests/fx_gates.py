@@ -1275,10 +1275,43 @@ def main():
         # ② 频率格式 = **当前/上限**, 用全进程**实测值**钉(夹具给的是 核7: 当前1804000 / 上限3187000)。
         #    ⚠️ 单位必须是 `M`, **不是** `Mhz` —— 玩家第一遍笔误成 `Mhz`、第二遍更正为 `M`,
         #       这条就是防止以后有人"顺手把单位补全"。(`M` 不在 markup 里, 所以判 `_plain`。)
-        check("1804M/3187M" in _plain and "2400M/2745M" in _plain,
-              "频率 = **当前/上限**(玩家:「格式改为 xxxM/yyyM, 那个 yy 肯定是上限」)—— "
-              "上限是 `cpuinfo_max_freq`(常量, 不上金色), 当前是 `scaling_cur_freq`(活变量, 上金色)",
-              " ".join(_plain.split("\n")[1:]))
+        # ② 频率格式 —— **2026-09-20 玩家改过一次, 这条判据跟着改写**(不是删掉):
+        #    原来钉 `当前/上限`, 现在上限那半截整个删了, 换成该簇的**实时利用率**。
+        #    ⚠️ 利用率**必须靠两次 `/proc/stat` 采样的差值**才能算 —— 单次读数里没有这个量。
+        #       所以夹具注入两次采样, 并**先钉住"第一次不印利用率"**(那是这条纪律的要害:
+        #       编一个数出来比不印更有害)。
+        _keep_ps = BC._read_proc_stat
+        _base_stat = {7: (1000, 100), 4: (1000, 100), 5: (1000, 100), 6: (1000, 100),
+                      0: (1000, 100), 1: (1000, 100), 2: (1000, 100), 3: (1000, 100)}
+        try:
+            BC._CPU_STAT_PREV.clear()
+            BC._read_proc_stat = lambda: dict(_base_stat)
+            _first = re.sub(r"\[/?color[^\]]*\]", "", BC._live_cpu_freq_line())
+            check("利用率" not in _first and "1804M" in _first,
+                  "阴性对照: **第一次调用没有基线** ⇒ 照印频率但不印利用率 —— `/proc/stat` 给的"
+                  "只是开机以来的累计 jiffies, 单次读数里**根本没有「利用率」这个量**; "
+                  "拿单次值凑一个数出来就是编数",
+                  " ".join(_first.split("\n")[1:]))
+            # 差值(Δtotal 一律 100): 核7 Δidle=10 ⇒ 90.0% / 核4-6 Δidle=50 ⇒ 50.0% /
+            #                        核0-3 Δidle=100 ⇒ 0.0%
+            BC._read_proc_stat = lambda: {7: (1100, 110), 4: (1100, 150), 5: (1100, 150),
+                                          6: (1100, 150), 0: (1100, 200), 1: (1100, 200),
+                                          2: (1100, 200), 3: (1100, 200)}
+            _got2 = BC._live_cpu_freq_line()
+            _plain2 = re.sub(r"\[/?color[^\]]*\]", "", _got2)
+            check("1804M，利用率90.0%" in _plain2 and "2400M，利用率50.0%" in _plain2
+                  and "2800M，利用率0.0%" in _plain2,
+                  "频率 = **当前**、后面跟该簇**利用率**(玩家 2026-09-20:「改为 `核x-y：XM，"
+                  "利用率xx.x%`」)—— 利用率 = `1 − Δ(idle+iowait)/Δtotal`, **簇内取有读数的核平均**",
+                  " ".join(_plain2.split("\n")[1:]))
+            check("/3187M" not in _plain2 and "/2745M" not in _plain2
+                  and "/2016M" not in _plain2,
+                  "上限那半截(`cpuinfo_max_freq`)**已按 2026-09-20 的要求删掉** —— "
+                  "它是常量, 每簇就那么一个数, 占掉半行却不提供任何「现在发生了什么」的信息",
+                  " ".join(_plain2.split("\n")[1:]))
+        finally:
+            BC._read_proc_stat = _keep_ps
+            BC._CPU_STAT_PREV.clear()
         check("Mhz" not in _got and "MHz" not in _got,
               "频率单位保持 **`M`**(`4608M` 那种), **不许**自作主张补成 `Mhz`/`MHz` —— "
               "玩家第一遍笔误、第二遍明确更正为 `M`",
