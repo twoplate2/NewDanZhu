@@ -14,3 +14,8 @@ temp/
 # `tools/sim_balance.py` 跑一次就会往这儿落 `sim_balance_*.html` + `slot_dist.json`。
 # 老版靠"作者从不 git add android/output/"挡住 —— 同一条"用规则挡, 不靠纪律"。
 tools/output/
+
+# `log/` 放的是**从设备导出的启动日志 / 逐帧帧率日志**(玩家发过来的)。
+# 与 `temp/` 同一条道理: 用规则挡, 不靠纪律 —— 一旦被提交, `source.include_exts` 含 `py`
+# 的打包会把它一起打进 APK。2026-09-20 补。
+log/

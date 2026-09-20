@@ -3503,6 +3503,60 @@ def main():
           "发射帧记下来的计数是 **1**(不是 0)时也必须切得出段 —— 防判据改回 `== 0`",
           "段数 %d(期望 1) · 长度 %s ms(期望 18)" % (len(_r), [v for v, _, _ in _r]))
 
+    # =====================================================================
+    # [30] 跑分采样窗口必须覆盖 **5 发完整飞行**
+    # ⚠️ 2026-09-20 真机日志暴露: 原来一看到 `_launch_count >= 5` 就关窗, 而那个计数是
+    #    `start_charge()` 那一刻 +1 的(球 0.1 秒后才发射) ⇒ 第 5 发**还在蓄力**窗口就关了
+    #    ⇒ 窗口里只有 4 发的完整飞行, 而面板印的「每次飞行平均持续」就是拿这 4 发算的。
+    #    真机铁证: `蓄力→飞行` 只切换 4 次, 且窗口最后 12 帧全是「蓄力」。
+    # =====================================================================
+    print("\n[30] 跑分采样窗口: 第 5 发的飞行必须被算进去（不能它一蓄力就关）")
+
+    class _WinHost(object):
+        def __init__(self):
+            self._launch_count = 5
+            self._target_launches = 5
+            self._last_ball_flew = False
+            self._last_wait_t0 = 0.0
+            self._closed = False
+            self.game = types.SimpleNamespace(state="charging")
+
+        def _finish_render_sample(self, dt):
+            self._closed = True
+
+    _WinHost._auto_launch_tick = BENCH.BenchMixin.__dict__["_auto_launch_tick"]
+
+    _h = _WinHost()
+    _h._auto_launch_tick(0.1)
+    _a = (not _h._closed) and (not _h._last_ball_flew)       # 蓄力期: 不关、也没"飞出过"
+    _h.game.state = "flying"
+    _h._auto_launch_tick(0.1)
+    _b = (not _h._closed) and _h._last_ball_flew             # 起飞: 只记标记, 不关
+    _h.game.state = "landing"
+    _h._auto_launch_tick(0.1)
+    _c = not _h._closed                                      # 落袋: 还不关
+    _h.game.state = "ready"
+    _h._auto_launch_tick(0.1)
+    _d = _h._closed                                          # 飞完了: 关
+    check(_a and _b and _c and _d,
+          "第5发**蓄力期不关窗** → 起飞不关 → 落袋不关 → **飞完才关**"
+          "（原来一进蓄力就关 ⇒ 只统计到 4 发）",
+          "蓄力%s · 飞行%s · 落袋%s · 飞完关窗%s" % (_a, _b, _c, _d))
+
+    _h2 = _WinHost()
+    _h2.game.state = "misfire"
+    _h2._auto_launch_tick(0.1)
+    check(_h2._last_ball_flew and not _h2._closed,
+          "哑火(`misfire`)也算「飞出去了」—— 它是真的发射过(球飞不出竖井), "
+          "不认它就会一直等下去", "flew=%s closed=%s" % (_h2._last_ball_flew, _h2._closed))
+
+    _h3 = _WinHost()
+    _h3._last_wait_t0 = time.perf_counter() - 11.0           # 假造"已经等了 11 秒"
+    _h3._auto_launch_tick(0.1)
+    check(_h3._closed,
+          "兜底(绝不软锁): 状态机不按预期走时最多等 10 秒也把窗口关掉 —— "
+          "跑分链上卡死 = 玩家点完跑分再也回不来")
+
     print("\n== 结果: %s ==" % ("全部通过" if not FAIL else "失败 %d 项 -> %s" % (len(FAIL), FAIL)))
     return _parity_verdict(FAIL)
 

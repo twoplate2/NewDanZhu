@@ -113,6 +113,10 @@ _FRAME_THR = [0.0]
 # 线程级时钟。⚠️ Windows 没有 `thread_time`, 退回 `process_time` —— 桌面精度只有 15.6ms,
 # 那一列在 PC 上基本是台阶, 分流**只能在真机上看**。
 _THREAD_TIME = getattr(time, "thread_time", None) or time.process_time
+# 等「最后一发的飞行飞完」的**硬上限**(秒)。⚠️ 这是**防软锁兜底**, 不是超时调参:
+# 跑分链上卡死 = 玩家点完跑分界面再也回不来。量级: 一个飞行周期约 4~5 秒(真机实测),
+# 蓄力 0.1 秒 ⇒ 10 秒是两倍余量。
+_LAST_BALL_MAX_WAIT = 10.0
 
 
 def _flight_segments(frames):
@@ -173,13 +177,20 @@ def _flight_segments(frames):
 def _bench_menu_desc():
     """跑分菜单里那段说明的正文。
 
-    ⚠️ **末句那个"约 67 秒"是手写的粗估**, 不是算出来的: 它 = 渲染窗口(约 25 秒, 由
-       `_target_launches` 发 5 颗球决定, 不是常量) + 波 1(预热 + `SOC_SAMPLE_RUNS` x
-       `SOC_SAMPLE_CPU_SEC` + 间隔)。改那几个参数要回来改这个数。
+    ⚠️ **末句那个"约 86 秒"是 2026-09-20 用真机录像实测出来的**(Y700 TB323FU):
+       拿面板上「物理演算第 N/45 秒」那行做标尺(线性拟合 44.9s → 89.9s, 正好 45 秒),
+       加上渲染采样段(第一次自动发射 3.8s 起) ⇒ 跑分本体 ≈ **86 秒**。
+       拆开是: 渲染采样 32s + 相位切换/等球落地 ~4s + 物理跑分 45s。
+    ⚠️ **旧值「约 67 秒」是手写的粗估**(docstring 原文自己写着"不是算出来的"), 它按
+       "渲染窗口约 25 秒"估 —— 而实测是 **32 秒**, 光这一项就差 7 秒。
+    ⚠️ **「窗口覆盖第 5 发」那处改动(同日)不改总时长** —— 关窗之后本来就有
+       `_wait_idle_then_bench` 等球落地, 那几秒一直在跑, 只是原来没算进采样窗口。
+       ⇒ 这个结论是**读代码得出的, 没有实测**; 真要动它得重测。
     ⚠️ 三行是**逐字照抄玩家给的文本**(含「1、」这个顿号编号、小写 `python`、数字两侧不加空格)
        —— 他要的就是这三行, 别自作主张改标点。三行都放得下, 不折行。
+       （**只有那个秒数是可维护的估算值**, 改 `_target_launches` / `SOC_SAMPLE_*` 要回来改它。）
     """
-    return ('模拟测试约 67 秒（含装杯动画）\n测试三项设备性能：\n'
+    return ('模拟测试约 86 秒（含装杯动画）\n测试三项设备性能：\n'
             '1、累计发射5颗弹珠，测屏幕渲染帧率\n'
             '2、用python物理引擎，测CPU单核浮点\n'
             '3、用高压测试，考验CPU调度和散热')
@@ -1753,6 +1764,10 @@ class BenchMixin(object):
         Window.bind(on_flip=self._on_flip)
         self._launch_count = 0
         self._target_launches = BENCH_TARGET_LAUNCHES
+        # ⚠️ 「最后一发到底飞出去了没有」—— 关窗口要用(见 `_auto_launch_tick` 那段)。
+        #    不复位的话上一轮的残值会让下一轮**提前关窗**。
+        self._last_ball_flew = False
+        self._last_wait_t0 = 0.0
         # 只在跑分期间轮询；0.1 秒把每局结束到下一发的空档从最多 0.5 秒缩到最多 0.1 秒。
         # 回调只读状态，发射后立即离开 ready，不会重复触发或改变游戏物理。
         self._auto_evt = Clock.schedule_interval(self._auto_launch_tick, 0.1)
@@ -1865,7 +1880,35 @@ class BenchMixin(object):
         #    `perf_counter` + 一次字典累加, 比它包住的赋值贵不了多少, 不另加开关。
         _ta = time.perf_counter()
         if self._launch_count >= self._target_launches:
-            self._finish_render_sample(0)
+            # ⚠️⚠️ **必须等最后一发的「飞行」飞完才关窗口 —— 一到这里就关是错的。**
+            #
+            #    【病象】跑分明明发了 5 发, 采样窗口里却只有 **4 发**的完整飞行,
+            #      而面板印的「每次飞行平均持续」就是拿这 4 发算的。
+            #    【根因】`_launch_count += 1` 是在 `start_charge()` 那一刻(球 0.1 秒后才真的
+            #      `launch()`), 所以第 5 发**还在蓄力**计数就到 5 ⇒ 下一个 tick 就关窗口。
+            #      真机日志两头都印证: `蓄力→飞行` 只切换 **4** 次, 且窗口最后 12 帧**全是蓄力**。
+            #    ⚠️ **只把计数挪到 `launch()` 是不够的**: 那样第 5 发的飞行会被**截一半**就关窗,
+            #      而 `_flight_segments()` 会收尾段 ⇒ 一个残缺的段进了均值, 反而把均值**拉低**。
+            #      ⇒ 只有"等它飞完"才两条都对(5 段完整 + 窗口天然延长约一个飞行周期)。
+            #    ⚠️ 判据取 `state` 离开 flying/landing: 蓄力期两边都不满足 ⇒ 继续等;
+            #      起飞后 `_last_ball_flew` 置真; 落袋结束后才真的关。
+            #    ⚠️ **`misfire` 也算"飞出去了"** —— 哑火也是真的发射过(球飞不出竖井),
+            #      不认它就会一直等下去。跑分固定 power=0.8 不该哑火, 但这是**别人的状态机**,
+            #      不能靠"应该不会"来兜。
+            #    ⚠️⚠️ **兜底(绝不软锁)**: 万一状态机没按预期走(状态名变了 / 异常 / 球永远不落地),
+            #      最多等 `_LAST_BALL_MAX_WAIT` 秒就把窗口关掉 —— **少一段总比卡死强**。
+            #      跑分链上卡死 = 玩家点完跑分界面再也回不来, 这是工程红线。
+            _st = getattr(self.game, "state", "")
+            if _st in ("flying", "landing", "misfire"):
+                self._last_ball_flew = True          # 第 5 发真的飞出去了
+                return
+            if getattr(self, "_last_ball_flew", False):
+                self._finish_render_sample(0)
+                return
+            if self._last_wait_t0 <= 0.0:
+                self._last_wait_t0 = time.perf_counter()
+            elif time.perf_counter() - self._last_wait_t0 > _LAST_BALL_MAX_WAIT:
+                self._finish_render_sample(0)
             return
         if self.game.state == "ready":
             # ⚠️ **跑分: 把这一发的盘面钉死**(见 `BENCH_BOARD`)。必须放在 `start_charge()`

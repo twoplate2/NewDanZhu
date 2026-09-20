@@ -9,13 +9,14 @@ DIFF       _apply_row_budget                  b54146b5dc
 DIFF       _apply_sizes                       36039a3e1a
 DIFF       _ask_unlock_rtp                    edbeed58c2
 ONLY_NEW   _audio_src_files                   550346145e
-DIFF       _auto_launch_tick                  7df95eed74
+DIFF       _auto_launch_tick                  a21f8aebf7
 DIFF       _await_ready                       18325cc9ed
 DIFF       _bench_counters_begin              b9a56503a0
 DIFF       _bench_counters_end                5758585227
 DIFF       _bench_done                        bca3f86d9a
 DIFF       _bench_frame_log                   20db2041e8
 ONLY_NEW   _bench_history_text                3679c4ba07
+DIFF       _bench_menu_desc                   e10f652418
 DIFF       _bench_restore_board               377c5d7ba0
 ONLY_NEW   _bench_running                     644bbdb055
 DIFF       _bench_save_board                  0cef014aba
@@ -100,6 +101,7 @@ ONLY_OLD   _smoke                             37af861181
 ONLY_NEW   _snd                               7307020270
 DIFF       _space_fire                        eb268dbd9c
 DIFF       _start_bench_test                  2404014333
+DIFF       _start_benchmark                   b50517d312
 DIFF       _start_hp_test                     f24006f946
 ONLY_NEW   _status                            15bd304f79
 DIFF       _swap_wrap                         ef02aa403b
