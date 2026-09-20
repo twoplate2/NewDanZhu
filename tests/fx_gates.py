@@ -1272,56 +1272,73 @@ def main():
               "「可跑核」的值**不着色**(玩家:「可跑核不是变量, 改为通用颜色」)—— 本块的金色留给"
               "**会变的那个数**; 还套着 markup 的话原文里不会有连续的「可跑核 4-7」",
               repr(_got.split("\n")[0]) if _got else repr(_got))
-        # ② 频率格式 —— **2026-09-20 改过两轮, 这条判据跟着改写**(不是删掉):
-        #    第一轮: 删掉 `/上限M`, 换成该簇的**实时利用率**;
-        #    第二轮(**真机实测后**): 数据源从 `/proc/stat` 换成 `time_in_state`, 文案改「频率利用」——
-        #      因为 **Android 的 app 域读不到 `/proc/stat`**(SELinux 把 procfs 挡在 app 外:
-        #      `untrusted_app_32` 与 `runas_app` 都 `Permission denied`, 而 `shell` 域读得到、
-        #      内容完全正常)。⇒ 业内标准(`top` 那套 CPU 时间占比)在这个沙箱里拿不到,
-        #      唯一可读的是 sysfs 的**频率驻留时间**。
-        #    ⚠️ 这个量**必须靠两次采样差分**才能算 —— 单次读数里全是开机以来的累计格数,
-        #       **根本没有"利用率/平均频率"这个量**。所以夹具注入两次采样, 并**先钉住
-        #       "第一次不印"**(编一个数出来比不印更有害)。
-        #    ⚠️ 分母是**簇自己的上限**(`_cpu_groups()` 的 key), **不是** `cpuinfo_max_freq` ——
-        #       实测那个文件给的是整个 cpufreq **policy** 的上限(核 0 读 3629MHz, 而它属于
-        #       2016MHz 那一簇), 拿它当分母会把百分比算小一半。夹具就是按这条设计的:
-        #       核7 给 2868300 / 上限 3187000 ⇒ 90.0%。
+        # ② 频率/利用率格式 —— **2026-09-20/21 改写三轮**, 这条判据跟着换(不是删掉):
+        #    ① 原来钉 `当前/上限`;  ② 改成"当前 + 利用率";  ③ **今改成两源降级链**。
+        #    ⚠️⚠️ 链: `cpuidle`(真 CPU 时间占比 ⇒ 词用「**利用率**」)
+        #             → `freqtime`(平均频率÷该簇上限 ⇒ 词用「**频率利用**」)
+        #       两个源给的是**两个不同的量**, 屏上**不许共用「利用率」三个字** ——
+        #       而它们在同一台机器上会随可用性切换, 这是最危险的地方。
+        #    ⚠️ **夹具必须注入时钟**(`_CPU_UTIL_NOW`): PC 上 `time.monotonic()` 的分辨率不够,
+        #       两次连续调用会拿到**同一个值** ⇒ `_dt = 0` ⇒ 差分被当成"跨了深睡"作废,
+        #       于是永远停在 `warm`(什么都不印)而看起来像判据写错。真机间隔 0.5 秒没这问题。
         _keep_ft = BC._read_freq_time
-        _base_ft = {7: {2868300: 100}, 4: {1372500: 100}, 5: {1372500: 100}, 6: {1372500: 100},
-                    0: {1000: 100}, 1: {1000: 100}, 2: {1000: 100}, 3: {1000: 100}}
+        _keep_cp = BC._read_cpuidle_us
+        _keep_now = BC._CPU_UTIL_NOW[0]
+        _CLK = {"v": 1000.0}
         try:
-            BC._FREQ_STAT_PREV.clear()
-            BC._read_freq_time = lambda: {k: dict(v) for k, v in _base_ft.items()}
+            BC._CPU_UTIL_NOW[0] = lambda: _CLK["v"]
+            # ---- 路径 A: cpuidle 可读 ⇒ 印**真 CPU 时间占比** ----
+            BC._cpu_util_reset()
+            BC._read_cpuidle_us = lambda _c: {0: 1000000}
             _first = re.sub(r"\[/?color[^\]]*\]", "", BC._live_cpu_freq_line())
-            check("频率利用" not in _first and "1804M" in _first,
-                  "阴性对照: **第一次调用没有基线** ⇒ 照印频率但不印频率利用 —— `time_in_state` 给的"
-                  "只是开机以来的累计**格数**, 单次读数里**根本没有「平均频率」这个量**; "
-                  "拿单次值凑一个数出来就是编数",
+            check("利用率" not in _first and "频率利用" not in _first and "1804M" in _first,
+                  "阴性对照: **第一次调用没有基线** ⇒ 照印频率但**一个百分数都不印** —— "
+                  "cpuidle 给的只是开机以来的累计空闲**微秒**, 单次读数里根本没有「利用率」"
+                  "这个量; 拿单次值凑一个数出来就是编数。"
+                  "⚠️ 这一帧(`warm`)**不许**印 `--`, 否则每行都闪一下假故障",
                   " ".join(_first.split("\n")[1:]))
-            # Δ 一律 100 格, 每核只有一个频档 ⇒ 平均频率 = 那个频档:
-            #   核7  2868300 / 上限 3187000 ⇒ 90.0%
-            #   核4-6 1372500 / 上限 2745000 ⇒ 50.0%
-            #   核0-3    1000 / 上限 2016000 ⇒ 0.0%(%.1f 下 0.0496 印成 0.0)
+            _CLK["v"] += 1.0                       # 墙钟前进 1 秒
+            BC._read_cpuidle_us = lambda _c: {0: 1250000}   # 其中空了 0.25 秒 ⇒ 75.0%
+            _got2 = BC._live_cpu_freq_line()
+            _plain2 = re.sub(r"\[/?color[^\]]*\]", "", _got2)
+            check("1804M，利用率75.0%" in _plain2,
+                  "**cpuidle 可读 ⇒ 口径是「利用率」= 真 CPU 时间占比** `1 − Δ(空闲累计微秒)/Δ墙钟`"
+                  "(夹具: 墙钟 1 秒、空闲 +0.25 秒 ⇒ 75.0%)",
+                  " ".join(_plain2.split("\n")[1:]))
+            # ---- 路径 B: cpuidle 读不到 ⇒ 降级 freqtime, **口径词必须换掉** ----
+            BC._cpu_util_reset()
+            BC._read_cpuidle_us = lambda _c: {}          # 模拟 Android app 域(读不到)
+            BC._read_freq_time = lambda: {7: {2868300: 100}, 4: {1372500: 100},
+                                          5: {1372500: 100}, 6: {1372500: 100},
+                                          0: {1000: 100}, 1: {1000: 100},
+                                          2: {1000: 100}, 3: {1000: 100}}
+            BC._live_cpu_freq_line()                     # 立基线
+            _CLK["v"] += 1.0
             BC._read_freq_time = lambda: {7: {2868300: 200}, 4: {1372500: 200},
                                           5: {1372500: 200}, 6: {1372500: 200},
                                           0: {1000: 200}, 1: {1000: 200},
                                           2: {1000: 200}, 3: {1000: 200}}
-            _got2 = BC._live_cpu_freq_line()
-            _plain2 = re.sub(r"\[/?color[^\]]*\]", "", _got2)
-            check("1804M，频率利用90.0%" in _plain2 and "2400M，频率利用50.0%" in _plain2
-                  and "2800M，频率利用0.0%" in _plain2,
-                  "频率 = **当前**、后面跟该簇**频率利用**(玩家 2026-09-20:「`核x-y：XM，利用率xx.x%`」"
-                  "⇒ 当天改口径后文案写「频率利用」以区别于 CPU 使用率)—— "
-                  "= 时间加权平均频率 ÷ **该簇自己的上限**, **簇内取有读数的核平均**",
-                  " ".join(_plain2.split("\n")[1:]))
-            check("/3187M" not in _plain2 and "/2745M" not in _plain2
-                  and "/2016M" not in _plain2,
-                  "上限那半截(`cpuinfo_max_freq`)**已按 2026-09-20 的要求删掉** —— "
-                  "它是常量, 每簇就那么一个数, 占掉半行却不提供任何「现在发生了什么」的信息",
-                  " ".join(_plain2.split("\n")[1:]))
+            _got3 = BC._live_cpu_freq_line()
+            _plain3 = re.sub(r"\[/?color[^\]]*\]", "", _got3)
+            check("1804M，频率利用90.0%" in _plain3 and "2400M，频率利用50.0%" in _plain3,
+                  "**cpuidle 读不到 ⇒ 降级到 `freqtime`, 且口径词换成「频率利用」**"
+                  "(90.0% = 2868300 ÷ 该簇上限 3187000)—— 两个源的量不同, 屏上不许共用"
+                  "「利用率」三个字",
+                  " ".join(_plain3.split("\n")[1:]))
+            BC._cpu_util_reset()
+            BC._read_cpuidle_us = lambda _c: {}
+            BC._read_freq_time = lambda: {}
+            _dead = re.sub(r"\[/?color[^\]]*\]", "", BC._live_cpu_freq_line())
+            check("--" in _dead,
+                  "**两个源全废 ⇒ 印 `--(原因)` 而不是整段消失** —— \"读不到\"与\"这台机器"
+                  "本来就没这个量\"长得一样, 正是 0.8.115 那个 bug 要靠 adb 逐文件反查才能"
+                  "定位的原因(原因串必须是纯 ASCII: 字库是子集, 新中文上屏就是豆腐块)",
+                  " ".join(_dead.split("\n")[1:]))
         finally:
             BC._read_freq_time = _keep_ft
-            BC._FREQ_STAT_PREV.clear()
+            BC._read_cpuidle_us = _keep_cp
+            BC._CPU_UTIL_NOW[0] = _keep_now
+            BC._cpu_util_reset()
         check("Mhz" not in _got and "MHz" not in _got,
               "频率单位保持 **`M`**(`4608M` 那种), **不许**自作主张补成 `Mhz`/`MHz` —— "
               "玩家第一遍笔误、第二遍明确更正为 `M`",

@@ -948,43 +948,6 @@ def _read_freq_time():
     return _out
 
 
-def _freq_util_by_core():
-    """逐核**平均频率**(kHz) ⇒ `{核号: 频率}`; **没基线 / 读不到返回 `{}`**。
-
-    = 这个窗口内的时间加权平均频率 `Σ(频档 × Δt) / ΣΔt`。
-
-    ⚠️⚠️ **它与 `/proc/stat` 那条路的「CPU 时间占比」不是同一个量**, 屏上文案必须写清是
-       哪一个 —— 拿两个口径的数去比会误判。频率利用率在现代调频器下是"忙不忙"的良好
-       代理(调频器紧跟负载), 但它**不是** CPU 使用率。
-    ⚠️ **第一次调用必定返回 `{}`** —— 那一次只负责立基线。
-    ⚠️ 快照**先换再算**: 不管下面算不算得成, 基线都要往前走, 否则"上一次"会变成一个几秒前
-       的陈旧值, 那段时间会被整段平均掉。
-    ⚠️ `ΣΔt ≤ 0` 时跳过这个核(窗口里频率一格都没走) —— 不能拿 0 做除数。
-    """
-    _cur = _read_freq_time()
-    if not _cur:
-        return {}
-    _prev = dict(_FREQ_STAT_PREV)
-    _FREQ_STAT_PREV.clear()
-    _FREQ_STAT_PREV.update(_cur)
-    _out = {}
-    for _c, _d in _cur.items():
-        _pp = _prev.get(_c)
-        if not _pp:
-            continue
-        _tot = 0.0
-        _acc = 0.0
-        for _f, _t in _d.items():
-            _dt = _t - _pp.get(_f, 0)
-            if _dt > 0:
-                _tot += _dt
-                _acc += _f * _dt
-        if _tot <= 0:
-            continue
-        _out[_c] = _acc / _tot
-    return _out
-
-
 def _freq_policy_cores():
     """有 `cpufreq` 节点的核号(升序)。读不到就退回 `os.cpu_count()` 的 0..n-1。"""
     try:
@@ -999,6 +962,188 @@ def _freq_policy_cores():
         except Exception:
             continue
     return _out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CPU 利用率 —— **降级链**(2026-09-21)
+#   ① cpuidle  → 「**利用率**」   = `1 − Δ(各 idle 状态累计) / Δ(墙钟)`  ← **真 CPU 时间占比**
+#   ② freqtime → 「**频率利用**」 = `Σ(频档×Δt)/ΣΔt ÷ 该簇上限`          ← **不是**时间占比
+#
+# ⚠️⚠️ **两个源给出两个不同的量, 屏上不许共用「利用率」三个字** —— 玩家会拿两种口径的数
+#    去比, 而这两个数在**同一台机器上会随可用性切换**(源 ① 读得到就用 ①, 读不到才落 ②)
+#    ⇒ 口径词由 `_CPU_UTIL_KIND` **一处**决定, 不许在别处再判一次。
+# ⚠️ **为什么 ① 是首选**: 它给的是真·空闲时间(单位**微秒**, 比 `time_in_state` 的 10 毫秒
+#    细三个数量级) ⇒ 算出来的是玩家要的「平均使用率」; 而且它与**已经证实 app 可读**的
+#    `cpufreq/scaling_cur_freq` 在**同一棵 SELinux 标签子树**里
+#    (`genfscon sysfs /devices/system/cpu u:object_r:sysfs_devices_system_cpu:s0` 打在目录上
+#    递归生效; `app_neverallows.te`/`untrusted_app_all.te` 里 grep `sysfs_devices_system_cpu`
+#    零命中 —— 对照 `isolated_app_all.te` 有 `-sysfs_devices_system_cpu`, 它把 isolated 排除了
+#    但**没排 untrusted_app**)。屏上印得出 `2400M` 就是 app 域能读这棵树的直接证据。
+# ⚠️ **`/proc/stat` 那条路(标准 top 口径)不在链里**: Android 的 app 域读不到它
+#    (实测 `untrusted_app_32` 与 `runas_app` 一律 EACCES, 而 `shell` 域读得到、格式完好)
+#    ⇒ 放进来也只是恒顺延。这里留一行说明, 免得下一个人再赌一次。
+_CPU_UTIL_CHAIN = ("cpuidle", "freqtime")
+_CPU_UTIL_KIND = {"cpuidle": "cpu", "freqtime": "freq"}
+# 锁定的源(`None` = 还没探 / 上一帧全废)。**缓存的是"哪条路能用", 不是值** —— 否则在 Android 上
+# 每一帧都要白吃一次 EACCES。
+_CPU_UTIL_SRC = [None]
+_CPU_UTIL_PREV = {}      # {源名: 上一次采样} —— 键含源名 ⇒ **换源不会拿错基线**
+_CPU_UTIL_T = {}         # {源名: 上一次采样的墙钟}
+_CPU_UTIL_DIAG = {}      # {源名: 读不到的原因}  ⚠️ **必须纯 ASCII** —— 字库是子集, 新中文会变
+                         #    豆腐块(这个工程为它让过两次路:「摄氏度」→「度」、「瓦」→「每W跑分」)
+_CPU_UTIL_LOGGED = [False]
+_CPU_UTIL_NOW = [time.monotonic]     # 时钟槽: 门禁替身注入(PC 上跑不了真差分)
+# ⚠️ 窗口跨太久 ⇒ **这一帧不印数**: cpuidle/cpufreq_stats 在**深睡时不累计**
+#    (实测 `Σ time_in_state` 只覆盖 23% 的 uptime) ⇒ 跨一个含深睡的间隔做差, 量到的是长期
+#    均值而不是"现在"。
+# ⚠️ 用 `time.monotonic()` 而不是 `time.time()`: 前者(Linux CLOCK_MONOTONIC)**不计挂起**,
+#    与 cpuidle 的口径一致(挂起期间内核也不累 idle) ⇒ 不会算出负值或 >100%。
+_CPU_UTIL_MAX_GAP_SEC = 2.0
+_CPUIDLE_BASE = "/sys/devices/system/cpu/cpu%d/cpuidle/"
+
+
+def _cpu_util_reset():
+    """清掉整条链的基线/锁定/记因 —— **门禁每个用例开头必调**, 否则上一个用例的锁定会串味。"""
+    _CPU_UTIL_SRC[0] = None
+    _CPU_UTIL_PREV.clear()
+    _CPU_UTIL_T.clear()
+    _CPU_UTIL_DIAG.clear()
+
+
+def _read_cpuidle_us(_c):
+    """读一个核的 `cpuidle/state*/time` ⇒ `{状态号: 累计微秒}`; 读不到返回**已读到的部分**。
+
+    ⚠️ 逐状态容错: 某个 state 的文件坏了只丢那一个状态, 不毁掉整个核(同 `_read_freq_time`)。
+    """
+    _out = {}
+    for _s in range(8):
+        try:
+            with open(_CPUIDLE_BASE % _c + "state%d/time" % _s, "r") as _f:
+                _out[_s] = int(_f.read().strip())
+        except FileNotFoundError:
+            break                            # 状态到这儿为止(不是错误)
+        except OSError as _e:
+            _CPU_UTIL_DIAG["cpuidle"] = ("EACCES" if _e.errno == 13
+                                         else ("ENOENT" if _e.errno == 2 else "EIO"))
+            return _out
+        except ValueError:
+            _CPU_UTIL_DIAG["cpuidle"] = "parse"
+            return _out
+    return _out
+
+
+def _cpu_util_sample(_src):
+    """按源名采一次**累计量**; 读不到返回 `{}`(原因写进 `_CPU_UTIL_DIAG`)。"""
+    if _src == "cpuidle":
+        _out = {}
+        for _c in range(os.cpu_count() or 1):   # ⚠️ 不用 `_freq_policy_cores()`: 它认的是 cpufreq
+            _d = _read_cpuidle_us(_c)           #    节点, 与 cpuidle 是两回事
+            if _d:
+                _out[_c] = _d
+        if not _out:
+            _CPU_UTIL_DIAG.setdefault("cpuidle", "noline")
+        return _out
+    if _src == "freqtime":
+        return _read_freq_time()
+    return {}
+
+
+def _cpu_util_delta(_src, _cur):
+    """按源名做差 ⇒ `{核号: 数值}`; **没基线 / 窗口跨太久 / 计数器被 reset 返回 `{}`**。
+
+    ⚠️⚠️ **返回值的单位随源而异**: `cpuidle` 是**百分数(0~100)**; `freqtime` 是**平均频率(kHz)**
+       —— 后者要由调用方除以**该簇自己的上限**才是百分比。这个差异**只由 `_CPU_UTIL_KIND`
+       表达**, 不许在别处再判一次。
+    """
+    _now = _CPU_UTIL_NOW[0]()
+    _prev = _CPU_UTIL_PREV.get(_src)
+    _pt = _CPU_UTIL_T.get(_src)
+    _CPU_UTIL_PREV[_src] = _cur
+    _CPU_UTIL_T[_src] = _now
+    if not _prev or _pt is None:
+        return {}                            # 第一次: 只立基线(调用方据此**什么都不印**)
+    _dt = _now - _pt
+    if _dt <= 0 or _dt > _CPU_UTIL_MAX_GAP_SEC:
+        return {}                            # 时钟倒了 / 跨了深睡 ⇒ 这个差不是"现在"
+    _out = {}
+    for _c, _d in _cur.items():
+        _p = _prev.get(_c)
+        if not _p:
+            continue
+        if _src == "cpuidle":
+            _idle, _bad = 0, False
+            for _s, _v in _d.items():
+                if _s not in _p:             # 状态集变了(热插拔/驱动变更) ⇒ 这个核这次不算
+                    _bad = True
+                    break
+                _dv = _v - _p[_s]
+                if _dv < 0:                  # 计数器被 reset ⇒ 差分无意义
+                    _bad = True
+                    break
+                _idle += _dv
+            if _bad:
+                continue
+            _out[_c] = max(0.0, min(100.0, 100.0 * (1.0 - (_idle / 1e6) / _dt)))
+        else:
+            _tot = _acc = 0.0
+            for _f, _t in _d.items():
+                _dv = _t - _p.get(_f, 0)
+                if _dv > 0:
+                    _tot += _dv
+                    _acc += _f * _dv
+            if _tot <= 0:
+                continue
+            _out[_c] = _acc / _tot            # kHz: 平均频率
+    return _out
+
+
+def _cpu_util_diag():
+    """「读不到」的**一句话原因**, 取**优先级最高**那个失败的源(那才是我们最想要却拿不到的)。
+
+    ⚠️ 只回 ASCII —— 字库是子集, 新中文上屏就是豆腐块。
+    """
+    for _s in _CPU_UTIL_CHAIN:
+        _r = _CPU_UTIL_DIAG.get(_s)
+        if _r:
+            return _r
+    return "n/a"
+
+
+def _cpu_util_by_core():
+    """走降级链 ⇒ `(逐核数值, 口径, 状态)`。
+
+    口径 ∈ `"cpu"`(真 CPU 时间占比) / `"freq"`(频率利用) / `""`(没有可用的源)
+    状态 ∈ `"ok"`(有数) / `"warm"`(源可读但**还没基线**, 下一帧就有) / `"dead"`(全废)
+
+    ⚠️ **每一帧都从头顺延**: 已锁定的源这一帧读不到就往下试, 并**允许下一帧重探** ——
+       部分设备的 cpuidle/cpufreq 节点会随核热插拔出现/消失, 锁死一条会永久卡在空值上。
+    ⚠️ **不写模块级 `try` 包整函数**: 每个源自己吞自己的异常并**记因**, 否则又回到"静默降级"。
+    """
+    _locked = _CPU_UTIL_SRC[0]
+    _order = ([_locked] if _locked else []) + [_s for _s in _CPU_UTIL_CHAIN if _s != _locked]
+    for _s in _order:
+        _cur = _cpu_util_sample(_s)
+        if not _cur:
+            continue                         # 这个源这一帧读不到 ⇒ 顺延
+        if _s != _locked:
+            _CPU_UTIL_SRC[0] = _s            # 换源: 基线必须重立(两个源的累计量不可比)
+            _CPU_UTIL_PREV.pop(_s, None)
+            _CPU_UTIL_T.pop(_s, None)
+        _vals = _cpu_util_delta(_s, _cur)
+        return (_vals, _CPU_UTIL_KIND[_s], "ok" if _vals else "warm")
+    _CPU_UTIL_SRC[0] = None                  # 全废
+    # ⚠️ **留一条痕, 只记第一次**: 屏上那一段现在会印 `--(原因)`, 而完整的原因表是给
+    #    "保存加载日志"看的 —— 这是**真机上唯一能查"到底哪条路断了"的渠道**(面板那一行
+    #    本身不写日志)。
+    if not _CPU_UTIL_LOGGED[0]:
+        _CPU_UTIL_LOGGED[0] = True
+        try:
+            from .boot import _boot_log
+            _boot_log("cpuutil", "利用率两源全废 → %s"
+                      % {_s: _CPU_UTIL_DIAG.get(_s, "?") for _s in _CPU_UTIL_CHAIN})
+        except Exception:
+            pass
+    return ({}, "", "dead")
 
 
 def _live_cpu_freq_line():
@@ -1087,33 +1232,39 @@ def _live_cpu_freq_line():
             _aff = "　　可跑核 %s" % ",".join(_segs)
         _lines = ["CPU：[color=%s]%d[/color] 核　%s%s" % (_GOLD_MK, _n, _shape, _aff)]
         _any = False
-        # 利用率**整块只采一次**(不是每簇一次): 三簇共用同一次差分采样, 各读各的会把窗口错开,
-        # 同一屏上三行其实是三个不同时刻。
-        # ⚠️⚠️ 数据源是 **`time_in_state`(频率驻留时间)**, 不是 `/proc/stat` —— 后者在 Android
-        #    的 app 域**读不到**(实测被 SELinux 拒, 见 `_read_freq_time`)。所以这个数是
-        #    **「频率利用率」不是「CPU 时间占比」**, 文案必须写清(见下面 `_ut` 那一行)。
-        _util = _freq_util_by_core()
+        # 走**降级链**采一次: `(逐核数值, 口径, 状态)`。整块只采一次(不是每簇一次),
+        # 各读各的会把窗口错开, 同一屏上三行其实是三个不同时刻。
+        _vals, _kind, _state = _cpu_util_by_core()
+        _word = {"cpu": "利用率", "freq": "频率利用"}.get(_kind, "")
+        _why = _cpu_util_diag()
         for _k, _v in _grp:
             _base = "/sys/devices/system/cpu/cpu%d/cpufreq/" % _v[0]
             _cur = _read_int_file(_base + "scaling_cur_freq")
             # 核号用**范围**而不是逐个列: 「核 4-6」比「核 4 5 6」短, 也不猜"大核/中核"那种语义。
             _rng = ("%d" % _v[0]) if len(_v) == 1 else ("%d-%d" % (min(_v), max(_v)))
-            # ⚠️ 格式 = **当前频率，频率利用率**(玩家 2026-09-20 定:「改为 `核x-y：XM，利用率xx.x%`」;
-            #    当天稍后又指定「业内用什么就用什么」, 而业内标准(`/proc/stat`)在 app 沙箱里拿不到
-            #    ⇒ 落到 `time_in_state` 这条路, **文案改写成「频率利用」以区别于 CPU 使用率**)。
-            #    原来那半截 `/上限M` 去掉了 —— `cpuinfo_max_freq` 是**常量**, 每簇就那么一个数,
-            #    占掉半行却不提供任何"现在发生了什么"的信息。
-            #    ⚠️ 单位保持 `M`(`4608M` 那种), **不是** `Mhz` —— 玩家第一次笔误成 `Mhz`,
-            #       第二遍更正为 `M`。别自作主张加单位后缀。
-            # ⚠️ 分母是**这一簇自己的上限**(`_k`, 来自 `_cpu_groups()`) —— **不去读
-            #    `cpuinfo_max_freq`**: 实测那个文件给的是整个 cpufreq **policy** 的上限
-            #    (核 0 读出 3629MHz, 而它属于 2016MHz 那一簇), 拿它当分母会把百分比算小一半。
-            # ⚠️ 簇内**取有读数的核平均**(同簇频率一致, 各核差异很小); 一个读数都没有 ⇒ 整段不印,
-            #    不编一个数出来(与本函数"绝不编数"同一条规矩)。
-            _us = [_util[_c] for _c in _v if _c in _util]
-            _ut = ("，频率利用[color=%s]%.1f[/color]%%"
-                   % (_GOLD_MK, 100.0 * (sum(_us) / len(_us)) / float(_k))
-                   if (_us and _k) else "")
+            # ⚠️ 口径词由**链自己**决定(见 `_CPU_UTIL_KIND`), 屏上只出现一个:
+            #    `cpu`  → 「利用率」(真 CPU 时间占比, cpuidle)
+            #    `freq` → 「频率利用」(平均频率 ÷ 该簇上限, 不是时间占比)
+            #    ⚠️ 分母是**这一簇自己的上限**(`_k`, 来自 `_cpu_groups()`) —— **绝不读
+            #       `cpuinfo_max_freq`**: 实测那个文件给的是整个 cpufreq **policy** 的上限
+            #       (核 0 读出 3629MHz, 而它属于 2016MHz 那一簇), 当分母会**小一半**。
+            # ⚠️ 簇内**取有读数的核平均** —— 玩家要的就是"该簇内所有核的平均"(0~100, 一位小数)。
+            _us = [_vals[_c] for _c in _v if _c in _vals]
+            _avg = (sum(_us) / len(_us)) if _us else 0.0
+            if _us and _kind == "cpu":
+                _ut = "，%s[color=%s]%.1f[/color]%%" % (_word, _GOLD_MK, _avg)
+            elif _us and _kind == "freq" and _k:
+                _ut = "，%s[color=%s]%.1f[/color]%%" % (_word, _GOLD_MK,
+                                                       100.0 * _avg / float(_k))
+            elif _state == "dead":
+                # ⚠️⚠️ **`dead` 必须印出来(带原因), 不许整段消失** —— "读不到"与"这台机器
+                #    本来就没这个量"长得一模一样, 正是 0.8.115 那个 bug 要靠 adb 逐文件
+                #    反查才能定位的原因。原因串是纯 ASCII(字库是子集)。
+                _ut = "，%s --(%s)" % (_word or "利用率", _why)
+            else:
+                # `warm`: 打开弹窗的**第一帧**还没有基线 ⇒ **什么都不印**, 0.5 秒后自愈。
+                # ⚠️ 不许在这帧印 `--`, 否则每一行都会闪一下**假故障**。
+                _ut = ""
             if _cur:
                 _any = True
                 _lines.append("　核 %s　[color=%s]%d[/color]M%s"
