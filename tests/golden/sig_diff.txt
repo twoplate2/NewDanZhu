@@ -1,4 +1,5 @@
 SIG  _ask_unlock_rtp                老 self | 新 self,opts,selected,=None
+SIG  _ball_texture                  老 bet | 新 bet,rows,=None
 SIG  _collide_arc                   老 b,x1,y1,x2,y2,frame,=_ARC_FRAME | 新 b,x1,y1,x2,y2,frame
 SIG  _play_voice_sequence           老 self,names,gap,on_done,=0.005,=None | 新 self,names,gap,on_done,=ROUND_END_VOICE_GAP,=N
 SIG  _show_easter_popup             老 self | 新 self,*_a

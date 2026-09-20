@@ -11,6 +11,9 @@ DIFF       _ask_unlock_rtp                    edbeed58c2
 ONLY_NEW   _audio_src_files                   550346145e
 DIFF       _auto_launch_tick                  a21f8aebf7
 DIFF       _await_ready                       18325cc9ed
+ONLY_NEW   _bake_advance                      401b2c5844
+ONLY_NEW   _bake_begin                        85c360643b
+DIFF       _ball_texture                      75c750f596
 DIFF       _bench_counters_begin              b9a56503a0
 DIFF       _bench_counters_end                5758585227
 DIFF       _bench_done                        bca3f86d9a
@@ -141,6 +144,7 @@ ONLY_NEW   on_touch_down_allowed              e5d5f98563
 DIFF       park_ball                          e49c171193
 ONLY_NEW   peg_variant                        4cc4319df8
 ONLY_NEW   pick_peg_variant                   aa2fee68ac
+DIFF       prebake_step                       766d167e8f
 DIFF       reset_balance                      e9543266b1
 ONLY_NEW   reset_cache                        d150aa8579
 ONLY_NEW   round_end_confirm                  587197f4b4

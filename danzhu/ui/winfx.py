@@ -116,6 +116,15 @@ _CUP_BALL_TEX = {}          # bet -> Texture(最多 4 个)
 # ⚠️ 贴图密度是**相对屏幕尺寸**定的, 不是一个绝对数: 杯中球屏幕直径 = 逻辑 68.4 x s,
 #    1900p 档 s≈3.65 -> 250 设备px, 128 贴图只有 0.51 texel/px(明显欠采样)。改 BALL_VIEW / 换设备都要重算。
 _CUP_BALL_TEX_PX = 256
+# 球纹理的**分块烘焙**作业表: bet -> job dict(见 `_bake_begin`)。**算完才注册进 `_CUP_BALL_TEX`**。
+_BAKE_JOB = {}
+# 每步算多少行。⚠️ 一档共 2 x 256 = 512 行 ≈ 真机 62 ms ⇒ 每行 ≈ 0.121 ms。
+# **16 行 ≈ 1.95 ms/步**(桌面实测单步中位), 而一帧预算 6.06 ms、正常 body 约 1.3 ms
+# ⇒ 1.3 + 1.95 = 3.25 ms,**留 2.8 ms 余量**,不会把这一帧推过 vsync。
+# ⚠️ 用过 32 行: 单步中位 3.90 ms 但**最慢一步 7.50 ms** ⇒ 1.3 + 7.5 = 8.8 > 6.06
+#    ⇒ **那一步会掉到 2 格(12.12 ms)**。按"宁多几步、不要一次极端"的原则取 16。
+# ⚠️ 调大就重新逼近"一帧一档"的老毛病(真机 62 ms)。
+_BALL_TEX_ROWS = 16
 # 弹珠贴图的"型"参数: 只改烘出来的内容, 运行期一个字节没多; 尺寸/物理/玩法不动。
 # ⚠️ 调这四个数之前先出图(老工程 temp/facilitator/ab_render.py 能逐像素复现)。
 _BALL_RIM_K = 0.74       # 边缘暗环: p>0.40 的色标往外挤成 1-(1-p)*K
@@ -301,15 +310,56 @@ def _r_dp_for(n):
 def _mix_rgb(a, b, amount):
     return tuple(int(x + (y - x) * amount) for x, y in zip(a, b))
 
-def _ball_texture(bet):
+def _ball_texture(bet, rows=None):
     """主游戏 ball_texture() 的彩色版: 同一套猫眼渐变外形, 只换球身颜色。
 
-    ⚠️ 逐像素纯 Python 合成(Android 上没有 PIL), 单档 100~200ms —— 由 prebake 分帧预烘,
-       不要在中奖那帧现做。
+    逐像素纯 Python 合成(Android 上没有 PIL)。**单档 256×256 = 65536 像素**,
+    真机实测一档 **61~63 ms** —— 而那是**一帧**。
+
+    ## `rows` 参数: 把这一档的活**切成几段**
+
+    ⚠️⚠️ **2026-09-20 加**: `prebake_step` 原来"一次烘一档", 摊的是**次数**、
+    **没摊单次成本** —— 真机启动日志里那 4 行就是 **61.0 / 61.7 / 62.6 / 63.5 ms**,
+    而且发生在**加载页摘了 3.7 秒之后**(玩家已经在游戏里)。⇒ 按行切块:
+    一步算 `_BALL_TEX_ROWS` 行(32 行 ≈ 7.8 ms), 一档 16 步(两个阶段各 256 行)。
+
+    · `rows=None` ⇒ **一次算完**(中奖那两条路走这个 ⇒ 与改造前逐位同行为)
+    · `rows=N`    ⇒ 最多算 N 行; **没算完返回 `None`**(预热链据此决定要不要再来一步)
+
+    ⚠️ **三条必须保住的性质**(改这个函数前先读这三条):
+      ① 纹理**只在全部算完时才注册进 `_CUP_BALL_TEX`** —— 半成品绝不进表
+      ② 玩家万一在预热没完就中奖: 那两条路传 `rows=None`, 照旧一次算完
+         ⇒ **最坏情况与改造前完全相同, 不变差**
+      ③ 只是"把同一份工作切成几段", **像素值与写入顺序一位不变** ⇒ 出图逐像素相同
+
+    ⚠️ 两个阶段的**行序**是"先第一阶段全部 256 行, 再第二阶段全部 256 行" ——
+       与改造前的执行顺序一致(第二阶段要读第一阶段写出来的 alpha)。
     """
     tex = _CUP_BALL_TEX.get(bet)
     if tex is not None:
         return tex
+    job = _BAKE_JOB.get(bet)
+    if job is None:
+        job = _bake_begin(bet)
+        _BAKE_JOB[bet] = job
+    d = job["d"]
+    if rows is None:
+        _bake_advance(job, 2 * d)
+    else:
+        _bake_advance(job, rows)
+        if job["done"] < 2 * d:
+            return None                       # ⚠️ 没算完: 绝不注册半成品
+    tex = Texture.create(size=(d, d), colorfmt="rgba")
+    tex.blit_buffer(bytes(job["buf"]), colorfmt="rgba", bufferfmt="ubyte")
+    tex.mag_filter = "linear"
+    tex.min_filter = "linear"
+    _CUP_BALL_TEX[bet] = tex
+    del _BAKE_JOB[bet]
+    return tex
+
+
+def _bake_begin(bet):
+    """开一份烘焙作业: 算色标、开缓冲、把第二阶段的常量先算好。"""
     if bet not in BET_COLORS:                       # 未知档回退金球, 不 KeyError
         stops = [(0.00, (254, 240, 138)), (0.20, (250, 220, 80)),
                  (0.40, (234, 179, 8)), (0.65, (202, 138, 4)),
@@ -330,58 +380,77 @@ def _ball_texture(bet):
     # ⚠️ 未知档的金球与投注色两个分支都要过这一行, 所以必须放在 if/else **之后**。
     stops = [(p if p <= 0.40 else 1.0 - (1.0 - p) * _BALL_RIM_K, c) for (p, c) in stops]
     d = _CUP_BALL_TEX_PX
-    r = d / 2.0
-    buf = bytearray(d * d * 4)
-    for y in range(d):
-        for x in range(d):
-            dx = x - r + 0.5
-            dy = y - r + 0.5
-            dist = math.hypot(dx, dy) / (r - 0.5)
-            if dist >= 1.0:
-                continue
-            rr, gg, bb = stops[-1][1]
-            for j in range(len(stops) - 1):
-                if stops[j][0] <= dist <= stops[j + 1][0]:
-                    s0, c0 = stops[j]
-                    s1, c1 = stops[j + 1]
-                    f = (dist - s0) / (s1 - s0) if s1 > s0 else 0
-                    rr = int(c0[0] + (c1[0] - c0[0]) * f)
-                    gg = int(c0[1] + (c1[1] - c0[1]) * f)
-                    bb = int(c0[2] + (c1[2] - c0[2]) * f)
-                    break
-            i = (y * d + x) * 4
-            # ⚠️ 0.97 与 0.03 是一对: 边缘羽化带 = 3% 半径, 改一个要改另一个。
-            buf[i:i + 4] = bytes((rr, gg, bb, 255 if dist <= 0.97
-                                  else int(255 * (1.0 - dist) / 0.03)))
-    base = stops[3][1]
-    band_c = _mix_rgb(base, (0, 0, 0), 0.28)
     ba = math.radians(-32.0)
-    off = 0.08 * d
-    band_w = 0.085 * d * _BALL_BAND_W
-    cos_a, sin_a = math.cos(ba), math.sin(ba)
-    for y in range(d):
-        for x in range(d):
-            i = (y * d + x) * 4
-            if buf[i + 3] == 0:
-                continue
-            dx, dy = x - r, y - r
-            s = dx * cos_a + dy * sin_a
-            v = -dx * sin_a + dy * cos_a
-            if abs(s) < r * _BALL_BAND_SPAN:
-                wmax = band_w * math.sqrt(max(0.0, 1.0 - (s / (r * _BALL_BAND_SPAN)) ** 2))
-                dv = abs(v - off)
-                if dv < wmax:
-                    t = dv / wmax
-                    w = (1.0 - t * t) ** 2 * (0.42 * _BALL_BAND_S)
-                    buf[i] = int(buf[i] + (band_c[0] - buf[i]) * w)
-                    buf[i + 1] = int(buf[i + 1] + (band_c[1] - buf[i + 1]) * w)
-                    buf[i + 2] = int(buf[i + 2] + (band_c[2] - buf[i + 2]) * w)
-    tex = Texture.create(size=(d, d), colorfmt="rgba")
-    tex.blit_buffer(bytes(buf), colorfmt="rgba", bufferfmt="ubyte")
-    tex.mag_filter = "linear"
-    tex.min_filter = "linear"
-    _CUP_BALL_TEX[bet] = tex
-    return tex
+    return {"d": d, "r": d / 2.0, "stops": stops, "buf": bytearray(d * d * 4),
+            "done": 0, "total_ms": 0.0, "worst_ms": 0.0, "steps": 0,
+            "band_c": _mix_rgb(stops[3][1], (0, 0, 0), 0.28),
+            "off": 0.08 * d, "band_w": 0.085 * d * _BALL_BAND_W,
+            "cos_a": math.cos(ba), "sin_a": math.sin(ba)}
+
+
+def _bake_advance(job, n):
+    """把烘焙推进 `n` 行(第一阶段 d 行 → 第二阶段 d 行), 返回已算完的行数。"""
+    d = job["d"]
+    buf = job["buf"]
+    r = job["r"]
+    stops = job["stops"]
+    band_c = job["band_c"]
+    off = job["off"]
+    band_w = job["band_w"]
+    cos_a = job["cos_a"]
+    sin_a = job["sin_a"]
+    _nband = len(stops) - 1
+    _last = stops[-1][1]
+    done = job["done"]
+    end = done + n
+    if end > 2 * d:
+        end = 2 * d
+    while done < end:
+        if done < d:
+            # ---- 阶段 1: 猫眼渐变(球体) ----
+            y = done
+            for x in range(d):
+                dx = x - r + 0.5
+                dy = y - r + 0.5
+                dist = math.hypot(dx, dy) / (r - 0.5)
+                if dist >= 1.0:
+                    continue
+                rr, gg, bb = _last
+                for j in range(_nband):
+                    if stops[j][0] <= dist <= stops[j + 1][0]:
+                        s0, c0 = stops[j]
+                        s1, c1 = stops[j + 1]
+                        f = (dist - s0) / (s1 - s0) if s1 > s0 else 0
+                        rr = int(c0[0] + (c1[0] - c0[0]) * f)
+                        gg = int(c0[1] + (c1[1] - c0[1]) * f)
+                        bb = int(c0[2] + (c1[2] - c0[2]) * f)
+                        break
+                i = (y * d + x) * 4
+                # ⚠️ 0.97 与 0.03 是一对: 边缘羽化带 = 3% 半径, 改一个要改另一个。
+                buf[i:i + 4] = bytes((rr, gg, bb, 255 if dist <= 0.97
+                                      else int(255 * (1.0 - dist) / 0.03)))
+        else:
+            # ---- 阶段 2: 猫眼高光带(要读阶段 1 写出来的 alpha) ----
+            y = done - d
+            for x in range(d):
+                i = (y * d + x) * 4
+                if buf[i + 3] == 0:
+                    continue
+                dx, dy = x - r, y - r
+                s = dx * cos_a + dy * sin_a
+                v = -dx * sin_a + dy * cos_a
+                if abs(s) < r * _BALL_BAND_SPAN:
+                    wmax = band_w * math.sqrt(max(0.0, 1.0 - (s / (r * _BALL_BAND_SPAN)) ** 2))
+                    dv = abs(v - off)
+                    if dv < wmax:
+                        t = dv / wmax
+                        w = (1.0 - t * t) ** 2 * (0.42 * _BALL_BAND_S)
+                        buf[i] = int(buf[i] + (band_c[0] - buf[i]) * w)
+                        buf[i + 1] = int(buf[i + 1] + (band_c[1] - buf[i + 1]) * w)
+                        buf[i + 2] = int(buf[i + 2] + (band_c[2] - buf[i + 2]) * w)
+        done += 1
+    job["done"] = done
+    return done
 
 _GLASS_OVER = [None, False]     # [over 纹理, 是否试过]
 
@@ -1514,14 +1583,31 @@ class WinPileFX(Widget):
         order = [cur] + [b for b in (1, 10, 50, 100) if b != cur]
         todo = [b for b in order if b not in _CUP_BALL_TEX]
         if todo:
+            # ⚠️⚠️ **一步只算 `_BALL_TEX_ROWS` 行, 不是"一步一档"** —— 2026-09-20 改。
+            #    原来"一帧烘一档"摊的是**次数**, 没摊**单次成本**: 真机启动日志里那 4 行是
+            #    **61.0 / 61.7 / 62.6 / 63.5 ms**, 而且发生在**加载页摘了 3.7 秒之后**
+            #    (玩家已经在游戏里)。⇒ 按行切块: 32 行 ≈ 3.9 ms/步, 一档 16 步。
+            #    ⚠️ `_ball_texture` 算完才注册进 `_CUP_BALL_TEX` ⇒ 半成品绝不进表;
+            #       `rows=None`(中奖那两条路)照旧一次算完 ⇒ 最坏情况不变差。
             _b0 = time.perf_counter()
+            _done = None
             try:
-                _ball_texture(todo[0])
+                _done = _ball_texture(todo[0], rows=_BALL_TEX_ROWS)
             except Exception:
                 pass
-            _boot_log("prebake", "球纹理 投注%d %.1f ms"
-                      % (todo[0], (time.perf_counter() - _b0) * 1000.0))
-            Clock.schedule_once(self.prebake_step, 0.05)
+            _ms = (time.perf_counter() - _b0) * 1000.0
+            _job = _BAKE_JOB.get(todo[0])
+            if _job is not None:
+                _job["total_ms"] += _ms
+                _job["steps"] += 1
+                if _ms > _job["worst_ms"]:
+                    _job["worst_ms"] = _ms
+            if _done is not None:
+                # 只在这一档**全部算完**那一步落一行 —— 否则一档会刷 16 行日志。
+                _boot_log("prebake", "球纹理 投注%d 合计 %.1f ms (分 %d 步, 最慢一步 %.1f ms)"
+                          % (todo[0], (_job or {}).get("total_ms", _ms),
+                             (_job or {}).get("steps", 1), (_job or {}).get("worst_ms", _ms)))
+            Clock.schedule_once(self.prebake_step, 0.0 if _done is None else 0.05)
             return
         # ⚠️ 必须铺满**全部 _PILE_VARIANTS 个变体**, 不能只烘 seed=1: 玩期的 key 是 (倍率, _seq % 4),
         #    只烘一个的话同一档的第 2..N 次中奖全是冷建(x100 桌面 18.7ms / 安卓估 60~150ms), 而它卡在
