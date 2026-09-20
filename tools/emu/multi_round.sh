@@ -41,11 +41,11 @@ for i in $(seq 1 "$N"); do
   if [ "$NEW" = "$BEFORE" ] || [ -z "$NEW" ]; then
     echo "  ⚠️ 没有新日志(最新还是 $NEW) —— 这一轮作废"
   else
-    "$ADB" pull "$NEW" "_emu_r$i.txt" 2>&1 | tail -1
+    "$ADB" pull "$NEW" "_emu_${PREFIX}$i.txt" 2>&1 | tail -1
   fi
 done
 
 echo "=== 全部完成, 汇总 ==="
 for i in $(seq 1 "$N"); do
-  [ -f "_emu_r$i.txt" ] && grep -m1 "^# 窗口" "_emu_r$i.txt" | sed "s/^/  r$i: /"
+  [ -f "_emu_${PREFIX}$i.txt" ] && grep -m1 "^# 窗口" "_emu_${PREFIX}$i.txt" | sed "s/^/  r$i: /"
 done

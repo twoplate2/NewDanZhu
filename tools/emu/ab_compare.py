@@ -23,7 +23,9 @@ import os
 import re
 import statistics as st
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# ⚠️ 日志在 `temp/`(仓库根下), 不是脚本自己所在的 `tools/emu/`。
+HERE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "temp")
 
 
 def load(prefix):
