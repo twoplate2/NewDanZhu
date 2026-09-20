@@ -128,6 +128,8 @@ _CUP_BALL_TEX = {}          # bet -> Texture(最多 4 个)
 _CUP_BALL_TEX_PX = 256
 # 球纹理的**分块烘焙**作业表: bet -> job dict(见 `_bake_begin`)。**算完才注册进 `_CUP_BALL_TEX`**。
 _BAKE_JOB = {}
+# 各档烘焙完成后的耗时账(`del _BAKE_JOB` 会把它们一起删掉 ⇒ 抄一份小的留着给日志读)。
+_BAKE_STATS = {}
 # 每步算多少行。⚠️ 一档共 2 x 256 = 512 行 ≈ 真机 62 ms ⇒ 每行 ≈ 0.121 ms。
 # **16 行 ≈ 1.95 ms/步**(桌面实测单步中位), 而一帧预算 6.06 ms、正常 body 约 1.3 ms
 # ⇒ 1.3 + 1.95 = 3.25 ms,**留 2.8 ms 余量**,不会把这一帧推过 vsync。
@@ -363,6 +365,15 @@ def _ball_texture(bet, rows=None):
     tex.blit_buffer(bytes(job["buf"]), colorfmt="rgba", bufferfmt="ubyte")
     tex.mag_filter = "linear"
     tex.min_filter = "linear"
+    # ⚠️⚠️ **必须在 `del` 之前把统计摘出来** —— `_bake_advance` 的耗时账(`total_ms`/`steps`/
+    #    `worst_ms`)住在 job 里, 而 job 里那个 `buf` 是 **256KB**(256×256×4) ⇒ 算完必须删掉它。
+    #    少了这一句, `prebake_step` 在**调用之后**才去读 `_BAKE_JOB` ⇒ 拿到 `None` ⇒
+    #    日志印出**默认值**(「分 1 步 · 合计 = 最后一步的耗时」)。
+    #    实测后果(2026-09-20 真机启动日志): 分块明明生效了(每步 ~1.9ms, 一档 32 步摊在 32 帧上,
+    #    时间戳间隔 237ms 与之吻合), 日志却印成「合计 1.7 ms (分 1 步)」—— **把唯一的证据写丢了**,
+    #    差点被当成"分块没生效"。
+    _BAKE_STATS[bet] = {"total_ms": job["total_ms"], "steps": job["steps"],
+                        "worst_ms": job["worst_ms"]}
     _CUP_BALL_TEX[bet] = tex
     del _BAKE_JOB[bet]
     return tex
@@ -1637,7 +1648,7 @@ class WinPileFX(Widget):
             except Exception:
                 pass
             _ms = (time.perf_counter() - _b0) * 1000.0
-            _job = _BAKE_JOB.get(todo[0])
+            _job = _BAKE_JOB.get(todo[0]) or _BAKE_STATS.get(todo[0])
             if _job is not None:
                 _job["total_ms"] += _ms
                 _job["steps"] += 1
