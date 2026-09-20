@@ -128,6 +128,19 @@ def main():
         print("  %s 中位 %.1f · 组内极差 %.1f" % (ga, ma, wa))
         print("  %s 中位 %.1f · 组内极差 %.1f" % (gb, mb, wb))
         print("  组间差 %.1f  vs  组内极差 max %.1f" % (abs(ma - mb), max(wa, wb)))
+        # ⚠️⚠️ **先比两组离群帧的量级** —— 2026-09-20 的一次 A/B 就是被这个骗的:
+        #    B 组看着 +18.8%, 实际是 A 组某一轮撞上一根 177ms 的离群帧。
+        #    两组的"最慢一帧"差得多 ⇒ 1%Low 根本不可比, 先去看那一轮为什么有离群。
+        tops = {}
+        for gp, (_, _, rs) in res.items():
+            tops[gp] = st.median([max(x["dt"] for x in fr) for _, _, fr in rs])
+        print("  最慢一帧(组内中位): %s" % " · ".join("%s %.2fms" % (k, v) for k, v in tops.items()))
+        _tv = list(tops.values())
+        if len(_tv) == 2 and max(_tv) > 1.5 * min(_tv):
+            print("  ⚠️⚠️ **两组的离群量级差 %.1f 倍 ⇒ 1%%Low 不可比** —— 先去看量级大的那一组"
+                  "为什么有离群, 别急着下结论。" % (max(_tv) / min(_tv)))
+            print("     更稳的口径: p99 帧率, 或「剔除最慢 1 帧后的 1%Low」。")
+            return
         if abs(ma - mb) <= max(wa, wb):
             print("  ⇒ **分不出来** —— 组间差没有超过组内噪声。加轮数, 或换更稳的指标(p99)。")
         else:
