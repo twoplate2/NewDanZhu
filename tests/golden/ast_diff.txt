@@ -15,6 +15,7 @@ DIFF       _bench_counters_begin              b9a56503a0
 DIFF       _bench_counters_end                5758585227
 DIFF       _bench_done                        bca3f86d9a
 DIFF       _bench_frame_log                   4d21f1a2da
+ONLY_NEW   _bench_history_text                3679c4ba07
 DIFF       _bench_restore_board               377c5d7ba0
 ONLY_NEW   _bench_running                     644bbdb055
 DIFF       _bench_save_board                  0cef014aba
@@ -85,6 +86,7 @@ DIFF       _sfx_code_tag                      c3a50f45d0
 DIFF       _show_bench_status                 59eb40a371
 DIFF       _show_easter_popup                 3cee90f91f
 DIFF       _show_fps_cap_settings             57e1d4fc27
+DIFF       _show_fps_curve                    a33d94a4fa
 DIFF       _show_hp_detail                    b77a640ced
 DIFF       _show_round_end                    6ae57e1d1f
 DIFF       _show_round_settings               ab4c8a45bf

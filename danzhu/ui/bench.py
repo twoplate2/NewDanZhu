@@ -3827,6 +3827,57 @@ class BenchMixin(object):
             _txt = ""
         return self._bench_save_log(text=_txt, prefix="plinko_power")
 
+    def _bench_history_text(self):
+        """把**跑分历史的全部记录**拼成一段可保存的文本(2026-09-20, 玩家要的)。
+
+        ⚠️ **是「能保存的所有」不是「历史全部」** —— 老记录会被「清空历史」删掉。
+        ⚠️ 为什么要有它: 「保存日志(txt)」原来存的**只有当前这一轮的逐帧数据**
+        (`_render_gaps_ms` 只保留最新一轮) —— 而「两次跑分差这么多是不是频率不同」
+        这类问题**要看历史**。玩家原话:「保存的时候需要问我：保存最近一次，还是所有」。
+
+        形状(**人读 + 机器读各一段**):
+          ① 一张人读表: 表头一行 + 每条记录一行 CSV(**最新在前**, 与历史面板同序);
+          ② 一段 JSON Lines: 每条记录一行完整 JSON ——
+             ⚠️ **去掉 `diag`**(它是"当时那一刻"的逐帧诊断块, 1~3KB/条 × 100 条 = 上百 KB,
+             而它要说的东西已经提到 ① 的列里了)。
+        空历史返回 `""` —— 调用方据此**不拼这一段**, 而不是拼一个空壳。
+        """
+        _h = list(getattr(self, "bench_history", None) or [])
+        if not _h:
+            return ""
+        _lines = ["#",
+                  "# ===== 跑分记录（**现在存着的** %d 条，最新在前）=====" % len(_h),
+                  "# ⚠️ 是「**能保存的所有**」不是「历史全部」—— 老记录会被「清空历史」删掉。",
+                  "# 这一段的字段与上面的逐帧表无关 —— 它是**历次跑分**的汇总。",
+                  "# 序号,时间,版本,机型,平均帧,中位帧,1%Low,10%Low,p99,p90,"
+                  "物理中位步每秒,平均差系数,归一化,飞行ms,富余倍数,电池起,电池止,"
+                  "屏幕Hz,Kivy上限,vsync"]
+        _rev = list(reversed(_h[-100:]))
+
+        def _g(_r, _k):
+            _v = _r.get(_k)
+            return "" if _v is None else _v
+
+        for _i, _r in enumerate(_rev, 1):
+            _d = _r.get("diag") or {}
+            _lines.append(",".join(str(_x) for _x in (
+                _i, _g(_r, "time"), _g(_r, "version"), _g(_r, "device"),
+                _g(_r, "render_fps"), _g(_r, "render_median"), _g(_r, "render_1low"),
+                _g(_r, "render_10low"), _g(_r, "render_p99"), _g(_r, "render_p90"),
+                _g(_r, "phys_fps"), _g(_r, "phys_mad"), _g(_r, "phys_norm"),
+                _g(_r, "flight_ms"), _g(_r, "margin"),
+                _g(_r, "battery_start_c"), _g(_r, "battery_end_c"),
+                _d.get("screen_hz", ""), _d.get("clock_maxfps", ""), _d.get("vsync", ""))))
+        _lines.append("# ----- 以下每行是一条记录的完整 JSON（已去掉 diag）-----")
+        for _i, _r in enumerate(_rev, 1):
+            try:
+                _lines.append(json.dumps({_k: _v for _k, _v in _r.items() if _k != "diag"},
+                                         ensure_ascii=False))
+            except Exception as _e:
+                # ⚠️ 一条序列化不了**不许把整段带崩** —— 占位一行, 其余的照发。
+                _lines.append('{"_err": "第 %d 条序列化失败: %s"}' % (_i, type(_e).__name__))
+        return "\n".join(_lines) + "\n"
+
     def _bench_save_log(self, text=None, prefix="plinko_fps"):
         """把日志**存成 txt 文件**。
 
@@ -4103,17 +4154,85 @@ class BenchMixin(object):
         popup = self._popup(0.92, 390, title='', content=content,
                             auto_dismiss=True, separator_height=0)
 
-        def _do_save(*_):
+        def _do_save(_scope="last"):
+            """⚠️ `_scope` 由下面的选择框给: `"last"`(默认) / `"all"`。
+
+            `"last"` 那条路**与改动前逐字相同**(不传 `text`/`prefix`), 零回归 —— 有门禁钉住。
+            """
             try:
-                _ok, _msg = self._bench_save_log()
+                if _scope == "all":
+                    _txt = self._bench_frame_log() + "\n" + self._bench_history_text()
+                    _ok, _msg = self._bench_save_log(text=_txt, prefix="plinko_fps_all")
+                else:
+                    _ok, _msg = self._bench_save_log()
             except Exception as _e:
                 _ok, _msg = False, "保存失败: %r" % (_e,)
             _set_label_text(_note, _msg)
             save.text = '已保存' if _ok else '保存失败'
             Clock.schedule_once(lambda _d: setattr(save, 'text', '保存日志(txt)'), 2.5)
 
+        def _ask_scope(*_a):
+            """玩家 2026-09-20 要的: 保存前**先问一句**「最近一次」还是「所有」。
+
+            玩家原话:「保存的时候需要问我：保存最近一次，还是所有」。
+            ⚠️ 历史为空时**照样给两个选项**, 只把「连历史一起存」标成「(历史为空)」并禁用 ——
+               藏掉它的话玩家会以为功能没做。
+            ⚠️ Label **不认 markdown**: 正文里**绝不能出现星号**(会原样显示成星号)。
+            """
+            _n = len(getattr(self, "bench_history", None) or [])
+            _c = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(10))
+            _ttl = self._fit_line(Label(text='保存日志', bold=True, halign='center',
+                                        color=hex_rgb(COL_TEXT) + (1,),
+                                        size_hint_y=None, height=dp(28)), 19)
+            _c.add_widget(_ttl)
+            # ⚠️ 措辞是「**现有的**」而不是「全部历史」—— 玩家 2026-09-20 明确更正:
+            #    「因为清空的时候会清 log，所以保存的也不是历史所有，而是**能保存的所有**」。
+            _m = Label(text=('只存最近一次：当前这一轮的逐帧日志\n\n'
+                             '连现有记录一起：上面那份，再加上现在存着的 %d 条跑分记录\n'
+                             '（逐帧数据只有最近这一轮；更早的记录只剩汇总）' % _n),
+                       font_size='14sp', halign='left', valign='top',
+                       color=hex_rgb(COL_SUB) + (1,), size_hint_y=None)
+            self._auto_h(_m, dp(96), dp(6))
+            _c.add_widget(_m)
+            _r1 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
+            _b_last = Button(text='只存最近一次', font_size='15sp', bold=True,
+                             background_normal='', background_color=hex_rgb(COL_BTN) + (1,))
+            _b_all = Button(text='连现有记录一起', font_size='15sp', bold=True,
+                            background_normal='', background_color=hex_rgb(COL_BTN) + (1,))
+            if _n <= 0:
+                # ⚠️⚠️ **不许用 `.disabled =`** —— 出货文件里**一处都不许有**
+                #    (`fx_gates` 有闸钉住)。老版「输入锁改走触摸层」那条就是因为它
+                #    (逐个按钮 `disabled` 是 1%Low 的头号来源)。
+                #    ⇒ 空历史时改成「**灰底 + 文字说明 + 不 bind**」(点了没反应),
+                #      而不是禁用它 —— 既不违反那条闸, 也不会让玩家以为功能没做。
+                _b_all.text = '连现有记录一起（没有）'
+                _b_all.background_color = hex_rgb(COL_BTN_OFF) + (1,)
+            _r1.add_widget(_b_last)
+            _r1.add_widget(_b_all)
+            _c.add_widget(_r1)
+            # 取消**单独一行、占满宽**: 它是无害的那一个(最坏就是不保存) ⇒ 给它最大的靶子。
+            _cancel = Button(text='取消', font_size='16sp', bold=True, background_normal='',
+                             background_color=hex_rgb(COL_BTN_OFF) + (1,),
+                             size_hint_y=None, height=dp(46))
+            _c.add_widget(_cancel)
+            _p = self._popup(0.86, 300, title='', content=_c,
+                             auto_dismiss=True, separator_height=0)
+
+            def _pick(_s):
+                def _go(*_a2):
+                    _p.dismiss()
+                    _do_save(_s)
+                return _go
+
+            _b_last.bind(on_release=_pick("last"))
+            if _n > 0:
+                _b_all.bind(on_release=_pick("all"))
+            _cancel.bind(on_release=_p.dismiss)
+            _p.open()
+            self._popup_fit_content(_p, _c)
+
         if save is not None:
-            save.bind(on_release=_do_save)
+            save.bind(on_release=_ask_scope)
         close.bind(on_release=popup.dismiss)
         popup.open()
         self._popup_fit_content(popup, content)
