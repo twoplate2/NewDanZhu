@@ -889,66 +889,115 @@ def _live_power_temp_line():
         return ""
 
 
-# `/proc/stat` 上一次采样: {核号: (累计 total jiffies, 累计 idle jiffies)}。
-# ⚠️ **利用率必须靠两次采样的差值算** —— 单次读数里**没有"利用率"这个量**, 只有开机以来的
+# cpufreq 的 sysfs 根(`%d` = 核号)。**这棵树在 Android 的 app 域可读**, 而 `/proc/*` 不可读
+# —— 见 `_read_freq_time` 里那份逐文件实测表。
+_FREQ_BASE = "/sys/devices/system/cpu/cpu%d/cpufreq/"
+# `time_in_state` 上一次采样: {核号: {频率kHz: 累计格数}}。
+# ⚠️ **利用率必须靠两次采样的差值算** —— 单次读数里**没有"利用率"这个量**, 给的全是开机以来的
 #    累计值 ⇒ 这个快照是**必需状态**, 不是缓存。本行每 0.5 秒刷一次, 差值窗口就是那 0.5 秒。
-_CPU_STAT_PREV = {}
+_FREQ_STAT_PREV = {}
+# 读不到时那条启动日志**只记一次**(它每 0.5 秒被调一次, 不设闸就是刷屏)。
+_FREQ_READ_LOGGED = [False]
 
 
-def _read_proc_stat():
-    """读 `/proc/stat` 的**逐核**累计 jiffies ⇒ `{核号: (total, idle)}`; 读不到返回 `{}`。
+def _read_freq_time():
+    """读逐核 `time_in_state` ⇒ `{核号: {频率kHz: 累计格数}}`; 读不到返回 `{}`。
 
-    ⚠️ 抽成独立函数**只为让门禁能替身注入** —— PC(Windows)上根本没有 `/proc/stat`,
-       而"无基线不印利用率""绝不编数"这两条纪律在 PC 上也要能被钉住。
-    ⚠️ 口径与 `top` 一致: 空闲 = `idle + iowait`。
-       `total` = **前 8 个字段**之和(user+nice+system+idle+iowait+irq+softirq+steal) ——
-       后面的 `guest`/`guest_nice` **已经计在 user/nice 里**了, 再加一遍就是重复计。
+    ⚠️ **这是 Android app 沙箱里唯一能反映"忙不忙"的量。** 起因: `/proc/stat` 被 SELinux
+       挡在 app 域外(实测, 见 `_read_proc_stat`), 而 **sysfs 的 cpufreq 树是可读的** ——
+       同一棵树上的 `scaling_cur_freq`(当前频率)一直读得到, 所以"利用率不显示、频率显示"
+       不是同一类故障。全表实测: `/proc/stat` `/proc/loadavg` `/proc/uptime`
+       `/sys/.../cpuinfo_cur_freq` 全被拒; `cpufreq/stats/time_in_state` `total_trans`
+       `trans_table` `scaling_cur_freq` `cpuinfo_max_freq` 可读。
+       ⚠️ `cpufreq/walt/*` 也可读但**没用** —— 那是调频器**配置**(如 `hispeed_load=90`),
+          不是实时负载。
+    ⚠️ 格数单位是 **10 毫秒**(Android 的 jiffies@100Hz)。实测 1.04 秒窗口 = 104 格。
+    ⚠️ 抽成独立函数**只为让门禁能替身注入** —— PC 上既没有 `/proc/stat` 也没有 cpufreq。
     """
     _out = {}
-    try:
-        with open("/proc/stat", "r") as _f:
-            for _ln in _f:
-                _p = _ln.split()
-                if not _p or not _p[0].startswith("cpu"):
-                    continue
-                _nr = _p[0][3:]
-                if not _nr.isdigit():
-                    continue            # `cpu `(全局汇总那行, 不是某个核)
-                _v = [int(_x) for _x in _p[1:9]]
-                while len(_v) < 8:      # 老内核字段少 ⇒ 缺的补 0, 不因为少一个字段整块没有
-                    _v.append(0)
-                _out[int(_nr)] = (sum(_v), _v[3] + _v[4])
-    except Exception:
-        return {}
+    for _c in _freq_policy_cores():
+        _d = {}
+        try:
+            with open(_FREQ_BASE % _c + "stats/time_in_state", "r") as _f:
+                for _ln in _f:
+                    _p = _ln.split()
+                    if len(_p) != 2:
+                        continue
+                    try:
+                        _d[int(_p[0])] = int(_p[1])
+                    except ValueError:
+                        continue        # 这一行坏就丢这一行, 别毁掉这个核
+        except Exception:
+            continue                    # 这个核读不到就跳过, 别毁掉整张表
+        if _d:
+            _out[_c] = _d
+    # ⚠️ **一个核都读不到就留一条痕**(只记第一次, 别每 0.5 秒刷一次)。
+    #    起因: 2026-09-20 玩家报「利用率完全不显示」, 而那一段是**静默**消失的 ——
+    #    屏上看不出是"这台机器没这个数据"还是"我们读错了", 只能靠猜。
+    #    现在导出启动日志就能看到到底读没读到。
+    if not _out and not _FREQ_READ_LOGGED[0]:
+        _FREQ_READ_LOGGED[0] = True
+        try:
+            from .boot import _boot_log
+            _boot_log("cpufreq", "`time_in_state` 一个核都没读到(共试 %d 个) —— "
+                                 "面板上「频率利用」那一段会整块不出现; "
+                                 "若真机上也这样, 说明这台设备的 cpufreq 树对 app 域也不开放"
+                                 % len(_freq_policy_cores()))
+        except Exception:
+            pass
     return _out
 
 
-def _cpu_util_by_core():
-    """逐核 CPU 利用率(0~100 的百分数)⇒ `{核号: 百分数}`; **没基线 / 读不到返回 `{}`**。
+def _freq_util_by_core():
+    """逐核**平均频率**(kHz) ⇒ `{核号: 频率}`; **没基线 / 读不到返回 `{}`**。
 
-    ⚠️ **第一次调用必定返回 `{}`** —— 那一次只负责把基线立起来(见 `_CPU_STAT_PREV`)。
-       调用方据此**不印利用率**, 与"频率读不到就不印半张表"是同一条规矩: **绝不编数**。
-    ⚠️ 快照**先换再算**: 不管下面算不算得成, 基线都要往前走 —— 否则一旦某次算不成,
-       "上一次"就变成一个几秒前的陈旧值, 那段时间的利用率会被整段平均掉。
-    ⚠️ `Δtotal ≤ 0` 时**跳过这个核**(两次采样之间一个 jiffy 都没走: 核 offline / 时钟冻结 /
-       两次调用挨得太近) —— 不能拿 `Δtotal = 0` 去做除数。
+    = 这个窗口内的时间加权平均频率 `Σ(频档 × Δt) / ΣΔt`。
+
+    ⚠️⚠️ **它与 `/proc/stat` 那条路的「CPU 时间占比」不是同一个量**, 屏上文案必须写清是
+       哪一个 —— 拿两个口径的数去比会误判。频率利用率在现代调频器下是"忙不忙"的良好
+       代理(调频器紧跟负载), 但它**不是** CPU 使用率。
+    ⚠️ **第一次调用必定返回 `{}`** —— 那一次只负责立基线。
+    ⚠️ 快照**先换再算**: 不管下面算不算得成, 基线都要往前走, 否则"上一次"会变成一个几秒前
+       的陈旧值, 那段时间会被整段平均掉。
+    ⚠️ `ΣΔt ≤ 0` 时跳过这个核(窗口里频率一格都没走) —— 不能拿 0 做除数。
     """
-    _cur = _read_proc_stat()
+    _cur = _read_freq_time()
     if not _cur:
         return {}
-    _prev = dict(_CPU_STAT_PREV)
-    _CPU_STAT_PREV.clear()
-    _CPU_STAT_PREV.update(_cur)
+    _prev = dict(_FREQ_STAT_PREV)
+    _FREQ_STAT_PREV.clear()
+    _FREQ_STAT_PREV.update(_cur)
     _out = {}
-    for _i, (_tot, _idl) in _cur.items():
-        _pp = _prev.get(_i)
-        if _pp is None:
+    for _c, _d in _cur.items():
+        _pp = _prev.get(_c)
+        if not _pp:
             continue
-        _dt = _tot - _pp[0]
-        if _dt <= 0:
+        _tot = 0.0
+        _acc = 0.0
+        for _f, _t in _d.items():
+            _dt = _t - _pp.get(_f, 0)
+            if _dt > 0:
+                _tot += _dt
+                _acc += _f * _dt
+        if _tot <= 0:
             continue
-        _u = 100.0 * (1.0 - float(_idl - _pp[1]) / float(_dt))
-        _out[_i] = 0.0 if _u < 0.0 else (100.0 if _u > 100.0 else _u)
+        _out[_c] = _acc / _tot
+    return _out
+
+
+def _freq_policy_cores():
+    """有 `cpufreq` 节点的核号(升序)。读不到就退回 `os.cpu_count()` 的 0..n-1。"""
+    try:
+        _n = os.cpu_count() or 1
+    except Exception:
+        _n = 1
+    _out = []
+    for _c in range(_n):
+        try:
+            if os.path.exists(_FREQ_BASE % _c + "stats/time_in_state"):
+                _out.append(_c)
+        except Exception:
+            continue
     return _out
 
 
@@ -958,11 +1007,21 @@ def _live_cpu_freq_line():
     ⚠️ **这是新版独有的功能(老版没有)** —— 2026-09-19 用户要求, 见 `changelog/2026-09-19.md`
        第 23 条。产品行为超出 1:1 的**唯一**一处, 老版那半边仍守逐位一致。
 
-    形态(每簇一行: 频率写**当前**、后面跟该簇**利用率**; 可跑核并进第一行):
+    形态(每簇一行: 频率写**当前**、后面跟该簇**频率利用率**; 可跑核并进第一行):
         CPU：8 核　1+3+4　　可跑核 0-7
-        　核 7　　1804M，利用率 45.2%
-        　核 4-6　2400M，利用率 12.0%
-        　核 0-3　1500M，利用率 8.3%
+        　核 7　　1804M，频率利用 45.2%
+        　核 4-6　2400M，频率利用 12.0%
+        　核 0-3　1500M，频率利用 8.3%
+
+    ⚠️⚠️ **为什么是「频率利用」而不是「利用率」**(2026-09-20 真机实测的硬约束):
+        `top`/`htop` 那套标准的 CPU 时间占比要读 `/proc/stat`, 而 **Android 的 app 域读不到它**
+        —— `u:r:untrusted_app_32:s0` 与 `run-as` 的 `runas_app` 一律 `Permission denied`
+        (同一个文件 `adb shell` 读得到、内容完全正常) ⇒ **SELinux 把整个 procfs 挡在 app 外面**。
+        逐文件实测: `/proc/stat` `/proc/loadavg` `/proc/uptime` `/sys/.../cpuinfo_cur_freq` 全被拒;
+        `cpufreq/stats/time_in_state` `total_trans` `trans_table` `scaling_cur_freq` 可读。
+        ⇒ 唯一能反映"忙不忙"的就是**频率驻留时间**。它**不是** CPU 使用率(现代调频器紧跟负载,
+          所以高度相关, 但**数值不可混比**) —— 玩家指定"业内用什么就用什么", 而业内标准在这个
+          沙箱里拿不到, 故**降级并如实标注口径**。
 
     ⚠️ **金色只给"会变的那个数"**(玩家 2026-09-19 定的两条要求, 背后是同一条原则):
         · 核数、**当前频率**、**利用率** —— 会变 ⇒ 金色;
@@ -1028,24 +1087,33 @@ def _live_cpu_freq_line():
             _aff = "　　可跑核 %s" % ",".join(_segs)
         _lines = ["CPU：[color=%s]%d[/color] 核　%s%s" % (_GOLD_MK, _n, _shape, _aff)]
         _any = False
-        # 利用率**整块只采一次**(不是每簇一次): 三个簇共用同一次 `/proc/stat` 差分,
-        # 各读各的会把采样窗口错开, 同一屏上三行其实是三个不同时刻。
-        _util = _cpu_util_by_core()
+        # 利用率**整块只采一次**(不是每簇一次): 三簇共用同一次差分采样, 各读各的会把窗口错开,
+        # 同一屏上三行其实是三个不同时刻。
+        # ⚠️⚠️ 数据源是 **`time_in_state`(频率驻留时间)**, 不是 `/proc/stat` —— 后者在 Android
+        #    的 app 域**读不到**(实测被 SELinux 拒, 见 `_read_freq_time`)。所以这个数是
+        #    **「频率利用率」不是「CPU 时间占比」**, 文案必须写清(见下面 `_ut` 那一行)。
+        _util = _freq_util_by_core()
         for _k, _v in _grp:
             _base = "/sys/devices/system/cpu/cpu%d/cpufreq/" % _v[0]
             _cur = _read_int_file(_base + "scaling_cur_freq")
             # 核号用**范围**而不是逐个列: 「核 4-6」比「核 4 5 6」短, 也不猜"大核/中核"那种语义。
             _rng = ("%d" % _v[0]) if len(_v) == 1 else ("%d-%d" % (min(_v), max(_v)))
-            # ⚠️ 格式 = **当前频率，利用率**(玩家 2026-09-20 定:「改为 `核x-y：XM，利用率xx.x%`」)。
+            # ⚠️ 格式 = **当前频率，频率利用率**(玩家 2026-09-20 定:「改为 `核x-y：XM，利用率xx.x%`」;
+            #    当天稍后又指定「业内用什么就用什么」, 而业内标准(`/proc/stat`)在 app 沙箱里拿不到
+            #    ⇒ 落到 `time_in_state` 这条路, **文案改写成「频率利用」以区别于 CPU 使用率**)。
             #    原来那半截 `/上限M` 去掉了 —— `cpuinfo_max_freq` 是**常量**, 每簇就那么一个数,
             #    占掉半行却不提供任何"现在发生了什么"的信息。
             #    ⚠️ 单位保持 `M`(`4608M` 那种), **不是** `Mhz` —— 玩家第一次笔误成 `Mhz`,
             #       第二遍更正为 `M`。别自作主张加单位后缀。
+            # ⚠️ 分母是**这一簇自己的上限**(`_k`, 来自 `_cpu_groups()`) —— **不去读
+            #    `cpuinfo_max_freq`**: 实测那个文件给的是整个 cpufreq **policy** 的上限
+            #    (核 0 读出 3629MHz, 而它属于 2016MHz 那一簇), 拿它当分母会把百分比算小一半。
             # ⚠️ 簇内**取有读数的核平均**(同簇频率一致, 各核差异很小); 一个读数都没有 ⇒ 整段不印,
             #    不编一个数出来(与本函数"绝不编数"同一条规矩)。
             _us = [_util[_c] for _c in _v if _c in _util]
-            _ut = ("，利用率[color=%s]%.1f[/color]%%" % (_GOLD_MK, sum(_us) / len(_us))
-                   if _us else "")
+            _ut = ("，频率利用[color=%s]%.1f[/color]%%"
+                   % (_GOLD_MK, 100.0 * (sum(_us) / len(_us)) / float(_k))
+                   if (_us and _k) else "")
             if _cur:
                 _any = True
                 _lines.append("　核 %s　[color=%s]%d[/color]M%s"

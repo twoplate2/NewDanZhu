@@ -12,6 +12,15 @@ import sys
 
 sys.path.insert(0, os.getcwd())
 
+# ⚠️ 与其它门禁同款: Windows 控制台默认 GBK, 而本文件的判据文本含 `⇒` 等字符 ——
+#    不重设编码就会 `UnicodeEncodeError` **在打印判据的那一刻崩掉**(而不是判红),
+#    看起来像门禁坏了, 其实是编码。**门禁不许依赖调用者先 export 环境变量。**
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from kivy.app import App                  # noqa: E402
 from kivy.uix.widget import Widget        # noqa: E402
 
