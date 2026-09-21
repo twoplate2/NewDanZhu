@@ -132,7 +132,28 @@ for i in $(seq "$START" "$LAST"); do
   echo "=========== 第 $i 轮 / 到 $LAST 轮 ==========="
   BEFORE="$(newest)"
   "$ADB" shell "am force-stop $PKG" >/dev/null 2>&1; sleep 3
-  "$ADB" shell "monkey -p $PKG -c android.intent.category.LAUNCHER 1" >/dev/null 2>&1
+  # ⚠️⚠️ **启动必须确定性 + 自校验**（2026-09-21 踩到的静默失败）。
+  #   原来只有 `monkey -p $PKG -c …LAUNCHER 1`。实测在**模拟器刚冷启动后**它偶发不生效：
+  #   2026-09-21 11:22 那轮反向实验里, "新版"那一轮跑完存下来的日志头写着 **v0.8.69**
+  #   —— 即 `monkey` 没把 tiao 拉起来, 前台仍是老版, 而**整条链路一声不响**:
+  #   有日志、有数据、有 1%Low, 只是测的是**同一个包**。两组都成了老版。
+  #   ⇒ 改用显式 `am start -n <pkg>/org.kivy.android.PythonActivity`（buildozer 固定 activity 名）,
+  #     再用 `topResumedActivity` **复核**前台确实是这个包, 不是才回退到 monkey。
+  #   ⚠️ 判据是"前台包名等于被测包", 不是"命令没报错"。
+  "$ADB" shell "am start -n $PKG/org.kivy.android.PythonActivity" >/dev/null 2>&1
+  sleep 2
+  _TOP="$("$ADB" shell "dumpsys activity activities | grep -m1 topResumedActivity" 2>/dev/null | tr -d '\r')"
+  case "$_TOP" in
+    *"$PKG"*) echo "  启动确认: $PKG" ;;
+    *) echo "  ⚠️ am start 没把 $PKG 拉到前台(当前: ${_TOP:-读不到}) —— 回退 monkey"
+       "$ADB" shell "monkey -p $PKG -c android.intent.category.LAUNCHER 1" >/dev/null 2>&1
+       sleep 2
+       _TOP="$("$ADB" shell "dumpsys activity activities | grep -m1 topResumedActivity" 2>/dev/null | tr -d '\r')"
+       case "$_TOP" in
+         *"$PKG"*) echo "  ✓ monkey 回退成功" ;;
+         *) echo "  ❌❌ 前台仍不是 $PKG(当前: ${_TOP:-读不到}) —— 这一轮**必然作废**, 下面会验版本号" ;;
+       esac ;;
+  esac
   echo "  启动中, 等 32 秒…"; sleep 32
   hold                       # 长按标题 → 跑分菜单
   tap 310 1044 2             # 「开始模拟测试」
@@ -161,6 +182,10 @@ for i in $(seq "$START" "$LAST"); do
     echo "  ⚠️ 没有新日志(最新还是 $NEW) —— 这一轮作废"
   else
     "$ADB" pull "$NEW" "_emu_${PREFIX}$i.txt" 2>&1 | tail -1
+    # ⚠️ **版本自校验**: 把日志头里的版本号印出来。2026-09-21 那次静默失败
+    #    (整轮跑的是同一个包) 只要这一行就会被当场看见 —— 而不是等到分析时
+    #    才发现"两组数据长得一模一样"。
+    echo "    版本: $(grep -m1 -oE 'v[0-9]+\.[0-9]+\.[0-9]+' "_emu_${PREFIX}$i.txt" 2>/dev/null | head -1)"
   fi
 done
 

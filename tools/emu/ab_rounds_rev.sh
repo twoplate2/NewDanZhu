@@ -46,6 +46,16 @@ for i in $(seq "$START" "$LAST"); do
   bash "$ROOT/tools/emu/multi_round.sh" 1 "v122_rv" "$NEW_PKG" "$i"
   echo "---------- 老版 v0.8.69（**后跑**） ----------"
   bash "$ROOT/tools/emu/multi_round.sh" 1 "v69_rv"  "$OLD_PKG" "$i"
+  # ⚠️⚠️ **一对内的版本必须不同**。2026-09-21 11:22 那轮就是这里没查:
+  #   `monkey` 冷启动后偶发不生效, 两条日志**都是 v0.8.69** —— 有数据、有 1%Low、
+  #   一声不响, 只是两轮测的是同一个包。判据放这里, 当场就报。
+  _va="$(grep -m1 -oE 'v[0-9]+\.[0-9]+\.[0-9]+' "$D/_emu_v122_rv${i}.txt" 2>/dev/null | head -1)"
+  _vb="$(grep -m1 -oE 'v[0-9]+\.[0-9]+\.[0-9]+' "$D/_emu_v69_rv${i}.txt" 2>/dev/null | head -1)"
+  if [ -n "$_va" ] && [ "$_va" = "$_vb" ]; then
+    echo "  ❌❌ 第 $i 对**两轮版本相同**($_va) —— 有一轮跑错了包, 这一对作废!"
+  else
+    echo "  ✓ 第 $i 对版本: 新版 $_va · 老版 $_vb"
+  fi
 done
 
 echo ""
