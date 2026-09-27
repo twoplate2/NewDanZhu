@@ -18,7 +18,7 @@ from ..config import (BALL_R, BALL_VIEW, BALL_VIS_R, CH, COL_BUMPER, COL_CANVAS,
                       COL_FIRE, COL_LAMP_OFF, COL_LANE, COL_METER, COL_PEG,
                       COL_WALL, CW, FIELD_L, FIXED_DT, FLOOR, LANE_L,
                       MISFIRE_POWER, NUM_SLOTS, PEG_R, PLUNGER_Y, RIGHT_INNER,
-                      SLOT_TOP, SLOT_W, hex_rgb)
+                      SLOT_TOP, SLOT_W, hex_rgb, _spring_step, _squash_step)
 from ..physics import power_u
 # ⚠️ `_brk_add` 的家在 `ui/text.py`(帧剖析的写入口都在那边) —— 从 platform 拿会 ImportError,
 #    因为那边已经把它让出去了(拆分时两边各建了一份, 是静默分叉)。
@@ -431,8 +431,18 @@ class GameArea(FloatLayout):
             col.rgb = hex_rgb(COL_LAMP_OFF)
 
     # ------------------------------ 帧驱动 ------------------------------
-    def tick_draw(self):
-        """每帧只更新动态元素(ball/meter/plunger) + 特效, 不重排 canvas。"""
+    def tick_draw(self, dt=None):
+        """每帧只更新动态元素(ball/meter/plunger) + 特效, 不重排 canvas。
+
+        ⚠️ **`dt` 必须由调用方把真实帧间隔传进来**(2026-09-27 加, 照老版 `bd6b787`)。
+           这是本函数里**所有"逐帧积分"的唯一时间源**: 早先这些积分硬编码 `FIXED_DT`,
+           而本函数是「每**渲染帧**走一次」(不在物理累加器里) ⇒ 推进速度被帧率乘了一遍
+           (165Hz 上快 2.75 倍)。实测到的两处见 `_spring_step` / `_squash_step`。
+        ⚠️ 缺省 `None` ⇒ 退回 `FIXED_DT`, 且**子步数 = 1** ⇒ 与改前**逐位相同**。
+           `_redraw()` 末尾那次调用(尺寸/位置变才跑)就是走这条路, 它不该按墙钟推进。
+        """
+        if dt is None or dt <= 0.0:
+            dt = FIXED_DT
         # ⚠️ 必须放在下面的 `_ball_e is None` 早退**之前**: 否则画布还没建好的那几帧
         #    (启动/尺寸未定)中奖演出不推进, 起播时间会被白白拖后。
         self.win_fx.tick()
@@ -448,7 +458,9 @@ class GameArea(FloatLayout):
             # 受击压扁: 沿法线缩、切向胀, 渐回正圆
             sq = getattr(b, "squash", 1.0)
             if sq < 0.99:
-                b.squash += (1.0 - sq) * 0.5
+                # ⚠️ 恢复量走 `_squash_step(…, dt)`, 不是"每帧 ×0.5" —— 后者同样被帧率乘过
+                #    (老版注释里那句"2~3帧≈50ms"是按 60Hz 算的)。
+                b.squash = _squash_step(sq, dt)
                 if b.squash > 0.99:
                     b.squash = 1.0
                 sq = b.squash
@@ -508,9 +520,11 @@ class GameArea(FloatLayout):
             self._spring_power = g.power
             self._spring_vel = 0.0
         elif abs(self._spring_power) > 0.0005 or abs(self._spring_vel) > 0.005:
-            k, damp = 120.0, 3.2
-            self._spring_vel += (-k * self._spring_power - damp * self._spring_vel) * FIXED_DT
-            self._spring_power += self._spring_vel * FIXED_DT
+            # ⚠️ 走 `_spring_step(…, dt)` 而不是硬编码 `FIXED_DT`: 本函数每**渲染帧**只调
+            #    一次, 而回弹曲线是按 60Hz 调的 ⇒ 硬编码会让高刷机上快 2.75~3.08 倍
+            #    (165Hz 上收尾时长 1.024s, 设计值 2.817s)。
+            self._spring_power, self._spring_vel = _spring_step(
+                self._spring_power, self._spring_vel, dt)
         else:
             self._spring_power = 0.0
             self._spring_vel = 0.0

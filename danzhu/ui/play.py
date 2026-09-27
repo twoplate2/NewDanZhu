@@ -366,7 +366,7 @@ class PlayMixin(object):
         #    `_set_label_text(balance_lbl, ...)` —— 老版自己算过那是 `_frame` 里
         #    **最大的单块**(45 秒 1.06 秒)。事件照派发(老版 `launch()` 的副作用在里面)。
         if self.game._render_skip:
-            self._dispatch(_events)
+            self._dispatch(_events, dt)
             return
         # ⚠️ **余额标签在派发之前写** —— 老版这两行的顺序是
         #    `_set_label_text(balance_lbl, ...)` 然后 `game_area.tick_draw()`。而 `ui_tick`
@@ -374,7 +374,7 @@ class PlayMixin(object):
         #    写在派发之后, 两者就调换了。数值上等价(`display_balance` 在 `step` 内已更新完),
         #    但"同一帧里谁先谁后"是本工程的对账口径, 不靠"反正互不依赖"来省。
         _set_label_text(self.balance_lbl, str(int(round(self.game.display_balance))))
-        self._dispatch(_events)
+        self._dispatch(_events, dt)
         # 装杯期把整块界面(减去游戏区)压暗。⚠️ 位置: 必须在 `tick_draw()` **之后** ——
         # 演出由 tick_draw -> win_fx.tick() -> `_redraw()` 推进, 而 `_redraw` 会把**本帧
         # 真正画上去的** a_dim 存进 `_a_dim_now`, HUD 从这里取值 ⇒ 两边永远是同一个数。
@@ -390,7 +390,7 @@ class PlayMixin(object):
     # =====================================================================
     # 三、事件派发
     # =====================================================================
-    def _dispatch(self, events):
+    def _dispatch(self, events, dt=None):
         """把一帧的事件**按产出顺序**逐条映射到控件与音效。
 
         ⚠️ 顺序 = 老版调用点顺序(`Game` 就是按老版的调用次序 `_emit` 的)。逐条处理、
@@ -409,13 +409,13 @@ class PlayMixin(object):
         """
         for _round in range(8):        # 正常最多 2 轮; 8 是"事件自我派生"的失控兜底
             for ev in events:
-                self._dispatch_one(ev)
+                self._dispatch_one(ev, dt)
             events = self.game.take_events()
             if not events:
                 return
         print("[ui] ⚠️ 事件派发 8 轮还没排空 —— 有事件在自己派生事件, 请查 Game 的 _emit")
 
-    def _dispatch_one(self, ev):
+    def _dispatch_one(self, ev, dt=None):
         """派发**一条**事件。清单见 `_dispatch` 的说明。"""
         if True:
             kind = ev.kind
@@ -463,7 +463,12 @@ class PlayMixin(object):
             elif kind == "redraw":
                 self.game_area._redraw()
             elif kind == "ui_tick":
-                self.game_area.tick_draw()
+                # ⚠️ **`dt` 必须传**(2026-09-27 照老版 `bd6b787`): 它是 `tick_draw` 里
+                #    所有逐帧积分的唯一时间源, 不传就退回 `FIXED_DT` ⇒ 那些动画的速度
+                #    又被帧率乘一遍(165Hz 上快 2.75 倍)。见 `_spring_step` / `_squash_step`。
+                #    ⚠️ 输入同拍转发那条路(`_act` / `root.py`)确实拿不到 dt, 它传 None
+                #    ⇒ 退回 `FIXED_DT`, 与老版同址行为一致。
+                self.game_area.tick_draw(dt)
             elif kind == "controls":
                 # 界面那一半在 UiMixin(标签染色 + 拿 `_refresh_mute_btn`); 底色归
                 # `restyle_buttons`(另一条事件), 标志归 `Game`。
