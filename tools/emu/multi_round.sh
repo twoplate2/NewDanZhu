@@ -140,20 +140,28 @@ for i in $(seq "$START" "$LAST"); do
   #   ⇒ 改用显式 `am start -n <pkg>/org.kivy.android.PythonActivity`（buildozer 固定 activity 名）,
   #     再用 `topResumedActivity` **复核**前台确实是这个包, 不是才回退到 monkey。
   #   ⚠️ 判据是"前台包名等于被测包", 不是"命令没报错"。
+  #   ⚠️⚠️ **校验必须轮询, 不能等 2 秒就读**：Kivy 应用从 `am start` 到成为
+  #   `topResumedActivity` 要 10~25 秒(要起 Python 解释器 + 加载资源)。第一版写死 `sleep 2`
+  #   然后读前台 ⇒ **每次都读到上一个应用** ⇒ 误判"am start 失败"并回退 monkey。
+  #   判据: 轮询到被测包出现在前台为止(最多 40 秒)。
+  _wait_top() {   # $1 = 包名; 成功返回 0
+    local _k=0 _t=""
+    while [ "$_k" -lt 20 ]; do
+      _t="$("$ADB" shell "dumpsys activity activities | grep -m1 topResumedActivity" 2>/dev/null | tr -d '\r')"
+      case "$_t" in *"$1"*) echo "  ✓ 前台确认: $1"; return 0;; esac
+      _k=$((_k + 1)); sleep 2
+    done
+    echo "  ⚠️ 40 秒内前台都不是 $1 (当前: ${_t:-读不到})"
+    return 1
+  }
   "$ADB" shell "am start -n $PKG/org.kivy.android.PythonActivity" >/dev/null 2>&1
-  sleep 2
-  _TOP="$("$ADB" shell "dumpsys activity activities | grep -m1 topResumedActivity" 2>/dev/null | tr -d '\r')"
-  case "$_TOP" in
-    *"$PKG"*) echo "  启动确认: $PKG" ;;
-    *) echo "  ⚠️ am start 没把 $PKG 拉到前台(当前: ${_TOP:-读不到}) —— 回退 monkey"
-       "$ADB" shell "monkey -p $PKG -c android.intent.category.LAUNCHER 1" >/dev/null 2>&1
-       sleep 2
-       _TOP="$("$ADB" shell "dumpsys activity activities | grep -m1 topResumedActivity" 2>/dev/null | tr -d '\r')"
-       case "$_TOP" in
-         *"$PKG"*) echo "  ✓ monkey 回退成功" ;;
-         *) echo "  ❌❌ 前台仍不是 $PKG(当前: ${_TOP:-读不到}) —— 这一轮**必然作废**, 下面会验版本号" ;;
-       esac ;;
-  esac
+  if ! _wait_top "$PKG"; then
+    echo "  → 回退 monkey"
+    "$ADB" shell "monkey -p $PKG -c android.intent.category.LAUNCHER 1" >/dev/null 2>&1
+    if ! _wait_top "$PKG"; then
+      echo "  ❌❌ 前台仍不是 $PKG —— 这一轮**必然作废**(下面会验版本号)"
+    fi
+  fi
   echo "  启动中, 等 32 秒…"; sleep 32
   hold                       # 长按标题 → 跑分菜单
   tap 310 1044 2             # 「开始模拟测试」
