@@ -489,6 +489,14 @@ class GlyphLabel(Widget):
             return
         self._degraded = True
         _GLYPH_MISS[0] += 1
+        # ⚠️ 诊断: 退化是**静默**的(收益归零、不报错), 而 2026-09-27 玩家报的「余额显示延后」
+        #    正是这条路上发生的 —— 必须让"谁退化、退在哪一档、当时烘出了几档"可见。
+        try:
+            print("[GLYPH-DEGRADE] text=%r fs=%.4f bold=%s fit_box=%s wait_bake=%s warm_done=%s n_baked=%d"
+                  % (self.text[:10], float(self.font_size), self.bold, self.fit_box,
+                     self._wait_bake, _glyph_warm_done(), len(_GLYPH_ATLAS)))
+        except Exception:
+            pass
         try:
             self._fb = Label(text=self.text, font_size=self.font_size, bold=self.bold,
                              color=self._rgba0,

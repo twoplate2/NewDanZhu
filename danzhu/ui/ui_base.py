@@ -90,10 +90,15 @@ class UiMixin(object):
         """
         try:
             from .widgets import GlyphLabel
-            return GlyphLabel(text=text, font_size=sp(19), bold=True,
-                              color=hex_rgb(COL_BALL) + (1,), fit_box=True,
-                              wait_bake=True, size_hint_x=None, width=dp(80))
-        except Exception:
+            _w = GlyphLabel(text=text, font_size=sp(19), bold=True,
+                            color=hex_rgb(COL_BALL) + (1,), fit_box=True,
+                            wait_bake=True, size_hint_x=None, width=dp(80))
+            # ⚠️ 诊断(2026-09-27): 这条路**静默退回**普通 Label 时, 余额行看起来一切正常
+            #    (只是没有图集收益) —— 玩家报的「显示延后」正是这条路可以解释的现象。
+            print("[BALANCE] 走 GlyphLabel · text=%r fs=%.4f wait_bake=True" % (text, float(_w.font_size)))
+            return _w
+        except Exception as _e:
+            print("[BALANCE] ⚠️ GlyphLabel 构造失败 ⇒ **静默退回普通 Label**: %r" % (_e,))
             return self._mk_label(text, "19sp", COL_BALL, "left", True,
                                   size_hint_x=None, width=dp(80))
 

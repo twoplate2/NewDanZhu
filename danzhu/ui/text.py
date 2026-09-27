@@ -1484,12 +1484,27 @@ def _glyph_keys_reachable(rw):
     except Exception:
         pass
     try:      # 余额: 数字等宽 ⇒ 位数就决定档, 用全 8 代表
+        # ⚠️⚠️ **(2026-09-27)** 这一段原来写作 `if _base > 0:` 包住整个循环。
+        #   ⚠️ 起初以为根因是"布局期 `_fit_base` 还没装 ⇒ 一个档都不烘" —— **实测否掉了**:
+        #      模拟器日志 `[GLYPH-KEYS] _fit_base=33.2500 width=140.0`, 两个都不是 0。
+        #   **真根因是时序**: 图集那一档挂在 `prebake_step` 链的**末尾**(winfx 最后一档),
+        #   从建标签到它烘完要 **3.35~3.99 秒**; 而加载页当时**只等音效**(`bus.py:audio_ready`)
+        #   ⇒ 玩家进游戏后看到几秒空白余额。修法在 `play.py:_glyph_ready_for_veil`
+        #   (加载页等图集收工), **不在这一段**。
+        #   ⚠️ 下面这两个 `<= 0` 兜底**保留为纯防御**(挡"标签还没建好就枚举"的将来改动),
+        #      取值与 `_mk_balance_lbl` 写死的那两个同源(`sp(19)` / `dp(80)`)。
         _lb = getattr(rw, "balance_lbl", None)
         _base = float(getattr(_lb, "_fit_base", 0.0) or 0.0)
-        if _base > 0:
-            _av = max(1.0, float(_lb.width))
-            for _n in ("8", "88", "888", "8888", "88888", "888888", "8888888"):
-                _add(fit_font_size(_n, _base, _av, True), True)
+        _av = float(getattr(_lb, "width", 0.0) or 0.0)
+        print("[GLYPH-KEYS] balance_lbl=%s _fit_base=%.4f width=%.1f _font_scale=%s"
+              % ("有" if _lb is not None else "**None**", _base, _av,
+                 getattr(rw, "_font_scale", None)))
+        if _base <= 0:
+            _base = sp(19) * float(getattr(rw, "_font_scale", 1.0) or 1.0)
+        if _av <= 0:
+            _av = 80.0
+        for _n in ("8", "88", "888", "8888", "88888", "888888", "8888888"):
+            _add(fit_font_size(_n, _base, _av, True), True)
     except Exception:
         pass
     return out[:_GLYPH_MAX_KEYS]
@@ -1518,6 +1533,11 @@ def _glyph_warm_step(area):
         return True
     # 全部烘完: 置标志 + 叫醒等待中的标签(它们那会儿还查不到这一档)。
     _GLYPH_WARM_DONE[0] = True
+    try:
+        print("[GLYPH-WARM-DONE] n_keys=%d baked=%d hit=%d miss=%d"
+              % (len(_keys), len(_GLYPH_ATLAS), _GLYPH_HIT[0], _GLYPH_MISS[0]))
+    except Exception:
+        pass
     _glyph_flush_waiters()
     return False
 

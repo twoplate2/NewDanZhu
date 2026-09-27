@@ -213,6 +213,45 @@ class PlayMixin(object):
             _FRAME_CALLS[0] += 1
             _SINCE_LAUNCH[0] += 1
 
+    def _glyph_ready_for_veil(self):
+        """加载页摘页前, 等**字形图集预热收工** —— 否则余额行会在玩家眼前空白几秒。
+
+        ⚠️ 病象与根因(2026-09-27 玩家报「刚进 app 弹珠数量的显示是延后的」, 截图复现)：
+           余额行走 `GlyphLabel(wait_bake=True)`(`ui_base.py:95`), 图集没烘好时它**等**;
+           而加载页的摘页判据原本**只看音效**(`Sfx.audio_ready`)⇒ 音效一就绪就摘页,
+           玩家看到的是 `弹珠：___`, 约 20 帧后数字才出来。
+           ⚠️ **跑分链不会遇到**(`bench.py` 显式等 `_PREBAKE_DONE`)⇒ 所以所有门禁全绿,
+           只有玩家那条「冷启动 + 立刻看界面」的路径没有被任何测试覆盖。
+        ⚠️ **绝不软锁**: 预热链被异常打断时 `_GLYPH_WARM_DONE` 永不置位 ⇒ 没有这条兜底
+           就是把玩家锁在启动页(项目红线)。超时取 `_GLYPH_WAIT_MAX`(3 秒) —— 与余额行
+           自己那条兜底**同值**, 语义一致(实测正常预热 < 1 秒, 不会误伤)。
+        """
+        from .text import _glyph_warm_done
+        from ..config import VEIL_TITLE_MAX_SEC
+        _logged = getattr(self, "_glyph_veil_logged", False)
+        if _glyph_warm_done():
+            if not _logged:
+                self._glyph_veil_logged = True
+                print("[VEIL] 图集已收工 ⇒ 不因它多等")
+            return True
+        _t0 = getattr(self, "_glyph_veil_t0", None)
+        if _t0 is None:
+            self._glyph_veil_t0 = time.perf_counter()
+            print("[VEIL] 图集还没收工 ⇒ **加载页开始等它**")
+            return False
+        # ⚠️⚠️ 超时取 `VEIL_TITLE_MAX_SEC`(6.0), **不是** `text._GLYPH_WAIT_MAX`(3.0)。
+        #    实测(2026-09-27 模拟器, 日志时间轴): 图集收工在**建标签后 3.99 秒**, 而
+        #    `_glyph_warm_step` 挂在 `prebake_step` 链的**末尾**(winfx.py 的最后一档),
+        #    前面还要跑玻璃贴图 / 字号预热 / 球堆 —— 那 4 秒是**整条链**的时间。
+        #    取 3 秒 ⇒ 加载页会在图集收工前 1 秒放行 ⇒ **玩家照样看到 1 秒空白**。
+        #    取 6 秒 = 与加载页自己的地板同值, 也意味着"最多多等一整条预热链"。
+        if (time.perf_counter() - _t0) > float(VEIL_TITLE_MAX_SEC):
+            if not _logged:
+                self._glyph_veil_logged = True
+                print("[VEIL] ⚠️ 等图集超过 %.1f 秒 ⇒ 兜底放行(绝不软锁)" % float(VEIL_TITLE_MAX_SEC))
+            return True
+        return False
+
     def _frame(self, dt):
         if not getattr(self, "_first_frame_logged", False):
             self._first_frame_logged = True
@@ -245,7 +284,7 @@ class PlayMixin(object):
         if _veil is not None:
             # 就绪判据由 `_LoadVeil.tick()` 给 —— 它还要管开场动画、最短停留和整页淡出,
             # 所以这里只问"能摘了吗"。它自己不持有 Clock, 由这里驱动。
-            if _veil.tick(self.sfx.audio_ready()):
+            if _veil.tick(self.sfx.audio_ready() and self._glyph_ready_for_veil()):
                 # ⚠️ **先按「这一页是不是重放结果页」分岔** —— 重放页**绝不落进下面那条
                 #    自动摘页**: `audio_ready()` 在**音效关掉时恒为真**, 掉进 elif 就会
                 #    在第一帧把整页摘掉, 玩家点下去看到的是"画面没有任何反馈"(而烘焙照样
