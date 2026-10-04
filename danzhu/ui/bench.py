@@ -1057,6 +1057,9 @@ class BenchMixin(object):
             row.add_widget(left)
             row.add_widget(right)
             content.add_widget(row)
+        low_btn = Button(text="应用侧帧采样 / 导出", size_hint_y=None, height=dp(48))
+        low_btn.bind(on_release=lambda *_: (popup.dismiss(), self._show_low_capture_menu()))
+        content.add_widget(low_btn)
         popup.open()
         self._popup_fit_content(popup, content)
 
@@ -1611,8 +1614,17 @@ class BenchMixin(object):
                 pass
         self._bench_set_balance(START_BEADS)
 
-    def _start_bench_test(self):
+    def _start_bench_test(self, render_only=False, probe="full", pin_cpu=True):
         """开始性能测试(菜单点"开始测试"后)。"""
+        from ..bench.low_runtime import ACTIVE
+        if ACTIVE[0] is not None and ACTIVE[0].active or self.game._bench_running:
+            return
+        self._low_original_balance = self.game.balance if render_only else None
+        self._low_timer_seq = self.game._timer_seq
+        self._low_render_only = bool(render_only)
+        self._low_probe = probe
+        self._low_pin_cpu = bool(pin_cpu)
+        self.game._low_no_save = True
         self.game._bench_running = True
         # 普通测试的电池温度只要首尾两个点; 这里是整场测试真正的起点。
         self._bench_battery_start_c = _battery_temp_c()
@@ -1676,6 +1688,8 @@ class BenchMixin(object):
 
     def _await_prebake(self, dt=0):
         """预热没跑完就先等着(最多 20 秒), 跑完再开采样。见 `_start_bench_test` 处说明。"""
+        if not self.game._bench_running:
+            return
         if _PREBAKE_DONE[0] or self._bench_wait_bake >= 20.0:
             self._start_benchmark()
             return
@@ -1694,6 +1708,7 @@ class BenchMixin(object):
         self._bench_cpu_prev = self._bench_cpu0
         self._bench_thr_prev = _THREAD_TIME()
         _FRAME_CALLS[0] = 0
+        _FRAME_SELF[0] = 0.0
         _TEXUPD[0] = 0
         _TEXUPD_BY.clear()
         _TEXUPD_ACTIVE[0] = True
@@ -1763,8 +1778,9 @@ class BenchMixin(object):
             pass
         # 阶段 1 测的是 Kivy 主渲染线程，不能像物理跑分那样在工作线程里锁。
         # 这里运行在主线程，且只覆盖 on_flip 采样窗口；采样结束会先恢复，再启动物理工作线程。
-        self._render_aff_before = _bench_pin_fast_cpus()
+        self._render_aff_before = _bench_pin_fast_cpus() if getattr(self, "_low_pin_cpu", True) else None
         self._render_cpu_pin = dict(_BENCH_CPU_PIN)
+        self._low_begin("fixed_five", getattr(self, "_low_probe", "full"))
         Window.bind(on_flip=self._on_flip)
         self._launch_count = 0
         self._target_launches = BENCH_TARGET_LAUNCHES
@@ -1775,6 +1791,171 @@ class BenchMixin(object):
         # 只在跑分期间轮询；0.1 秒把每局结束到下一发的空档从最多 0.5 秒缩到最多 0.1 秒。
         # 回调只读状态，发射后立即离开 ready，不会重复触发或改变游戏物理。
         self._auto_evt = Clock.schedule_interval(self._auto_launch_tick, 0.1)
+
+    def _low_begin(self, mode, probe="light", watchdog_sec=120.0):
+        from ..bench.low_runtime import ACTIVE, Capture
+        import sys
+        import kivy
+        capture = Capture(mode=mode, probe=probe, watchdog_sec=watchdog_sec, clock=time.perf_counter,
+            meta=dict(identity={"app_id": "unavailable", "version": _app_version(),
+                                "source_hash": "unavailable", "config_hash": "unavailable",
+                                "resource_hash": "unavailable"},
+                      device={"os": sys.platform, "abi": "unavailable", "model": "unavailable"},
+                      runtime={"kivy": kivy.__version__, "sdl": "unavailable", "p4a": "unavailable"},
+                      settings={"kivy_cap": getattr(Clock, "_max_fps", None),
+                                "cpu_pinned": mode == "fixed_five" and getattr(self, "_low_pin_cpu", True),
+                                "actual_display_hz": _screen_hz() or "unavailable"}))
+        self._low_capture = self.game._low_capture = ACTIVE[0] = capture
+        _TEXUPD_ACTIVE[0] = probe == "full"
+        _FRAME_SELF[0] = 0.0
+        self._low_watch_evt = Clock.schedule_interval(self._low_watchdog, 0.1)
+        return capture
+
+    def _low_watchdog(self, _dt):
+        capture = getattr(self, "_low_capture", None)
+        if capture is None or not capture.active:
+            return False
+        if capture.expired():
+            self._low_interrupt("watchdog_timeout")
+            return False
+        if capture.mode == "fixed_five" and capture.complete():
+            self._finish_render_sample(0)
+            return False
+        return True
+
+    def _low_freeze(self, reason=None):
+        from ..bench.low_runtime import ACTIVE
+        capture = getattr(self, "_low_capture", None)
+        if capture is None or not capture.active:
+            return
+        capture.freeze(reason)
+        if getattr(self.game, "_low_capture", None) is capture:
+            self.game._low_capture = None
+        if ACTIVE[0] is capture:
+            ACTIVE[0] = None
+        for name in ("_low_watch_evt", "_low_launch_evt"):
+            evt = getattr(self, name, None)
+            if evt is not None:
+                evt.cancel()
+                setattr(self, name, None)
+
+    def _low_restore_fixed(self):
+        evt = getattr(self, "_auto_evt", None)
+        if evt is not None:
+            evt.cancel()
+            self._auto_evt = None
+        _bench_restore_cpu_affinity(getattr(self, "_render_aff_before", None))
+        self._render_aff_before = None
+        _cpufreq_stop()
+        _bench_fps_lock_off()
+        _TEXUPD_ACTIVE[0] = False
+        import gc
+        try:
+            gc.callbacks.remove(self._bench_gc_cb)
+        except ValueError:
+            pass
+        fx = getattr(self.game_area, "win_fx", None)
+        if fx is not None:
+            fx._low_scene = None
+        self._bench_restore_board()
+        if getattr(self, "_bench_rng_state", None) is not None:
+            random.setstate(self._bench_rng_state)
+            self._bench_rng_state = None
+        if fx is not None and getattr(self, "_bench_pile_rng", None) is not None:
+            fx._rng = self._bench_pile_rng
+        self._bench_pile_rng = None
+        self.game._timers = [t for t in self.game._timers if t[1] <= getattr(self, "_low_timer_seq", -1)]
+        self._bench_counters_end()
+        if getattr(self, "_low_original_balance", None) is not None:
+            self._bench_set_balance(self._low_original_balance)
+            self._low_original_balance = None
+        self.game._low_no_save = False
+        self.game._bench_running = False
+        self.game._bench_start = 0.0
+        self._prog_stop()
+        _set_keep_awake(False)
+        self._act(self.game._controls, True)
+
+    def _low_interrupt(self, reason):
+        capture = getattr(self, "_low_capture", None)
+        if capture is None or not capture.active:
+            if self.game._bench_running and not getattr(self, "_phys_started", False):
+                self._low_restore_fixed()
+            return
+        self._low_freeze(reason)
+        Window.unbind(on_flip=self._on_flip)
+        if capture.mode == "fixed_five":
+            # Drop only diagnostic shot tasks; frozen wrappers reject late cup callbacks.
+            fx = self.game_area.win_fx
+            self.game._reveal_done = True
+            self.game._settle_cb = None
+            self.game._reveal_deadline = 0.0
+            fx._abort()
+            fx.tick()
+            self.game._anim_pending = False
+            self.game.park_ball(reroll=False)
+            self._low_restore_fixed()
+            _set_label_text(self.status_lbl, "采样无效：" + reason)
+        else:
+            _TEXUPD_ACTIVE[0] = False
+
+    def start_gameplay_capture(self, probe="light", watchdog_sec=120.0):
+        """Read-only normal-play capture; leaves input, board, RNG and affinity alone."""
+        from ..bench.low_runtime import ACTIVE
+        if self.game._bench_running or ACTIVE[0] is not None:
+            return False
+        self._flip_times, self._bench_frames, self._bench_tex = [], [], []
+        self._bench_cpu_prev = time.process_time()
+        self._bench_thr_prev = _THREAD_TIME()
+        self._bench_tex_prev = _TEXUPD[0]
+        _FRAME_BRK.clear()
+        _FRAME_SELF[0] = _FRAME_SWAP[0] = 0.0
+        _TEXUPD_ACTIVE[0] = probe == "full"
+        self._low_begin("normal", probe, watchdog_sec)
+        Window.bind(on_flip=self._on_flip)
+        return True
+
+    def stop_gameplay_capture(self):
+        capture = getattr(self, "_low_capture", None)
+        if capture is not None and capture.active and capture.mode == "normal":
+            self._low_freeze()
+            Window.unbind(on_flip=self._on_flip)
+            _TEXUPD_ACTIVE[0] = False
+
+    def export_low_capture(self, path):
+        capture = getattr(self, "_low_capture", None)
+        if capture is None:
+            raise RuntimeError("no capture")
+        capture.export(path)
+        return path
+
+    def _show_low_capture_menu(self):
+        content = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(12))
+        popup = self._popup(0.92, 360, title="应用侧帧采样", content=content)
+        actions = [("五发轻采样（不锁核）", lambda: self._start_bench_test(True, "light", False)),
+                   ("五发完整诊断（不锁核）", lambda: self._start_bench_test(True, "full", False)),
+                   ("普通游玩开始轻采样", lambda: self.start_gameplay_capture()),
+                   ("普通游玩结束采样", self.stop_gameplay_capture),
+                   ("导出具名 JSON", self._low_export_menu)]
+        for label, action in actions:
+            btn = Button(text=label, size_hint_y=None, height=dp(48))
+            btn.bind(on_release=lambda *_, action=action: (popup.dismiss(), action()))
+            content.add_widget(btn)
+        popup.open()
+        self._popup_fit_content(popup, content)
+
+    def _low_export_menu(self):
+        import os
+        from kivy.app import App
+        try:
+            if getattr(self, "_low_capture", None) is None:
+                raise RuntimeError("尚无采样")
+            path = os.path.join(App.get_running_app().user_data_dir,
+                                "low_" + self._low_capture.meta["session_id"] + ".json")
+            self.export_low_capture(path)
+            _set_label_text(self.status_lbl, "采样已保存：" + path)
+        except RuntimeError as exc:
+            _set_label_text(self.status_lbl, str(exc))
 
     def _bench_gc_cb(self, phase, info):
         """量每一次 GC 的耗时。安卓上 GC 停顿直接表现为掉帧, 而本工程从来没调过 gc。"""
@@ -1818,6 +1999,13 @@ class BenchMixin(object):
         #    直接落进 1%Low 那一档(那档只有 6~10 帧)。
         #    ⚠️ 别顺手把**别处**的 `time.time()` 也换掉 —— 动画时间轴要的就是墙钟绝对值
         #    (切后台回来"直接跳终态"依赖它), 那个语义是对的。
+        capture = getattr(self, "_low_capture", None)
+        if capture is None or not capture.active:
+            return
+        if len(self._flip_times) >= capture.max_records:
+            capture.lost += 1
+            self._low_interrupt("buffer_overflow")
+            return
         now = time.perf_counter()
         cpu = time.process_time()
         # ⚠️ **这一格必须真的写**: `_FRAME_THR[0]` 曾经只有"读进帧记录"和"面板打印",
@@ -1831,6 +2019,10 @@ class BenchMixin(object):
         pcpu = self._bench_cpu_prev
         self._bench_cpu_prev = cpu
         self._flip_times.append(now)
+        capture = getattr(self, "_low_capture", None)
+        if capture is not None and capture.active:
+            capture.flip(self._bench_tag(), _FRAME_THR[0], (cpu-pcpu)*1000.0,
+                         dict((k, v*1000.0) for k, v in _FRAME_BRK.items()) if capture.probe == "full" else None)
         if prev is not None:
             # ⚠️ 第三个字段是**这一帧真的烧了多少 CPU**(process_time 差)。
             #    光知道"当时在飞行"不够, 必须能分清它是**算出来的**(实算接近帧间隔 ⇒ 处理器
@@ -1875,6 +2067,7 @@ class BenchMixin(object):
             #    执行, 跑在 `_frame` 外面) —— 所以它落在"那一笔账被还上"的那一帧。
             self._bench_tex.append(_TEXUPD[0] - self._bench_tex_prev)
             self._bench_tex_prev = _TEXUPD[0]
+        _FRAME_SELF[0] = 0.0
 
     def _auto_launch_tick(self, dt):
         # ⚠️ 这里逐句埋点(`_brk_add`): 真机抓到过一个 55.92 毫秒的帧 —— **整个
@@ -1883,36 +2076,17 @@ class BenchMixin(object):
         # ⚠️ `_brk_add` 只在跑分采样期有意义(平时 `_FRAME_BRK` 没人读), 但这几句本身就是一次
         #    `perf_counter` + 一次字典累加, 比它包住的赋值贵不了多少, 不另加开关。
         _ta = time.perf_counter()
+        capture = getattr(self, "_low_capture", None)
+        if capture is None or not capture.active:
+            return False
+        if capture.expired():
+            self._low_interrupt("watchdog_timeout")
+            return False
         if self._launch_count >= self._target_launches:
-            # ⚠️⚠️ **必须等最后一发的「飞行」飞完才关窗口 —— 一到这里就关是错的。**
-            #
-            #    【病象】跑分明明发了 5 发, 采样窗口里却只有 **4 发**的完整飞行,
-            #      而面板印的「每次飞行平均持续」就是拿这 4 发算的。
-            #    【根因】`_launch_count += 1` 是在 `start_charge()` 那一刻(球 0.1 秒后才真的
-            #      `launch()`), 所以第 5 发**还在蓄力**计数就到 5 ⇒ 下一个 tick 就关窗口。
-            #      真机日志两头都印证: `蓄力→飞行` 只切换 **4** 次, 且窗口最后 12 帧**全是蓄力**。
-            #    ⚠️ **只把计数挪到 `launch()` 是不够的**: 那样第 5 发的飞行会被**截一半**就关窗,
-            #      而 `_flight_segments()` 会收尾段 ⇒ 一个残缺的段进了均值, 反而把均值**拉低**。
-            #      ⇒ 只有"等它飞完"才两条都对(5 段完整 + 窗口天然延长约一个飞行周期)。
-            #    ⚠️ 判据取 `state` 离开 flying/landing: 蓄力期两边都不满足 ⇒ 继续等;
-            #      起飞后 `_last_ball_flew` 置真; 落袋结束后才真的关。
-            #    ⚠️ **`misfire` 也算"飞出去了"** —— 哑火也是真的发射过(球飞不出竖井),
-            #      不认它就会一直等下去。跑分固定 power=0.8 不该哑火, 但这是**别人的状态机**,
-            #      不能靠"应该不会"来兜。
-            #    ⚠️⚠️ **兜底(绝不软锁)**: 万一状态机没按预期走(状态名变了 / 异常 / 球永远不落地),
-            #      最多等 `_LAST_BALL_MAX_WAIT` 秒就把窗口关掉 —— **少一段总比卡死强**。
-            #      跑分链上卡死 = 玩家点完跑分界面再也回不来, 这是工程红线。
-            _st = getattr(self.game, "state", "")
-            if _st in ("flying", "landing", "misfire"):
-                self._last_ball_flew = True          # 第 5 发真的飞出去了
-                return
-            if getattr(self, "_last_ball_flew", False):
+            if capture.complete():
                 self._finish_render_sample(0)
-                return
-            if self._last_wait_t0 <= 0.0:
-                self._last_wait_t0 = time.perf_counter()
-            elif time.perf_counter() - self._last_wait_t0 > _LAST_BALL_MAX_WAIT:
-                self._finish_render_sample(0)
+            return
+        if capture.shot and capture.shot["state"] != "visual_finished":
             return
         if self.game.state == "ready":
             # ⚠️ **跑分: 把这一发的盘面钉死**(见 `BENCH_BOARD`)。必须放在 `start_charge()`
@@ -1922,6 +2096,11 @@ class BenchMixin(object):
             _tb = time.perf_counter()
             try:
                 _bi = self._launch_count
+                capture.plan(BENCH_BOARD[_bi], variant=_bi + 1,
+                             seed=BENCH_SEED + 2000 + _bi)
+                capture.scheduled()
+                self.game_area.win_fx._low_scene = dict(
+                    capture=capture, pile_variant=_bi + 1, seed=BENCH_SEED + 2000 + _bi)
                 self.game._bench_ball_i = _bi      # 给 `launch()` 派生碰撞随机流用
                 if 0 <= _bi < len(BENCH_BOARD):
                     self.game.multipliers = [BENCH_BOARD[_bi]] * NUM_SLOTS
@@ -1935,8 +2114,14 @@ class BenchMixin(object):
             _brk_add("发·起蓄", _tc)
             self._launch_count += 1
             _td = time.perf_counter()
-            Clock.schedule_once(lambda _: (setattr(self.game, "power", 0.8),
-                                           self.game.launch()), 0.1)
+            def _launch(_dt):
+                if not capture.active:
+                    return
+                self.game.power = 0.8
+                self.game.launch()
+                if capture.shot["state"] != "launched":
+                    self._low_interrupt("launch_failed")
+            self._low_launch_evt = Clock.schedule_once(_launch, 0.1)
             _brk_add("发·排程", _td)
         _brk_add("发·整段", _ta)
 
@@ -1945,7 +2130,12 @@ class BenchMixin(object):
         if getattr(self, "_auto_evt", None):
             self._auto_evt.cancel()
             self._auto_evt = None
+        self._low_freeze()
         Window.unbind(on_flip=self._on_flip)
+        if not self._low_capture.summary["valid"]:
+            self._low_restore_fixed()
+            _set_label_text(self.status_lbl, "采样无效：" + ",".join(self._low_capture.reasons))
+            return
         # 主渲染线程的锁核只属于帧率采样窗口；后续物理跑分会在它自己的工作线程上单独锁核。
         _render_aff_before = getattr(self, "_render_aff_before", None)
         self._render_aff_before = None
@@ -2003,7 +2193,17 @@ class BenchMixin(object):
         _cpufreq_stop()
         self._bench_diag = self._bench_collect_diag()
         _TEXUPD_ACTIVE[0] = False
-        self._wait_idle_then_bench()
+        from ..bench.low_metrics import compute_metrics
+        metrics = compute_metrics(self._render_gaps_ms)
+        self._render_fps = metrics["average_fps"]
+        self._render_1low = metrics["low_1pct_fps"]
+        self._render_lows[1] = self._render_1low
+        if getattr(self, "_low_render_only", False):
+            self._low_restore_fixed()
+            _set_label_text(self.status_lbl, "五发采样完成，可在采样菜单导出")
+        else:
+            self.game._low_no_save = False
+            self._wait_idle_then_bench()
 
     def _bench_hz_tick(self, _dt=0.0):
         """采样期每 0.5 秒记一次「当时在演什么 + 屏幕刷新率」。
@@ -2668,6 +2868,8 @@ class BenchMixin(object):
         #    之后 `park_ball` 就会重掷盘面, 这里要还的是"跑分之前那份", 不是"新掷的一份"。
         self._bench_restore_board()
         self.game._bench_running = False
+        self.game._low_no_save = False
+        self.game_area.win_fx._low_scene = None
         self.game._bench_start = 0.0
         # 把随机**原样还回去**: 不还的话正常游戏的球路会被钉死, 每局一模一样 ——
         # 那是比"跑分不可比"严重得多的事故。

@@ -54,6 +54,8 @@ except Exception:
 # ===========================================================================
 # 帧探针账本(老版 4495-4590 + 5957)
 # ===========================================================================
+from ..bench.low_runtime import ACTIVE
+
 _FRAME_BRK = {}                  # 本帧累计(会被 _on_flip 读走并清空)
 _BRK_KEYS = ("板面", "重掷", "字号", "装杯")
 _FRAME_CALLS = [0]               # `_frame` 被调了几次(与"采样了多少帧"比, 见面板"节拍"行)
@@ -80,6 +82,8 @@ _ON_DRAW_MS = [0.0]
 
 def _brk_add(tag, t0):
     """记一笔子步骤耗时(秒)。只在跑分采样期真读, 平时只是一次字典读改写。"""
+    if ACTIVE[0] is None or not ACTIVE[0].active or ACTIVE[0].probe != "full":
+        return
     d = _FRAME_BRK.get(tag)
     _FRAME_BRK[tag] = (d or 0.0) + (time.perf_counter() - t0)
 
@@ -93,6 +97,8 @@ def _brk_wrap(cls, attr, tag):
         return
 
     def f(*a, **k):
+        if ACTIVE[0] is None or not ACTIVE[0].active or ACTIVE[0].probe != "full":
+            return orig(*a, **k)
         t0 = time.perf_counter()
         try:
             return orig(*a, **k)
@@ -755,7 +761,8 @@ def _swap_wrap():
         return
 
     def flip(self, *a, **k):
-        if not _TEXUPD_ACTIVE[0]:
+        capture = ACTIVE[0]
+        if capture is None or not capture.active:
             return _orig(self, *a, **k)
         # ⚠️ **必须在 `_orig` 之前记** —— `_on_flip` 是在 `_orig` 里面被派发的,
         #    它读完 `_FRAME_BRK` 就清空; 记晚了这一帧就白记。
@@ -779,9 +786,16 @@ def _swap_wrap():
             _FRAME_END[0] = 0.0
         _t0 = time.perf_counter()
         try:
-            return _orig(self, *a, **k)
+            result = _orig(self, *a, **k)
+        except BaseException:
+            capture.invalidate("swap_failed")
+            raise
+        else:
+            capture.submit(_t0, time.perf_counter())
+            return result
         finally:
-            _FRAME_SWAP[0] = (time.perf_counter() - _t0) * 1000.0
+            _end = time.perf_counter()
+            _FRAME_SWAP[0] = (_end - _t0) * 1000.0
 
     flip._probe_wrapped = True
     try:
@@ -821,11 +835,18 @@ def _ondraw_wrap():
         return
 
     def on_draw(self, *a, **k):
-        if not _TEXUPD_ACTIVE[0]:
+        capture = ACTIVE[0]
+        if capture is None or not capture.active:
             return _orig(self, *a, **k)
         _t0 = time.perf_counter()
         try:
-            return _orig(self, *a, **k)
+            result = _orig(self, *a, **k)
+        except BaseException:
+            capture.invalidate("draw_failed")
+            raise
+        else:
+            capture.draw()
+            return result
         finally:
             _ON_DRAW_MS[0] = (time.perf_counter() - _t0) * 1000.0
             _brk_add("尾·on_draw", _t0)
@@ -917,7 +938,7 @@ def _loopseg_wrap():
             return
 
         def f(self, *a, **k):
-            if not _TEXUPD_ACTIVE[0]:
+            if not _TEXUPD_ACTIVE[0] or ACTIVE[0] is None or ACTIVE[0].probe != "full":
                 return _orig(self, *a, **k)
             on = gate() if gate else _LOOPSEG_ON[0]
             if not on:
@@ -972,6 +993,8 @@ def _clock_wrap():
             return
 
         def tick(self, *a, **k):
+            if ACTIVE[0] is not None and ACTIVE[0].active:
+                ACTIVE[0].loop_id += 1
             try:
                 return _corig(self, *a, **k)
             finally:

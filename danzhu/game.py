@@ -449,11 +449,24 @@ class Game(object):
            ⚠️ `set_bet` / `set_rtp` / `toggle_mute` 那三处**仍然单独发 `restyle_buttons`** ——
               它们不走 `_set_controls_enabled`, 底色的重刷只能靠那条事件。别顺手把它们删了。
         """
+        capture = getattr(self, "_low_capture", None)
+        if enabled and capture is not None and capture.active and capture.mode == "fixed_five":
+            enabled = False
         self._controls_enabled = bool(enabled)
         self._emit("controls", {"enabled": bool(enabled)})
 
     # ---- 定时器(老版 Clock.schedule_once 的等价物) ----
     def _schedule(self, cb, delay):
+        _capture = getattr(self, "_low_capture", None)
+        if _capture is not None and _capture.active and getattr(cb, "__name__", "") == "_refresh_stats":
+            _capture.task("stats", True)
+            _original = cb
+            _capture_shot = _capture.shot
+            def cb():
+                if not _capture.active and _capture.mode == "fixed_five":
+                    return
+                _original()
+                _capture.task("stats", False, _capture_shot)
         self._timer_seq += 1
         self._timers.append((self.now + delay, self._timer_seq, cb))
 
@@ -768,6 +781,11 @@ class Game(object):
         # ⚠️ 老版在这里有 `_SINCE_LAUNCH[0] = 0`(帧探针账本, 判"最差帧是不是紧跟在发射后")。
         #    那是 UI 侧的账本, 本模块不该 import 它 —— 所以**只发事件**, 由 UI 的派发器清零。
         #    位置等价: 老版那句在状态守卫之后、哑火分支**之前**(哑火也清), 所以事件也发在这里。
+        _capture = getattr(self, "_low_capture", None)
+        if _capture is not None and not _capture.active:
+            _capture = None
+        if _capture is not None and _capture.active:
+            _capture.launched()
         self._emit("launch")
         if self.power < MISFIRE_POWER:
             # 哑火: 球照样弹出去, 只是升不过隔墙顶 -> 掉回柱塞。不扣弹珠、不计一局、不换盘面
@@ -891,6 +909,12 @@ class Game(object):
     # =====================================================================
     def settle(self, i):
         """落袋结算。`_frame` 在**第一次触地**那一刻调, `_settled` 守重复。"""
+        _capture = getattr(self, "_low_capture", None)
+        if _capture is not None and not _capture.active:
+            _capture = None
+        if _capture is not None and _capture.active:
+            _capture.settled(self.multipliers[i])
+        _capture_shot = _capture.shot if _capture is not None else None
         before = self.balance
         easter = bool(getattr(self, "_easter_egg", False))
         if easter:
@@ -948,9 +972,13 @@ class Game(object):
             def _on_settled():
                 # 揭晓 + 语音同拍: 数字和声音一起给。顺序不能反 —— 先立大字再响。
                 # `seq != self._win_seq` 说明这是**上一局**的迟到回调, 直接丢弃。
+                if (_capture is not None and not _capture.active and _capture.mode == "fixed_five"):
+                    return
                 if self._reveal_done or seq != self._win_seq:
                     return
                 self._reveal_done = True
+                if _capture is not None and _capture.active:
+                    _capture.event("revealed")
                 self._reveal_win(m, payout)      # 内部自带 try/except
                 self._play_win_voice(m, payout)
 
@@ -960,7 +988,14 @@ class Game(object):
             #    **上一轮残留的非零 deadline** 会在这 0.15s 窗口里让兜底提前开火(= 提前剧透)。
             self._reveal_deadline = 0.0
 
+            if _capture is not None and _capture.active:
+                _capture.task("delayed_cup", True, _capture_shot)
+
             def _start_cup():
+                if _capture is not None:
+                    if not _capture.active and _capture.mode == "fixed_five":
+                        return
+                    _capture.task("delayed_cup", False, _capture_shot)
                 # auto_close: **跑分期间**不等玩家点击(跑分是自动连续发射的, 等人点击会把
                 # 整轮跑分卡死); 正常玩则停在装满状态等点击。
                 if not self._fx.play_win(m, self.bet, on_done=_on_settled,
@@ -1603,6 +1638,9 @@ class Game(object):
         ⚠️ 兜底支**与老版逐字相同**：非原子写。原子性由工作线程那一支负责
            （临时文件 + `os.replace`），兜底支不负责 —— 老版那条路就是 `open(path,"w")`。
         """
+        # Fixed diagnostic shots must not persist their temporary settlement.
+        if getattr(self, "_low_no_save", False):
+            return
         if self._config_path is None:
             return
         try:

@@ -844,16 +844,26 @@ class WinPileFX(Widget):
                 pass
         try:
             self._value = bet if bet in BET_COLORS else DEFAULT_BET
-            self._seq += 1
-            # ⚠️ 跑分: **装杯内部的下落时序也要确定** —— 种子按**倍率**派生(跑分那 5 发的倍率
-            #    钉死) ⇒ 每次跑分每一发的杯子完全一样。
-            # ⚠️ `auto_close` 就是"这是跑分"的标志; **正常游戏照旧随机** —— 那是观感, 不能钉。
-            if auto_close:
-                try:
+            scenario = getattr(self, "_low_scene", None)
+            if scenario is None:
+                self._seq += 1
+                if auto_close:
                     self._rng = random.Random(BENCH_SEED + 2000 + int(multiplier))
-                except Exception:
-                    pass
-            self._make_balls(multiplier, self._value, self._seq)
+                self._make_balls(multiplier, self._value, self._seq)
+            else:
+                normal_rng = self._rng
+                try:
+                    self._rng = random.Random(scenario["seed"])
+                    self._make_balls(multiplier, self._value, scenario["pile_variant"])
+                    capture = scenario["capture"]
+                    capture.event("pile_started", ball_count=len(self._balls),
+                                  pile_variant=scenario["pile_variant"], seed=scenario["seed"],
+                                  entry_order=[b["i"] for b in self._balls],
+                                  ball_timing=[{k: b[k] for k in ("i", "t0", "f", "t1", "t2", "end")}
+                                               for b in self._balls],
+                                  last_touch_s=self._last_touch, last_settle_s=self._last_settle)
+                finally:
+                    self._rng = normal_rng
         except Exception as exc:               # build_pile 的断言/任何意外
             print("CUP-PILE FAIL: %s" % exc)
             self._balls = []
@@ -921,6 +931,9 @@ class WinPileFX(Widget):
             return 0.0
 
     def _abort(self):
+        scenario = getattr(self, "_low_scene", None)
+        if scenario and scenario["capture"].active:
+            scenario["capture"].invalidate("pile_aborted")
         self.mode = "idle"
         self._balls = []
         self._closing_at = 0.0             # 清干净: 别留半局状态给下一局

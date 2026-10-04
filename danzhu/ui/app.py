@@ -281,6 +281,7 @@ class PlinkoApp(App):
 
     # ---- Android 生命周期 ----
     def on_pause(self):
+        self.rootw._low_interrupt("paused")
         try:
             self.rootw.sfx.pause_out()       # 切后台静音(SoundPool.autoPause)
         except Exception:
@@ -309,6 +310,7 @@ class PlinkoApp(App):
         return True
 
     def on_stop(self):
+        self.rootw._low_interrupt("stopped")
         try:
             self.rootw.sfx.close()
         except Exception:

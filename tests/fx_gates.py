@@ -726,8 +726,8 @@ def main():
     body = m_frame.group(1) if m_frame else ""
     check("_sync_hud_dim()" in body,
           "_frame 每帧调 _sync_hud_dim(不调 = 压暗层永远停在 0, 静默失效)")
-    check(body.find("_dispatch(_events)") >= 0
-          and body.find("_dispatch(_events)") < body.find("_sync_hud_dim()"),
+    check(body.find("_dispatch(_events, dt)") >= 0
+          and body.find("_dispatch(_events, dt)") < body.rfind("self._sync_hud_dim()"),
           "_sync_hud_dim 在 tick_draw **之后**(演出是靠 tick_draw 推进的; 放前面就晚一帧, "
           "退场结束那帧 HUD 会比板面多黑一整帧)")
 
@@ -1781,7 +1781,7 @@ def main():
     check("hex_rgb(VEIL_BG)" in veil_src and CFG.VEIL_BG != CFG.COL_BG,
           "启动页底色用 `VEIL_BG`(#0b1220), **不是**游戏的 `COL_BG` —— 两者不同是有意的:"
           "前者要和系统那两层对齐, 后者是游戏自己的背景")
-    check("_veil.tick(self.sfx.audio_ready())" in play_src,
+    check("_veil.tick(self.sfx.audio_ready() and self._glyph_ready_for_veil())" in play_src,
           "_frame 每帧驱动启动页(它自己不持有 Clock: 切后台回来直接跳终态, 不会冻在半路); "
           "**就绪判据由 `tick()` 给** —— 它还要管开场动画的最短停留与整页淡出, 所以 `_frame` "
           "不再自己看 `audio_ready()`")
@@ -2814,7 +2814,8 @@ def main():
     # 结构性: 埋点必须真的包在 swap 上, 且在采样闸门之内、在开跑时归零
     check("_cls.flip = flip" in text_src and "_cls = type(Window)" in text_src,
           "`_swap_wrap` 包的是 **类** 上的 `flip`(包实例属性撞不到 `self.flip()`)")
-    check("_FRAME_SWAP[0] = (time.perf_counter() - _t0) * 1000.0" in text_src,
+    check("_FRAME_SWAP[0] = (_end - _t0) * 1000.0" in text_src
+          and "capture.submit(_t0, time.perf_counter())" in text_src,
           "`Window.flip()` 的耗时真的被写进 `_FRAME_SWAP`")
     check("if not _TEXUPD_ACTIVE[0]:" in text_src,
           "埋点只在跑分采样期生效(平时不改变被测量的东西)")

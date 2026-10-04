@@ -61,6 +61,7 @@ from ..platform.device import _apply_fps_cap, _vibrate, _vibrate_double
 #    那几栏**静默失效**。`_restyle_buttons` / `_set_controls_enabled` / `_reflow_row_budget`
 #    / `_sync_hud_dim` / `_apply_row_budget` 等**布局那一半在 `ui/ui_base.py`(UiMixin)** ——
 #    本模块只调它们, 绝不重定义(重定义会因 MRO 靠前而**静默遮蔽**掉 UiMixin 的版本)。
+from ..bench.low_runtime import ACTIVE
 from .text import (_FRAME_CALLS, _FRAME_END, _FRAME_SELF, _SINCE_LAUNCH,
                    _TEXUPD_ACTIVE, _set_label_text)
 from .widgets import _land_layer
@@ -205,11 +206,21 @@ class PlayMixin(object):
         **这条线程**上花了多久", 不能把工作线程/Java 线程的 CPU 算进来。
         ⚠️ 包一层而不是改 `_frame` 内部: 那个函数里有提前 return, 内嵌计时容易漏。
         """
+        _capture = ACTIVE[0]
         _t0 = time.perf_counter()
+        _cpu0 = time.thread_time() if _capture is not None and _capture.active else 0.0
         try:
             self._frame(dt)
+        except BaseException:
+            if _capture is not None and _capture.active:
+                _capture.invalidate("frame_failed")
+            raise
         finally:
-            _FRAME_SELF[0] = (time.perf_counter() - _t0) * 1000.0
+            _wall = (time.perf_counter() - _t0) * 1000.0
+            _FRAME_SELF[0] += _wall
+            if _capture is not None and _capture.active:
+                _capture.frame_end(self.game, self.game_area, _wall,
+                                   (time.thread_time() - _cpu0) * 1000.0)
             _FRAME_CALLS[0] += 1
             _SINCE_LAUNCH[0] += 1
 
