@@ -2,7 +2,7 @@
 
 日期：2026-09-27。
 
-适用工程：`E:\AI_Tools\other\DanZhu\new_danzhu`。
+适用工程：`E:\AI_Tools\other\DanZhu_new\chonggou`（2026-10-13 由 `E:\AI_Tools\other\DanZhu\new_danzhu` 原地搬来，git 仓库/远程地址不变）。
 
 代码基线：`f5134263610ffec0245ba63e19c3e06f794d3fce`，应用版本 `0.8.131`。Android 打包配置为 Kivy `2.3.0`、p4a `v2024.01.21`，包含 arm64-v8a 与 armeabi-v7a。实施前重新核对实际构建产物中的版本，不能只看配置文件。
 

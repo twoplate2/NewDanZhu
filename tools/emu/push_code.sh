@@ -67,7 +67,9 @@ PY
 echo "=== 4) 打包 + 停应用 + 备份 + 覆盖 ==="
 ( cd "$BUILD" && tar -cf "$ROOT/temp/_push.tar" danzhu main.pyc p4a )
 "$ADB" shell "am force-stop $PKG" >/dev/null 2>&1; sleep 2
-"$ADB" push "E:/AI_Tools/other/DanZhu/new_danzhu/temp/_push.tar" /data/local/tmp/_push.tar >/dev/null 2>&1
+# ⚠️ 同上面 python 那条: adb 是 Windows 程序, 不认 `/e/...` ⇒ 必须 cygpath 转。
+#    (原先是写死的绝对路径, 2026-10-13 工程搬目录后失效 —— 改回 $ROOT 派生。)
+"$ADB" push "$(cygpath -m "$ROOT/temp/_push.tar")" /data/local/tmp/_push.tar >/dev/null 2>&1
 # ⚠️ 备份只在**第一次**做 —— 别把已推的新代码覆盖成"备份"
 if ! "$ADB" shell "run-as $PKG ls $APP/danzhu.bak074" >/dev/null 2>&1; then
   "$ADB" shell "run-as $PKG cp -r $APP/danzhu $APP/danzhu.bak074" && echo "  已备份到 danzhu.bak074"
