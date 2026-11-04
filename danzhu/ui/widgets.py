@@ -464,6 +464,7 @@ class GlyphLabel(Widget):
         #       那是"逐像素比对要可测"的要求, 不能被这条新路带跑。
         self._wait_bake = bool(wait_bake)
         self._wait_t0 = 0.0
+        self._wait_event = None
         self._rgba0 = tuple(color)
         self._glyph_alpha0 = float(self._rgba0[3])
         self._quads = None
@@ -487,6 +488,7 @@ class GlyphLabel(Widget):
         """
         if self._degraded:
             return
+        self._stop_glyph_wait()
         self._degraded = True
         _GLYPH_MISS[0] += 1
         # ⚠️ 诊断: 退化是**静默**的(收益归零、不报错), 而 2026-09-27 玩家报的「余额显示延后」
@@ -505,14 +507,29 @@ class GlyphLabel(Widget):
             self._fb.bind(size=lambda w, _: setattr(w, "text_size", w.size))
             if self.fit_box:
                 self._fb.size = self.size
-                self._fb.pos = (0.0, 0.0)
+                self._fb.pos = self.pos
                 self.bind(size=lambda *a: setattr(self._fb, "size", self.size))
+                self.bind(pos=lambda *a: setattr(self._fb, "pos", self.pos))
             else:
                 self._fb.center = self.center
                 self.bind(center=lambda *a: setattr(self._fb, "center", self.center))
             self.add_widget(self._fb)
         except Exception:
             pass
+
+    def _stop_glyph_wait(self):
+        if self._wait_event is not None:
+            self._wait_event.cancel()
+            self._wait_event = None
+        if self in _GLYPH_WAITERS:
+            _GLYPH_WAITERS.remove(self)
+        self._wait_t0 = 0.0
+
+    def _glyph_wait_expired(self, _dt):
+        # text/font_size 不变时不会再触发 _glyph_sync，必须主动唤醒。
+        self._wait_event = None
+        self._wait_bake = False
+        self._glyph_sync()
 
     def _glyph_sync(self, *_a):
         # ⚠️ **只在这里**还原画布颜色。淡出会改它的 alpha(`_fx_fade_set`), 放到 `_glyph_place`
@@ -546,11 +563,13 @@ class GlyphLabel(Widget):
                 if self._wait_t0 <= 0.0:
                     self._wait_t0 = time.time()
                     _GLYPH_WAITERS.append(self)
+                    self._wait_event = Clock.schedule_once(
+                        self._glyph_wait_expired, _GLYPH_WAIT_MAX)
                 if time.time() - self._wait_t0 < _GLYPH_WAIT_MAX:
                     return
             self._degrade()
             return
-        self._wait_t0 = 0.0
+        self._stop_glyph_wait()
         self._quads, self._text_w = _q
         _GLYPH_HIT[0] += 1
         self._glyph_place()

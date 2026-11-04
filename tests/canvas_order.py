@@ -34,13 +34,13 @@ for _s in (sys.stdout, sys.stderr):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-OLD_MAIN = r"E:\AI_Tools\other\DanZhu\android\main.py"
+OLD_MAIN = os.path.join(os.path.dirname(os.path.dirname(HERE)), "base", "main.py")
 
 # 发画布指令的画布类 + 把静态元素画出来的几何助手 + 会改画布的兄弟方法
 CANVAS_NAMES = (
     "Rectangle", "Ellipse", "Line", "Color", "PushMatrix", "PopMatrix", "Rotate",
     "StencilPush", "StencilPop", "StencilUse", "StencilUnUse", "RoundedRectangle",
-    "Matrix", "BindTexture",
+    "Matrix", "BindTexture", "Mesh",
     "_rect", "_circle", "_update_slots",
 )
 

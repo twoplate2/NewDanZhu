@@ -82,7 +82,7 @@ for _s in (sys.stdout, sys.stderr):
 HERE = os.path.dirname(os.path.abspath(__file__))
 GOLDEN = os.path.join(HERE, "golden")
 GOLDEN_OLD = os.path.join(GOLDEN, "trace_old.json")
-OLD_MAIN = r"E:\AI_Tools\other\DanZhu\android\main.py"
+OLD_MAIN = os.path.join(os.path.dirname(os.path.dirname(HERE)), "base", "main.py")
 
 # 每帧恰好推一个物理步: 老版 `_frame` 用累加器攒 `FIXED_DT=1/60`, dt 给 1/60 就一帧一步,
 # 而且永远碰不到"一帧里跑两个物理步"那条会掀翻落袋分支的路子。

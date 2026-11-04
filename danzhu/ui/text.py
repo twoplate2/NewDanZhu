@@ -210,7 +210,7 @@ def _set_label_text(label, text):
 def _hp_score(r):
     """一条 CPU 高压记录该显示的**跑分** = **平均数**(不是中位数)。
 
-    ⚠️ 与 `_hp_freq_line` 里那段注释同源: 频率/每秒窗口都是**双峰**样本(大部分时间在等
+    ⚠️ 频率/每秒窗口都是**双峰**样本(大部分时间在等
        vsync, 满窗口才冲睿频), 「中位数必然落在其中一个峰上」—— 报出来要么像全程低频、
        要么像全程满血。所以这里取平均。
     ⚠️ **三处口径必须同步**(列头 / 脚注 / 详情正文), 只改一处就会出现"表头写平均数、
@@ -1166,24 +1166,7 @@ def text_px(text, fs, bold=False, base=None, ctx=None, force=False):
 # ⚠️ 缓存**不设超大**: 上限到了整体清空(与 `_FIT_PX` 同策)。
 _FIT_SIZE_PX = {}
 
-# 字号**量化网格**(px)。
-# ⚠️ 为什么必须量化: "碰一个新字号"在 Kivy 里 = **重新打开一次 TTF 字形表**(桌面实测
-#    **26 毫秒**), 而 `fit_font_size` 的二分支会返回 `10.65` 这种任意值。
-# ⚠️ 网格别调粗: 1px 网格在 360dp + 小字号(10~12px)上会有约 8% 的字号跳变, 就开始看得出了。
-_FIT_GRID = 0.5
-
-
-def _qfs(x):
-    """把一个字号落到量化网格上。
-
-    ⚠️ **2026-09-14: 已停止使用(保留函数只为别处引用不报错)。**
-    为什么回退: 真机上 `sp(N)` 是 `N x 密度` 的**非整数**, 落网格后挪了最多 0.25px ——
-    而 Kivy 的字体缓存**按精确字号索引**, 于是和启动期预热/布局烘出来的字号**对不上**,
-    每次挑字号都变成一次冷开字形表 ⇒ 主线程变忙 ⇒ 物理 benchmark 拿到的 GIL 变少 ⇒
-    **纯 CPU 吞吐掉约 6%**。⚠️ 桌面当时测出来是**变快**, 因为桌面上 `sp(48)` 正好 = 48.0,
-    量化是空操作 —— **桌面测不到这个副作用**。
-    """
-    return round(x / _FIT_GRID) * _FIT_GRID
+# 字号保留精确值，确保布局与预热命中同一字体缓存。
 
 
 def fit_font_size(text, base_fs, avail_w, bold=False):
@@ -1250,8 +1233,7 @@ def ball_texture():
         (0.65, (202, 138, 4)), (0.82, (172, 108, 9)), (0.92, (128, 69, 8)),
         (0.965, (84, 42, 5)), (0.985, (46, 22, 3)), (0.99, (36, 16, 2)),
     ]
-    # 收窄边缘暗环那段, 与杯中球同一套参数。
-    stops = [(p if p <= 0.40 else 1.0 - (1.0 - p) * _BALL_RIM_K, c) for (p, c) in stops]
+    stops = [(p if p <= 0.40 else 1.0-(1.0-p)*_BALL_RIM_K, c) for p,c in stops]
     buf = bytearray(d * d * 4)
     for y in range(d):
         for x in range(d):
@@ -1303,10 +1285,10 @@ def ball_texture():
                     buf[i + 1] = int(buf[i + 1] + (band_c[1] - buf[i + 1]) * w)
                     buf[i + 2] = int(buf[i + 2] + (band_c[2] - buf[i + 2]) * w)
     # [高光已删] 只保留焦糖色带(球身径向渐变已够立体)
-    tex = Texture.create(size=(d, d), colorfmt="rgba")
+    tex = Texture.create(size=(d, d), colorfmt="rgba", mipmap=True)
     tex.blit_buffer(bytes(buf), colorfmt="rgba", bufferfmt="ubyte")
     tex.mag_filter = "linear"
-    tex.min_filter = "linear"
+    tex.min_filter = "linear_mipmap_linear"
     _BALL_TEX = tex
     return tex
 
@@ -1354,6 +1336,12 @@ _GLYPH_WAIT_MAX = 3.0
 
 def _glyph_warm_done():
     return _GLYPH_WARM_DONE[0]
+
+
+def _glyph_finish_warm():
+    """正常完成或预热失败都唤醒标签；缺失的档位交给普通 Label 显示。"""
+    _GLYPH_WARM_DONE[0] = True
+    _glyph_flush_waiters()
 
 
 def _glyph_chars_ok(text):
@@ -1510,10 +1498,8 @@ def _glyph_keys_reachable(rw):
         # ⚠️⚠️ **(2026-09-27)** 这一段原来写作 `if _base > 0:` 包住整个循环。
         #   ⚠️ 起初以为根因是"布局期 `_fit_base` 还没装 ⇒ 一个档都不烘" —— **实测否掉了**:
         #      模拟器日志 `[GLYPH-KEYS] _fit_base=33.2500 width=140.0`, 两个都不是 0。
-        #   **真根因是时序**: 图集那一档挂在 `prebake_step` 链的**末尾**(winfx 最后一档),
-        #   从建标签到它烘完要 **3.35~3.99 秒**; 而加载页当时**只等音效**(`bus.py:audio_ready`)
-        #   ⇒ 玩家进游戏后看到几秒空白余额。修法在 `play.py:_glyph_ready_for_veil`
-        #   (加载页等图集收工), **不在这一段**。
+        #   图集曾排在特效预热之后，导致余额空白；让加载页等待整条链又拖慢了启动。
+        #   现在 `prebake_step` 优先处理字形，加载页只等待首屏文字可见。
         #   ⚠️ 下面这两个 `<= 0` 兜底**保留为纯防御**(挡"标签还没建好就枚举"的将来改动),
         #      取值与 `_mk_balance_lbl` 写死的那两个同源(`sp(19)` / `dp(80)`)。
         _lb = getattr(rw, "balance_lbl", None)
@@ -1538,8 +1524,7 @@ def _glyph_warm_step(area):
     if not _GLYPH_ON:
         # ⚠️ 开关关着也要置"跑完" —— 否则 `wait_bake` 的标签会以为图集永远在烘,
         #    一直等下去 ⇒ **余额行永久空白**。关着 = 这一档永远不会有, 该退化就退化。
-        _GLYPH_WARM_DONE[0] = True
-        _glyph_flush_waiters()
+        _glyph_finish_warm()
         return False
     _rw = getattr(area, "game", None)
     if getattr(_rw, "_glyph_keys", None) is None:
@@ -1555,13 +1540,12 @@ def _glyph_warm_step(area):
             _glyph_put(_fs, _bd, _r)
         return True
     # 全部烘完: 置标志 + 叫醒等待中的标签(它们那会儿还查不到这一档)。
-    _GLYPH_WARM_DONE[0] = True
     try:
         print("[GLYPH-WARM-DONE] n_keys=%d baked=%d hit=%d miss=%d"
               % (len(_keys), len(_GLYPH_ATLAS), _GLYPH_HIT[0], _GLYPH_MISS[0]))
     except Exception:
         pass
-    _glyph_flush_waiters()
+    _glyph_finish_warm()
     return False
 
 

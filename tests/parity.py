@@ -197,7 +197,7 @@ def _load_old():
     os.environ["KIVY_WINDOW"] = "mock"
     sys.argv = ["main", "--nosound"]
     spec = importlib.util.spec_from_file_location(
-        "oldmain", r"E:\AI_Tools\other\DanZhu\android\main.py")
+        "oldmain", os.path.join(os.path.dirname(os.path.dirname(HERE)), "base", "main.py"))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m

@@ -9,7 +9,7 @@
    `self.multipliers` / `self._bench_running` … 现在一律 `self.game.xxx`。跑分**驱动游戏**
    时走 `Game` 的公开口(`start_charge` / `launch` / `park_ball` / `_refresh_stats` /
    `_save_config`), **不许在本文件另起一套状态** —— 那是这个重构要消灭的东西。
-   `Game` 里与跑分相关的位: `_bench_running` / `_bench_ball_i` / `_bench_status_active` /
+   `Game` 里与跑分相关的位: `_bench_running` / `_bench_ball_i` /
    `_bench_start` / `_bench_triggered`(见 `danzhu/game.py` 的 `launch` / `park_ball` /
    `settle` / `_refresh_stats` / `_check_title_hold` 各处)。
    本 Mixin 只留**跑分自己的**状态(采样数组、黑屏开关、弹窗引用、`hp_history` 等)。
@@ -23,7 +23,7 @@
    `BenchMixin` 排在 `PlayMixin` 之前(MRO), 同名方法会**静默**盖掉输入锁(见 root.py 抬头)。
    `_on_flip` 不在禁止之列: 它是 `Window.bind(on_flip=...)` 的回调, 不是控件事件。
 
-⚠️ **格式化文本是判据, 不是文案**: `_prog_text` / `_hp_result_text` / `_hp_freq_line` /
+⚠️ **格式化文本是判据, 不是文案**: `_prog_text` / `_hp_result_text` /
    `_bench_score_text` / `_power_log_text` / `_bench_frame_log` / `_startup_log_text` /
    `_bench_low_summary_text` 里一个空格、一个单位、一个格式符都别动 —— 玩家是按这些字
    读数的, 改一个字符就是换了一次口径。
@@ -199,24 +199,7 @@ def _bench_menu_desc():
 class BenchMixin(object):
 
     # ---------------------------------------------------------------- 状态栏
-    def _show_bench_status(self, text):
-        """把跑分状态放在底部操作区正上方，复用统计栏而不遮住盘面。"""
-        self.game._bench_status_active = True
-        _set_label_text(self.stats_lbl, text.replace("\n", "　·　"))
-        self.stats_lbl.color = hex_rgb(COL_FIRE) + (1,)
-        fs = self._font_scale * self._ui_scale
-        self.stats_lbl.font_size = sp(16) * fs
-        self.stats_lbl._fit_base = self.stats_lbl.font_size
-        self._fit1(self.stats_lbl)
 
-    def _hide_bench_status(self):
-        self.game._bench_status_active = False
-        fs = self._font_scale * self._ui_scale
-        self.stats_lbl.font_size = sp(15) * fs
-        self.stats_lbl._fit_base = self.stats_lbl.font_size
-        # ⚠️ 走 `Game._refresh_stats()`(它产一条 `stats` 事件给界面) —— 统计口径的唯一真源
-        #    在 Game(plays/hits 都在那边), 本文件不许自己拼那行字。
-        self.game._refresh_stats()
 
     # ---------------------------------------------------------------- 黑屏
     def _show_bench_dim(self):
@@ -595,21 +578,6 @@ class BenchMixin(object):
         _d = 100.0 * (v[0] - v[-1]) / v[0] if v[0] > 0 else 0.0
         return v[0], v[-1], sv[0], sv[len(sv) // 2], _d
 
-    def _hp_freq_line(self):
-        """结果弹窗里那行 CPU 频率。
-
-        ⚠️ **口径取「平均」, 不取「中位」**: 频率采样是**双峰**的 —— 应用大部分时间在等
-           vsync, 调频器把核压在最低档, 满载窗口才冲到睿频。**中位数必然落在其中一个峰上**,
-           报出来要么像"全程低频"要么像"全程满血", 两个都不代表这段测试; 而**平均值**对应的
-           是平均功耗/发热 —— 正是这个高压测试想回答的问题。
-        ⚠️ 中位照旧印在**详情**的「频率分布」那一行, 也照旧存在记录里(`freq_p50`), 没有删。
-        ⚠️ 文案长度刻意与改前**一样**(「中位」→「平均」, 都是两字), 不动弹窗排版。
-        """
-        _f = getattr(self, "_hp_freq", None) or {}
-        if _f.get("mean"):
-            return ("平均 %dMHz（%d到%d）"
-                    % (_f["mean"], _f["min"], _f["max"]))
-        return "没采到（非安卓 / 读不到 sysfs）"
 
     def _hp_cpu_pin_line(self):
         """高压结果中如实显示**跑分只在哪几个核上跑**。
@@ -685,7 +653,7 @@ class BenchMixin(object):
                 _i = int(round(_tk * len(_w) / max(1.0, _sec)))
                 _idx.append(max(0, min(len(_w) - 1, _i)))
         _samples = " / ".join("%d" % _w[_i] for _i in _idx) if _idx else '—'
-        # 频率行: 口径取**平均**(与 `_hp_freq_line` 一致)。
+        # 频率行取平均，避免双峰样本的中位数只落在高频或低频的一端。
         _fm = int(d.get('freq_mean', 0) or 0)
         if _fm > 0:
             _freq = ("平均 %dMHz（%d到%d）"
@@ -1066,7 +1034,7 @@ class BenchMixin(object):
     def _calc_no_audio_ms(self, _veil, _tot_ms=0.0):
         """「无音频加载累计耗时」= **不必等音频就绪的话, 最早什么时候能进游戏**(ms)。
 
-        = `min(实际摘页时刻, max(加载页"演完"的实测时刻, 烘焙收工时刻))`
+        = `min(实际摘页时刻, max(加载页演完, 烘焙收工, 首屏文字就绪))`
           `_tot_ms` = 实际摘页时刻(启动时钟, 调用方在同一次测量里传进来; 0 = 不夹)
 
         ⚠️ **两边的每一项都是实测的, 不是拿常量算的**: 加载页那一项 =
@@ -1093,11 +1061,12 @@ class BenchMixin(object):
                     return 0.0
                 _vf = _t0b + VEIL_TITLE_MIN_SEC
             _bk = float(getattr(self.sfx, "_baked_at", 0.0) or 0.0) - _BOOT_T0
-            _v = max(_vf, _bk) * 1000.0
+            _glyph = float(getattr(_veil, "_glyph_ready_at_boot", 0.0) or 0.0)
+            _v = max(_vf, _bk, _glyph) * 1000.0
             if _tot_ms > 0.0:
                 _v = min(_v, _tot_ms)
-            _boot_log("frame", "无音频加载累计耗时 %.0f ms（加载页演完 %.0f / 烘焙收工 %.0f%s）"
-                      % (_v, _vf * 1000.0, _bk * 1000.0,
+            _boot_log("frame", "无音频加载累计耗时 %.0f ms（加载页演完 %.0f / 烘焙收工 %.0f / 首屏文字 %.0f%s）"
+                      % (_v, _vf * 1000.0, _bk * 1000.0, _glyph * 1000.0,
                          ("，夹在摘页 %.0f 之下" % _tot_ms) if _tot_ms > 0.0 else ""))
             return _v
         except Exception:
@@ -1674,7 +1643,6 @@ class BenchMixin(object):
         self._act(self.game._controls, False)
         # 渲染跑分不额外叠加中央红字或飘字：被测画面只保留正常游戏 HUD，
         # 这样 1% Low 与玩家实际发射时看到的负载完全一致。
-        self.game_area.hide_bench_badge()
         # ⚠️ **等启动预热跑完再采样**。采样窗口只有 7~12 秒, 而玩家是启动后 3 秒就长按标题
         #    开跑的 —— 真机上一个预热单步要 100~200 毫秒, 常常还没跑完。混进采样里会把
         #    1%Low 压下去, 而且量到的是**启动期**的数, 不是玩家平时玩的数。
@@ -1698,7 +1666,6 @@ class BenchMixin(object):
 
     def _start_benchmark(self):
         """阶段1: 真实屏幕采样(on_flip, 自动发球5发), 发满后停止采样，再测阶段2物理吞吐。"""
-        self.game_area.hide_bench_badge()
         self._flip_times = []
         # ---- 诊断: 光有"平均帧率/1%Low"没法定位卡在哪 ----
         self._bench_frames = []          # [(帧间隔ms, 场景标签, ...)]
@@ -1771,11 +1738,7 @@ class BenchMixin(object):
         _CFG_STAT[1] = 0.0
         _CFG_STAT[2] = 0
         self._bench_wall0 = time.time()
-        import gc
-        try:
-            gc.callbacks.append(self._bench_gc_cb)
-        except Exception:
-            pass
+        self._bench_gc_listen(True)
         # 阶段 1 测的是 Kivy 主渲染线程，不能像物理跑分那样在工作线程里锁。
         # 这里运行在主线程，且只覆盖 on_flip 采样窗口；采样结束会先恢复，再启动物理工作线程。
         self._render_aff_before = _bench_pin_fast_cpus() if getattr(self, "_low_pin_cpu", True) else None
@@ -1784,17 +1747,12 @@ class BenchMixin(object):
         Window.bind(on_flip=self._on_flip)
         self._launch_count = 0
         self._target_launches = BENCH_TARGET_LAUNCHES
-        # ⚠️ 「最后一发到底飞出去了没有」—— 关窗口要用(见 `_auto_launch_tick` 那段)。
-        #    不复位的话上一轮的残值会让下一轮**提前关窗**。
-        self._last_ball_flew = False
-        self._last_wait_t0 = 0.0
         # 只在跑分期间轮询；0.1 秒把每局结束到下一发的空档从最多 0.5 秒缩到最多 0.1 秒。
         # 回调只读状态，发射后立即离开 ready，不会重复触发或改变游戏物理。
         self._auto_evt = Clock.schedule_interval(self._auto_launch_tick, 0.1)
 
     def _low_begin(self, mode, probe="light", watchdog_sec=120.0):
         from ..bench.low_runtime import ACTIVE, Capture
-        import sys
         import kivy
         capture = Capture(mode=mode, probe=probe, watchdog_sec=watchdog_sec, clock=time.perf_counter,
             meta=dict(identity={"app_id": "unavailable", "version": _app_version(),
@@ -1849,11 +1807,7 @@ class BenchMixin(object):
         _cpufreq_stop()
         _bench_fps_lock_off()
         _TEXUPD_ACTIVE[0] = False
-        import gc
-        try:
-            gc.callbacks.remove(self._bench_gc_cb)
-        except ValueError:
-            pass
+        self._bench_gc_listen(False)
         fx = getattr(self.game_area, "win_fx", None)
         if fx is not None:
             fx._low_scene = None
@@ -1956,6 +1910,14 @@ class BenchMixin(object):
             _set_label_text(self.status_lbl, "采样已保存：" + path)
         except RuntimeError as exc:
             _set_label_text(self.status_lbl, str(exc))
+
+    def _bench_gc_listen(self, enabled):
+        """异常退出留下的回调也先清除，避免下一轮把 GC 次数和耗时重复统计。"""
+        import gc
+        while self._bench_gc_cb in gc.callbacks:
+            gc.callbacks.remove(self._bench_gc_cb)
+        if enabled:
+            gc.callbacks.append(self._bench_gc_cb)
 
     def _bench_gc_cb(self, phase, info):
         """量每一次 GC 的耗时。安卓上 GC 停顿直接表现为掉帧, 而本工程从来没调过 gc。"""
@@ -2225,11 +2187,7 @@ class BenchMixin(object):
 
     def _bench_collect_diag(self):
         """把采样到的原始帧信息整理成可读诊断。**只读采样结果, 不改任何行为。**"""
-        import gc
-        try:
-            gc.callbacks.remove(self._bench_gc_cb)
-        except Exception:
-            pass
+        self._bench_gc_listen(False)
         out = {}
         fr = list(getattr(self, "_bench_frames", []) or [])
         if not fr:
@@ -2661,7 +2619,6 @@ class BenchMixin(object):
         # ⚠️ 兜底再还一次(幂等, 重复调无害): `_run_benchmark` 的 `finally` 正常路径已经还过了,
         #    这里只是防那条路被绕过。
         self._bench_counters_end()
-        self.game_area.hide_bench_badge()
         # ⚠️ 撤黑屏。少了它, 波 1 跑完黑屏会一直挂在屏幕上。
         self._hide_bench_dim()
         # 结果计算已经开始, 此处读整场普通测试的终点温度;
@@ -4561,196 +4518,6 @@ class BenchMixin(object):
         popup.open()
         self._popup_fit_content(popup, content)
 
-    def _bench_diag_text(self):
-        """性能测试成绩面板的**诊断追加行**。
-
-        为什么要加: 原来的成绩只有"平均帧率 / 1%Low", 而玩家报的是"球在飞行的时候一卡一卡的"
-        —— 光看两个数**分不清卡在哪儿**: 是在飞行, 还是在装杯演出? 是处理器顶不住, 还是画面在拖?
-        ⚠️ 措辞一律用白话: 不用"p50/p99/墙钟/GC"这些行话, 直接说"一半的帧""内存回收停顿"
-           "在等画面 / 算不过来"。
-        任何一项取不到都返回空串, 面板与旧版逐字相同 —— 绝不让诊断把成绩挤没。"""
-        d = getattr(self, "_bench_diag", None)
-        if not d:
-            return ''
-        try:
-            parts = []
-            # "实算"= 那一帧真的烧掉的 CPU。它接近帧间隔就是**算出来的**(处理器瓶颈);
-            # 很小就是**等出来的**(GC/IO/显卡/驱动)。
-            # "实算"只在 >=1 毫秒时才带出来: 安卓是 Linux, process_time 有纳秒精度;
-            # 而 Windows 只有 15.6ms 精度, 桌面跑分里恒为 0.0, 纯噪声。
-            # ⚠️ `_FRAME_SELF`(自算) **只包了 `_frame`** —— 启动预热、方向守卫、进度提示
-            #    这些都跑在别的 Clock 回调里, 在它外面。所以"自算很小"**不等于**"我们没干活":
-            #    桌面实测那几帧 实算 62.5 而自算 0.1, 正是预热(球纹理烘焙)干的。
-            #    所以**预热帧必须直接标出来**, 否则会被误读成"主线程在等"。
-            def _frame_cell(_g, _t, _c, _h, _s, _b, _k=(), _i=-1):
-                # ⚠️ 占位符个数不同的分支**必须分开格式化** —— 写成
-                #    `('A' if c else 'B') % (g,t,c)` 会在一个分支抛 TypeError, 而外层
-                #    那个 except 会把它静默吞掉(面板诊断整块消失)。踩过一次了。
-                # **实算 / 主线程 / 自算** 三个数并排 —— "主线程"才是能看见 Kivy 渲染那一块的那一格。
-                if _c >= 1.0 or _s >= 1.0:
-                    _x = '%.0f毫秒(%s·实算%.1f·主线程%.1f·自算%.1f)' % (_g, _t, _c, _h, _s)
-                else:
-                    _x = '%.0f毫秒(%s)' % (_g, _t)
-                if _b:
-                    _x += '·预热'
-                # 本帧最大的两笔子步骤 —— **这是"那 9 毫秒到底花在哪"的直接答案**。
-                # ⚠️ 标签之间用 '/' 分隔而不是空格: 面板那一行本来就长, 空格会让它读不清哪里断开。
-                for _ms, _nm in (_k or ()):
-                    _x += '|%s%.1f' % (_nm, _ms)
-                if _i >= 0:
-                    _x += '@%d' % _i          # 在采样序列里的下标: 相邻=同一段忙碌
-                return _x
-            _w = []
-            for _it in d["worst"]:
-                _w.append(_frame_cell(_it[0], _it[1], _it[2],
-                                      (_it[3] if len(_it) > 3 else 0.0),
-                                      (_it[4] if len(_it) > 4 else 0.0),
-                                      (_it[5] if len(_it) > 5 else 0),
-                                      (_it[6] if len(_it) > 6 else ()),
-                                      (_it[7] if len(_it) > 7 else -1)))
-            w = '  '.join(_w)
-            parts.append('最慢三帧： ' + w)
-            _ord = ("飞行", "装杯", "落袋", "蓄力", "哑火", "待机")
-            gs = d["groups"]
-            # 带上帧数 —— 只印中位数的话, "待机 8 帧"的中位和"飞行 300 帧"的中位不可比,
-            # 而三个最慢帧里两个是待机。
-            seg = ['%s %.1f(%d帧)' % (t, gs[t][1], gs[t][0]) for t in _ord if t in gs]
-            if seg:
-                parts.append('各阶段每帧： ' + ' · '.join(seg) + ' 毫秒')
-            # 慢帧的节拍 + 当时在不在发声/震动。这一行是给"偶发长停顿"定位用的 ——
-            # 规则节拍指向时钟驱动, 不规则指向事件驱动; 而慢帧里发声/震动的占比
-            # 直接回答玩家那句"关掉音效就好了"到底是声音还是震动造成的。
-            # 发声/震动计数**独立一行、永远显示**。它有两个用途: ① 真机上把"偶发长停顿"归因到
-            # 声音还是震动(玩家唯一有因果力的线索是"关掉音效 1% low 就回升", 而那会**连震动
-            # 一起关掉**, 混在一起分不开); ② **自证探针在工作** —— 看到"全程发声 N 次"就知道
-            # 计数器真跑了, 否则"慢帧里 0 帧在发声"既可能是真的、也可能是计数器根本没跑。
-            # 后端名并到发声那行(它只跟发声有关)。
-            _wn = d.get("snd_worst_name", "")
-            parts.append('发声： %d 次 · 单次最慢 %.1f 毫秒%s · 累计 %.0f 毫秒'
-                         ' · 超%.0f毫秒 %d 次（后端 %s）'
-                         % (d.get("snd_n", 0), d.get("snd_worst", 0.0),
-                            ('（%s）' % _wn) if _wn else '',
-                            d.get("snd_sum", 0.0), SND_SLOW_MS,
-                            d.get("snd_slow_n", 0), d.get("backend", "?")))
-            _vn = d.get("vib_worst_name", "")
-            parts.append('震动： %d 次 · 单次最慢 %.1f 毫秒%s · 累计 %.0f 毫秒'
-                         % (d.get("vib_n", 0), d.get("vib_worst", 0.0),
-                            ('（%s）' % _vn) if _vn else '',
-                            d.get("vib_sum", 0.0)))
-            # 方向守卫 / 沉浸重申那一行 —— 只在这两条链**真的跑过**时出(桌面是 0 次)。
-            # 它们**已搬到工作线程**, 所以这里报的是两档对比: 主线程那档该接近 0(证明真搬走了),
-            # 工作线程那档接手。
-            if d.get("jni_n"):
-                parts.append('方向守卫： %d 次（每0.7秒）· 主线程单次最慢 %.2f 毫秒 · 累计 %.1f 毫秒'
-                             '　工作线程累计 %.0f 毫秒（最慢 %.1f）· 失败 %d 次'
-                             % (d.get("jni_n", 0), d.get("jni_main_worst", 0.0),
-                                d.get("jni_main_sum", 0.0), d.get("jni_bg_sum", 0.0),
-                                d.get("jni_bg_worst", 0.0), d.get("jni_err", 0)))
-            # 系统栏那一次重申的**真实代价** —— 跑在 Java UI 线程上, 只有这里看得见。
-            # 判据: 单次 ≥5 毫秒 ⇒ 每 0.7 秒重申一次是在拿 UI 线程换一个系统本来就会自动隐藏
-            # 的东西(IMMERSIVE_STICKY 自己会收回), 那就该把周期拉长。
-            if d.get("ui_n"):
-                parts.append('系统栏重申： %d 次 · 单次最慢 %.1f 毫秒 · 累计 %.0f 毫秒（UI线程，不在主线程实算里）'
-                             % (d.get("ui_n", 0), d.get("ui_worst", 0.0),
-                                d.get("ui_sum", 0.0)))
-            # 慢帧那一行只在真有慢帧时出(它回答的是"停顿长什么样", 没停顿就没什么可说的)。
-            if d.get("slow2_n"):
-                # ⚠️ "几帧在预热"必须单独报 —— 那几帧是**启动期**的账, 与稳态卡顿不是一回事
-                #    (桌面实测: 最慢的 11 帧全在启动 0.6 秒内, 而那些帧我们自己的代码只花了
-                #    0.03~0.10 毫秒)。混在一起看会把"启动慢"误读成"玩起来卡"。
-                # ⚠️ 这里叫「长停顿」不叫「慢帧」: 「慢帧」已经被成绩面板占成「中位帧率 <75%」
-                #    (那一档有一百多帧), 而这一行说的是「≥2 倍中位帧时间」(<50%)。
-                #    **同一个词两个含义**正是本工程栽过的那类静默脱钩。
-                parts.append('长停顿： %d 帧≥%.0f毫秒（平均每 %.2f 秒一次）· 其中 %d 帧在发声'
-                             ' / %d 帧在震动 / %d 帧在启动预热'
-                             % (d["slow2_n"], d.get("slow2_ms", 25.0), d["slow_beat"] / 1000.0,
-                                d.get("slow_snd", 0), d.get("slow_vib", 0),
-                                d.get("slow_bake", 0)))
-            # 瓶颈判断: 每帧真正花在计算上的时间 vs 帧间隔。差得远 = 大头在等画面
-            #   (GPU 出图 / 垂直同步); 快追平 = 处理器就是瓶颈。
-            _cpu = float(d.get("cpu_per_frame", 0.0))
-            _p50 = float(d["p50"])
-            # ⚠️ **Windows 上这一整行不成立, 必须说清楚**: 本文件上面自己写着"Windows 的
-            #    `process_time` 精度只有 15.6ms, 桌面跑分里恒为 0.0, 纯噪声" —— 可"瓶颈"判断
-            #    仍然拿它去除帧间隔, 于是 PC 上会打出「处理器算不过来 · 每帧实算 18.4 / 帧间隔
-            #    16.5」这种**自相矛盾**的结论(同一份面板里"最慢三帧 20毫秒(待机·实算31.2)" ——
-            #    20 毫秒的帧不可能烧 31 毫秒, 那就是量化台阶本身)。
-            #    这正是本仓库警告过的那个形状: **一个专抓静默归因的面板, 自己在做静默归因**。
-            _win = (sys.platform == "win32")
-            if _win:
-                _v = "本机测不准"
-            elif _p50 > 0 and _cpu > 0:
-                _r = _cpu / _p50
-                # ⚠️ 第三档**故意不说"画面是瓶颈"**: 这一项只量"本进程烧了多少 CPU"。
-                #    "算得少、等得多"既可能是等显卡出图/等垂直同步, 也可能是**阻塞在系统调用上**
-                #    (Binder/JNI/文件IO) —— 本项**分不出这两者**。写死"画面"会把归因带偏。
-                #    要分清得靠"慢帧里在发声/震动吗"那一行。
-                _v = ("处理器算不过来" if _r >= 0.8
-                      else ("处理器比较吃紧" if _r >= 0.4 else "大头在等"))
-            else:
-                _v = "—"
-            # GC 那一栏后面挂上"最坏那次是哪一代" —— gen-2 全量回收与 gen-0 差一个量级,
-            # 不写清是哪一代, 读者没法判断这是"轻微抖动"还是"扫了整个对象图"。
-            _gn = {0: "轻度", 1: "中度", 2: "全量"}.get(d.get("gc_worst_gen", -1), "—")
-            # 三个数并排才能分流"谁在吃时间":
-            #   实算(全进程)大 · 主线程小 => 工作线程在忙;
-            #   主线程大 · _frame 小      => **Kivy 渲染 / 文字重排**在吃;
-            #   _frame 大                => 就是我们自己的代码。
-            _win_s = max(0.001, d.get("p50", 12.5) * max(1, d.get("n", 0)) / 1000.0)
-            # 节拍那一行 —— 直接回答"帧循环是不是自由跑": 比值 < 1 说明**呈现比逻辑更新更频繁**
-            # (有一批帧在白白占用呈现机会)。也顺手把 Kivy 的限速旋钮值打出来。
-            _fc = int(d.get("frame_calls", 0))
-            _hz, _cap, _mode_hz = _FPS_INFO[0], _FPS_INFO[1], _FPS_INFO[2]
-            _platform_rate = (' · Android模式请求 %s' %
-                              (('%.0fHz' % _mode_hz) if _mode_hz else
-                               ('%.0fHz（模式未知）' % _fps_user_cap()))
-                              if platform == "android" else ' · 桌面vsync跟随屏幕刷新率')
-            parts.append('节拍： 屏幕 %s · 帧率上限 %s · vsync=%s%s'
-                         ' · `_frame` %d 次 / 采样 %d 帧（比值 %.2f）'
-                         % (('%.0fHz' % _hz) if _hz else '没读到',
-                            ('%.0f' % _cap) if _cap else '不设(0)', d.get("vsync", "?"), _platform_rate, _fc,
-                            d.get("n", 0), _fc / float(max(1, d.get("n", 1)))))
-            # 内核态占比 —— 把这一个数当**分流器**: 高则查 JNI/Binder/文件写, 低则查 GIL。
-            # C6: 最差 20 帧是不是**紧跟在一次发射之后**? 是 ⇒ "每发才做一次的活"有罪;
-            # 铺开 ⇒ 无罪, 该往别处找。
-            _p = d.get("w20_pos") or []
-            if _p:
-                parts.append('最差20帧： 距上次发射 %d~%d 帧（中位 %d）· 其中 %d 帧在发射后 20 帧内'
-                             '　（铺开=与发射无关）' % (_p[0], _p[-1], _p[len(_p) // 2],
-                                                    d.get("w20_near", -1)))
-            parts.append('渲染设置： multisamples=%s（Kivy 默认 2 = 2x MSAA 全屏，每帧固定带宽成本）'
-                         % d.get("multisamples", "?"))
-            _u, _k = float(d.get("utime_ms", -1)), float(d.get("stime_ms", -1))
-            if _u >= 0 and (_u + _k) > 0:
-                parts.append('CPU 构成： 用户态 %.0f 毫秒 · 内核态 %.0f 毫秒（内核占 %.0f%%）'
-                             % (_u, _k, 100.0 * _k / (_u + _k)))
-            parts.append('瓶颈： %s · 每帧实算 %.1f / 主线程 %.1f（其中 _frame %.1f，最坏 %.1f）'
-                         '/ 帧间隔 %.1f 毫秒'
-                         ' · 内存回收 %.1f 毫秒（最坏一次 %.1f·%s）· 文字重排 %.1f 次/秒'
-                         % (_v, _cpu, d.get("thr_p50", 0.0), d.get("self_p50", 0.0),
-                            d.get("self_max", 0.0), _p50, d["gc_total"] * 1000.0,
-                            d["gc_worst"] * 1000.0, _gn, d.get("texupd", 0) / _win_s))
-            _tex_by = d.get("texupd_by") or []
-            if _tex_by:
-                parts.append('文字重排来源：' + ' · '.join('%s %d次' % (name, count)
-                                                       for name, count in _tex_by))
-            if d.get("cfg_n"):
-                parts.append('　存档落盘： %d 次（工作线程）· 单次最慢 %.1f 毫秒'
-                             % (d["cfg_n"], d.get("cfg_worst", 0.0)))
-            # 冻结生效与否**必须显示** —— 否则"GC 没再拖后腿"既可能是真冻结了, 也可能是根本
-            # 没跑到(这个仓库专门栽过这种静默)。
-            if d.get("gc_frozen"):
-                # 冻结**前后各强制做一次全量回收**的实测读数 —— 这是"冻结到底买到了什么"
-                # 在真机上的直接答案, 不用靠推断(桌面量不出来)。
-                parts.append('内存冻结： 已冻结 %d 个常驻对象 · 全量回收 %.1f -> %.1f 毫秒'
-                             % (d.get("gc_frozen", 0), d.get("gc_frz_before", 0.0),
-                                d.get("gc_frz_after", 0.0)))
-            if _win:
-                parts.append('⚠️ 每帧实算这一项在 Windows 上测不准(系统计时粒度 15.6 毫秒), '
-                             '「瓶颈」不判 —— 要看它请用安卓机的成绩')
-            return '\n'.join(parts)
-        except Exception:
-            return ''
 
     def _bench_low_summary_text(self, d=None):
         """成绩页默认只显示能指导 1% Low 优化的简短证据。
@@ -4853,179 +4620,142 @@ class BenchMixin(object):
         except Exception:
             return ''
 
-    def _show_hp_history(self):
-        """CPU 高压测试历史: **4 列**(时间 / 平均值 / 平均差系数 / 详情按钮)。
-
-        ⚠️ 与「测试历史」是**两张表**: 那一张是性能测试(峰值/帧率),
-           这一张是 CPU 高压(衰减/频率)。挤一张只会互相污染。
-
-        ⚠️⚠️ 本函数整体按 `_show_bench_history`**逐项照搬**(否则"两张表看着不像一套东西"):
-             ① **不做行数推算, 也不调 `_popup_fit_content`** —— 列表用
-                `ScrollView(size_hint=(1, 1))` 吃掉剩余高度, 面板高度由弹窗固定给(`0.7 * _vh`)。
-                记录少就下面留白、多了才滚动 ⇒ 高度与记录数**无关**。
-                ⚠️ 末尾那次 `_popup_fit_content` **必须没有**: 它把弹窗收到"内容最小高度",
-                   而 `ScrollView` 对 `minimum_height` 的贡献是 **0** ⇒ 列表会被压成 0 行。
-             ② **表头独立排版**(按自己文字宽度分列、整行居中) + **全表共用一个字号**。
-                表头因此**不调** `_fit_line`/`_fit1`, 字号由统一那段给。
-             ③ 行高 `dp(26)`、脚注 `_auto_h(foot, dp(44))`、底部**两个按钮**(清空历史 + 关闭)。
-        """
-        content = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(8))
-        title_lbl = self._fit_line(Label(text='CPU高压测试历史', bold=True,
-                                         halign='center', color=hex_rgb(COL_BALL) + (1,),
-                                         size_hint_y=None, height=dp(28)), 19)
-        content.add_widget(title_lbl)
-        # ⚠️ 跑分**从中位数改为平均数** ⇒ 列头跟着改。三处口径必须同步: 这里 / 脚注 / 详情正文。
-        _HP_COLS = ('时间', '平均值', '平均差系数')
-        if not self.hp_history:
-            # ⚠️ 空态**靠两根弹簧竖向居中**, 面板高度**不变**(与隔壁那张表逐字同款):
-            #    不能因为"有没有记录"让面板忽大忽小。真有问题也只是"空的时候字堆在底下",
-            #    而那该用**居中去解决, 不是改高度**。
-            content.add_widget(Widget(size_hint_y=1))          # 上弹簧
-            empty = Label(text='暂无 CPU 高压测试记录\n\n性能测试菜单里选「CPU高压测试」\n连续高压测试 %d 秒即可产生一条'
-                               % int(SOC_SUSTAIN_WALL_SEC),
-                          font_size='16sp', halign='center',
-                          color=hex_rgb(COL_SUB) + (1,), size_hint_y=None, height=dp(110))
-            empty.bind(size=lambda w, _: setattr(w, 'text_size', w.size))
-            content.add_widget(empty)
-            content.add_widget(Widget(size_hint_y=1))          # 下弹簧
-        else:
-            # 列宽与隔壁**同一套量法**(`text_px(文本, sp(14))`, 桌面密度 1 ⇒ px == dp):
-            #   时间 **113** · 平均值 `34652` **40** · 平均差系数 `2.14%` **41** · 「详情」**28**。
-            #   留出呼吸量 ⇒ 110/58/62/58 = **288dp**(隔壁三列是 110/92/88 = 290dp —— 同一张脸)。
-            # ⚠️ 上一版是 116/46/76/46: 中位数那格只剩 3px 边距, 真机上时间戳与它**糊成一片**
-            #    (玩家截图为证: `2026-09-15 23:06:34652`)。这次三格都留出 9px 以上。
-            # ⚠️ 窄屏按比例收(`_k`): `size_hint_x=None` 的子控件宽度不够时**不会自己缩**,
-            #    会直接**溢出弹窗**(就是"字飘在游戏画面上"那一类)。
-            _HW = (dp(110), dp(58), dp(62), dp(58))
-            # ⚠️⚠️ **宽度适配**: 原来 `_k = min(1.0, _tw_max / sum(_HW))` **只缩不放**, 于是平板
-            #    上表格还是 288dp、缩在中间两边各空一大截。⇒ 统一交给 `_fit_w()`: 宽屏按可用
-            #    宽度等比放大(夹 `_TW_GROW_MAX`)、窄屏收缩、**手机上保持 1.0**。
-            #    ⚠️ 分母是**基准** `sum(_HW)` —— 别拿缩放后的 `_HW` 再算一次(会自己乘自己)。
-            _tw_max, _k = self._fit_w(sum(_HW))
-            _HW = tuple(_w * _k for _w in _HW)
-            _table_w = sum(_HW)
-            # 表头**独立排版**: 各按自己文字的宽度分列, 整行居中(与隔壁同款)。
-            # ⚠️ 宽度按 `sp(14)` 量(不是裸 14.0 —— 那是**绝对 px**, density=2 的机器上只有一半大)。
-            _head_w = [min(_table_w / 4.0 * 1.6, max(dp(30), text_px(_t, sp(14) * _k) + dp(6)))
-                       for _t in _HP_COLS]
-            _hw_sum = sum(_head_w)
-            if _hw_sum > _table_w:
-                _head_w = [_w * _table_w / _hw_sum for _w in _head_w]
-                _hw_sum = _table_w
-            columns = BoxLayout(size_hint_x=None, size_hint_y=None, width=_hw_sum,
-                                height=dp(22) * _k, pos_hint={'center_x': 0.5})
-            _heads = []
-            for _t, _w in zip(_HP_COLS, _head_w):
-                h = Label(text=_t, halign='center', valign='middle',
-                          color=hex_rgb(COL_SUB) + (1,), size_hint_x=None)
-                h.width = _w
-                # ⚠️ 绑 `(w.width, None)` 而不是 `w.size`: 两维都给 ⇒ 宽度不够就**折行**,
-                #    而这一排只有 dp(22) 高, 第二行直接被顶出格子。
-                h.bind(size=lambda w, *_: setattr(w, 'text_size', (w.width, None)))
-                # ⚠️ **这里不调 `_fit_line`/`_fit1`** —— 表头要与数据行**同一个字号**,
-                #    统一由下面"全表共用一个字号"那段来定(单独缩表头就会出现两种字号)。
-                columns.add_widget(h)
-                _heads.append(h)
-            content.add_widget(columns)
-            # ⚠️ **`size_hint=(1, 1)`, 不是写死高度** —— 它吃掉面板的剩余高度, 面板高度因此
-            #    与记录数**无关**。
-            scroll = ScrollView(size_hint=(1, 1))
-            inner = BoxLayout(orientation='vertical', size_hint_y=None, spacing=dp(2) * _k)
-            inner.bind(minimum_height=inner.setter('height'))
-            rows = [[], [], []]          # 逐列一组, 只为下面"全表统一字号"取最长内容
-            for r in reversed(self.hp_history[-100:]):
-                stamp = _hist_stamp(r.get('time'))
-                # ⚠️ 跑分 = **平均数**(见 `_hp_score`), 旧记录拿 windows 现算, 不印「—」。
-                _avg = _hp_score(r)
-                avg_text = '%d' % _avg if _avg is not None else '—'
-                # ⚠️ **平均差系数**: 取代原来的「波动」与「归一化」两列。= 平均差 ÷ 均值;
-                #    旧「波动」是 (max-min)/中位, 只看两端点。
-                #    ⚠️ **旧记录没有这个字段** ⇒ 印「—」, **绝不拿别的字段回填**(印假数)。
-                _mad = r.get('mad')
-                mad_text = ('%.2f%%' % float(_mad)) if _mad is not None else '—'
-                row = BoxLayout(size_hint_x=None, size_hint_y=None, width=_table_w,
-                                height=dp(26) * _k, pos_hint={'center_x': 0.5})
-                for _i, _t in enumerate((stamp, avg_text, mad_text)):
-                    lbl = Label(text=_t, halign='center', valign='middle',
-                                color=hex_rgb(COL_TEXT) + (1,), size_hint_x=None)
-                    lbl.width = _HW[_i]
-                    lbl.bind(size=lambda w, *_: setattr(w, 'text_size', (w.width, None)))
-                    row.add_widget(lbl)
-                    rows[_i].append(lbl)
-                # ⚠️ 最后一列是**按钮**(唯一一个), 不进"全表统一字号" —— 它不是数据格。
-                btn = Button(text='详情', font_size=sp(14) * _k, bold=True,
-                             background_normal='', size_hint_x=None, width=_HW[3],
-                             background_color=hex_rgb(COL_BTN) + (1,))
-                btn.bind(on_release=lambda _b, rr=r: self._show_hp_detail(rr))
-                row.add_widget(btn)
-                inner.add_widget(row)
-            # ⚠️⚠️ **全表共用一个字号**: 逐**数据列**量出"这列最多能放多大"
-            #    (`fit_font_size` 走同一套阶梯), 再取**最小**的那个发给**所有**格子。
-            #    ⚠️ **不能逐列各缩** —— 表头(「平均差系数」5 字比数据长)会比数据行小一档,
-            #       同一张表里出两种字号, 那正是玩家截图指出过的问题。
-            #    ⚠️ **不能把所有格子塞进一个 `_fit_uniform`** —— 它取"组里最窄那列的宽度",
-            #       会被最窄的列拖死、整表缩到 ~11sp。
-            #    ⚠️ 必须按**数据列宽 `_HW`** 算, 不能按表头列宽 `_head_w`(踩过: 表头「时间」
-            #       只有 2 个字, 拿它当可用宽度会把字号压到 **5.88sp**)。
-            #    ⚠️ 最长内容**只从数据行取**, 表头不参与。
-            #    ⚠️ 必须传 `sp(14)`, 不是裸 `14.0`(那是**绝对 px**, density=2 的机器上只有一半大)。
-            _groups = [[_heads[_i]] + rows[_i] for _i in range(len(_HP_COLS))]
-            _fs_all = None
-            for _i, _g in enumerate(_groups):
-                _long = max(rows[_i], key=lambda x: text_px(x.text or '', sp(14)))
-                _f = fit_font_size(_long.text or '', sp(14) * _k, float(_HW[_i]))
-                _fs_all = _f if _fs_all is None else min(_fs_all, _f)
-            for _g in _groups:
-                for _c in _g:
-                    _c.font_size = _fs_all
-            scroll.add_widget(inner)
-            content.add_widget(scroll)
-            # 脚注: 只回答"这一列是什么"。口径沿革属于代码注释, 面板上不写。
-            # ⚠️ 括号里那个「群」字**不在字体子集里**(真机上显示成方块) ⇒ 那段整个删了即根治。
-            # ⚠️ `h0` 与隔壁那张表**同一个值**(两张表脚注都是两行 12sp, 实测约 34px)。
-            foot = Label(
-                text=('  平均值：物理引擎每秒模拟步数的平均值\n'
-                      '  平均差系数：平均差 ÷ 平均值，越小越稳'),
-                font_size='12sp', halign='left', valign='top',
-                color=hex_rgb(COL_SUB) + (1,), size_hint_y=None)
-            self._auto_h(foot, dp(44))
+    def _show_history_table(self, title, headers, records, values, detail, clear, footnote, empty_text):
+        """两种历史共用响应式表格：列对齐、控件随窗口缩放、短表不撑出大块留白。"""
+        content=BoxLayout(orientation="vertical",padding=dp(12),spacing=dp(8))
+        heading=BoxLayout(size_hint=(None,None),spacing=dp(4))
+        heads=[]
+        for text in (*headers,""):
+            label=Label(text=text.replace("/","/\n"),halign="center",valign="middle",
+                        bold=True,color=hex_rgb(COL_SUB)+(1,),size_hint_x=None)
+            label.bind(size=lambda w,*_:setattr(w,"text_size",(w.width,None)))
+            heading.add_widget(label);heads.append(label)
+        scroll=ScrollView(size_hint=(1,None),do_scroll_x=False,bar_width=dp(3))
+        inner=BoxLayout(orientation="vertical",size_hint_y=None,spacing=dp(4))
+        inner.bind(minimum_height=inner.setter("height"))
+        data_rows=[]
+        if records:
+            content.add_widget(heading)
+            for record in records:
+                row=BoxLayout(size_hint=(None,None),spacing=dp(4))
+                labels=[]
+                for text in values(record):
+                    label=Label(text=text,halign="center",valign="middle",
+                                color=hex_rgb(COL_TEXT)+(1,),size_hint_x=None)
+                    label._history_text=text
+                    label.bind(size=lambda w,*_:setattr(w,"text_size",w.size))
+                    row.add_widget(label);labels.append(label)
+                button=Button(text="详情",bold=True,background_normal="",size_hint_x=None,
+                              background_color=hex_rgb(COL_BTN)+(1,))
+                button.bind(on_release=lambda _b,record=record:detail(record))
+                row.add_widget(button);inner.add_widget(row)
+                data_rows.append((row,labels,button))
+            scroll.add_widget(inner);content.add_widget(scroll)
+            foot=Label(text=footnote,halign="left",valign="top",color=hex_rgb(COL_SUB)+(1,),size_hint_y=None)
             content.add_widget(foot)
-        # ⚠️ 「清空历史」只在**有记录**时才放出来 —— 空列表上摆一个"清空"是没意义的热区,
-        #    而且它离「关闭」只有 dp(8), 误触代价是**不可逆**的。(与隔壁同款)
-        if self.hp_history:
-            _acts = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
-            clear_btn = Button(text='清空历史', font_size='16sp', bold=True,
-                               background_normal='',
-                               background_color=hex_rgb(COL_DARKRED) + (1,))
-            close_btn = Button(text='关闭', font_size='16sp', bold=True,
-                               background_normal='',
-                               background_color=hex_rgb(COL_BTN_OFF) + (1,))
-            _acts.add_widget(clear_btn)
-            _acts.add_widget(close_btn)
-            content.add_widget(_acts)
         else:
-            close_btn = Button(text='关闭', font_size='16sp', bold=True,
-                               background_normal='',
-                               background_color=hex_rgb(COL_BTN_OFF) + (1,),
-                               size_hint_y=None, height=dp(46))
-            content.add_widget(close_btn)
-        _vw, _vh = self._veq()
-        # ⚠️ 宽 **0.96**(照搬隔壁): 四列固定宽度要 288dp, 而 0.92 在 360dp 机上只有 299dp 的
-        #    内容区; 0.96 拿回 14.4px。
-        # ⚠️ 高 `0.7 * _vh` 是**固定**的 —— 面板高度不随记录数变。
-        # ⚠️ **末尾不调 `_popup_fit_content`** —— 理由见上面 docstring 第 ① 条。
-        popup = RotPopup(title='', content=content, size_hint=(None, None),
-                         width=0.96 * _vw, height=0.7 * _vh,
-                         auto_dismiss=True, separator_height=0)
+            empty=Label(text=empty_text,halign="center",valign="middle",color=hex_rgb(COL_SUB)+(1,),size_hint_y=None)
+            empty.bind(size=lambda w,*_:setattr(w,"text_size",w.size))
+            content.add_widget(empty)
+        actions=BoxLayout(size_hint_y=None,spacing=dp(8))
+        if records:
+            clear_btn=Button(text="清空历史",bold=True,background_normal="",background_color=hex_rgb(COL_DARKRED)+(1,))
+            actions.add_widget(clear_btn)
+        close_btn=Button(text="关闭",bold=True,background_normal="",background_color=hex_rgb(COL_BTN_OFF)+(1,))
+        actions.add_widget(close_btn);content.add_widget(actions)
+        popup=RotPopup(title=title,title_align="center",title_color=hex_rgb(COL_BALL)+(1,),
+                       content=content,size_hint=(None,None),auto_dismiss=True,separator_height=0)
+        popup._history_headers=heads
+        popup._history_rows=data_rows
+        popup._history_scroll=scroll if records else None
+        popup._history_actions=actions
+
+        def layout(_dt=0):
+            layer=getattr(App.get_running_app(),"layer",None)
+            if layer is not None and layer.angle:
+                vw,vh=Window.height,Window.width
+            else:
+                vw,vh=Window.width,Window.height
+            popup.width=min(vw*.96,dp(900))
+            width=(content.width-dp(24) if popup._is_open else popup.width-dp(48))-dp(6)
+            width=max(dp(160),width)
+            scale=min(1.5,max(.8,width/dp(394)))
+            if vh<dp(600):scale=min(scale,1.1)
+            font=sp(15)*max(.93,scale)
+            compact=width<dp(350)
+            popup.title_size=sp(19)*min(1.3,max(.93,scale))
+            actions.height=dp(46)*min(1.2,max(.9,scale))
+            for button in actions.children:button.font_size=sp(16)*min(1.25,max(.93,scale))
+            chrome=popup.height-content.height if popup._is_open else dp(68)
+            if chrome<=0 or chrome>dp(160):chrome=dp(68)
+            max_height=vh*.92
+            if records:
+                weights=(94.,104.,132.,64.)
+                columns=[(width-dp(12))*v/sum(weights) for v in weights]
+                font_ratio=1.0
+                for index,column in enumerate(columns[:3]):
+                    texts=[heads[index].text]
+                    for _,labels,_ in data_rows:
+                        text=labels[index]._history_text
+                        if compact and index==0:text=text.replace(" ","\n",1)
+                        texts.append(text)
+                    measured=max(text_px(line,font) for text in texts for line in text.split("\n"))
+                    font_ratio=min(font_ratio,max(1.,column-dp(4))/max(1.,measured))
+                font*=font_ratio
+                heading.width=width;heading.height=dp(42)*max(1.,scale)
+                for label,column in zip(heads,columns):
+                    label.width=column;label.font_size=font
+                    label.text_size=(column,None);label.texture_update()
+                heading.height=max(heading.height,max(label.texture_size[1] for label in heads)+dp(8))
+                row_height=dp(40 if compact else 34)*max(.95,scale)
+                for row,labels,button in data_rows:
+                    row.width=width;row.height=row_height
+                    for index,(label,column) in enumerate(zip(labels,columns)):
+                        text=label._history_text
+                        if compact and index==0:text=text.replace(" ","\n",1)
+                        label.text=text;label.width=column
+                        label.font_size=font
+                    button.width=columns[3];button.font_size=font
+                foot.font_size=sp(12)*max(.95,scale)
+                foot.text_size=(width,None);foot.texture_update()
+                foot.height=max(dp(36),foot.texture_size[1]+dp(8))
+                fixed=dp(24)+content.spacing*3+heading.height+foot.height+actions.height
+                all_rows=len(data_rows)*row_height+max(0,len(data_rows)-1)*inner.spacing
+                scroll.height=min(all_rows,max(row_height,max_height-chrome-fixed))
+                popup.height=min(max_height,chrome+fixed+scroll.height)
+            else:
+                empty.font_size=sp(16)*max(.93,scale)
+                empty.height=dp(110)*max(.95,scale)
+                popup.height=min(max_height,chrome+dp(24)+content.spacing+empty.height+actions.height)
+
+        trigger=Clock.create_trigger(layout,0)
+        def resized(*_):trigger()
+        def closed(*_):
+            Window.unbind(size=resized)
+            content.unbind(size=resized)
+            trigger.cancel()
+        Window.bind(size=resized);content.bind(size=resized)
+        popup.bind(on_dismiss=closed)
         close_btn.bind(on_release=popup.dismiss)
-        if self.hp_history:
-            # ⚠️ 清空之后**当场把面板重开一次** —— 玩家要立刻看到空态, 而不是盯着
-            #    一份已经删掉的旧表格。(旧面板先 dismiss, 否则会叠两层。)
-            def _ask_clear(*_):
-                popup.dismiss()
-                self._clear_hp_history()
-            clear_btn.bind(on_release=_ask_clear)
+        if records:
+            def ask_clear(*_):
+                popup.dismiss();clear()
+            clear_btn.bind(on_release=ask_clear)
+        layout()
         popup.open()
+        trigger()
+        return popup
+
+    def _show_hp_history(self):
+        records=list(reversed(self.hp_history[-100:]))
+        def cells(record):
+            average,mad=_hp_score(record),record.get("mad")
+            return (_hist_stamp(record.get("time")),"—" if average is None else "%d" % average,
+                    "—" if mad is None else "%.2f%%" % float(mad))
+        return self._show_history_table("CPU高压测试历史",("时间","平均值","平均差系数"),
+            records,cells,self._show_hp_detail,self._clear_hp_history,
+            "平均值：物理引擎每秒模拟步数的平均值\n平均差系数：平均差 ÷ 平均值，越小越稳",
+            "暂无 CPU 高压测试记录\n\n性能测试菜单里选「CPU高压测试」")
 
     def _clear_hp_history(self):
         """清空「CPU 高压测试历史」——**不可逆, 所以必须先过一道确认**。
@@ -5405,211 +5135,17 @@ class BenchMixin(object):
         self._popup_fit_content(popup, content)
 
     def _show_bench_history(self):
-        """性能测试历史：每次完整测试严格一行，保留时间、帧率与 CPU 波动。
-
-        ⚠️ 第三列表头是「**平均分 / 平均差系数**」: 那一格是 `phys_fps`, 来源是
-           `_bench_done` 里的 **平均值**(从中位数改的; 老记录里存的是当年的中位数
-           ⇒ 跨版本比成绩别混着看)。表头写「步数」会让人以为是总步数或均值。
-        """
-        content = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(8))
-        # 这是“数据表”而不是一段左对齐正文：三列标题与数值均居中，扫视同一行时能更快对应；
-        # 时间列仍固定足够宽，完整年份不会被压缩。
-        # ⚠️⚠️ **标题金色、备注灰色 —— 与更早那版正好对调**: 整块面板的层次是
-        #    **标题金(主) > 数据近白 > 表头/备注灰(次)**。这是**有意反转**旧决定, 不是漂移。
-        title_lbl = self._fit_line(Label(text='测试历史（渲染 / CPU）', bold=True,
-                                         halign='center', color=hex_rgb(COL_BALL) + (1,),
-                                         size_hint_y=None, height=dp(28)), 19)
-        content.add_widget(title_lbl)
-        if not self.bench_history:
-            # ⚠️⚠️ **弹窗高度固定不变, 空态靠两根"弹簧"竖向居中。**
-            #    这个面板以后是要装数据的, 高度必须**始终一样**, 否则"有没有记录"会让面板
-            #    忽大忽小、读数时跳来跳去; 真有问题也只是"空的时候字堆在底下",
-            #    而那该用**居中去解决, 不是改高度**。
-            #    ⚠️ 弹簧只加在**空态**: 有记录时那块是 `size_hint=(1, 1)` 的 ScrollView,
-            #       它自己就会把剩余空间吃掉, 再加弹簧反而挤掉列表。
-            content.add_widget(Widget(size_hint_y=1))          # 上弹簧
-            empty = Label(text='暂无测试记录\n\n长按标题 3 秒即可测试', font_size='16sp', halign='center',
-                          color=hex_rgb(COL_SUB) + (1,), size_hint_y=None, height=dp(90))
-            empty.bind(size=lambda w, _: setattr(w, 'text_size', w.size))
-            content.add_widget(empty)
-            content.add_widget(Widget(size_hint_y=1))          # 下弹簧
-        else:
-            # ⚠️⚠️ **固定列宽对齐(准表格)**: 前一版是"整行一串空格分隔、上下不对齐",
-            #    起因是四列按各自最宽算要 333px 而内容区只有 299.2px —— 对齐是硬要求,
-            #    所以**删掉了「CPU平均频率」那一列**(它已被实测证伪)来腾宽度。
-            # ⚠️ 三列列宽**量出来的**(`text_px` 非粗体 14sp): 时间 **76** · `平均/1%Low帧`
-            #    (**表头比数据长**) **61** · `20300/1.23%` **86** ⇒ 配成 80/66/92/50 = **288**
-            #    (**+50 是「详情」按钮列**), 与原来 290 同量级, 弹窗宽度一个字不用改。
-            #    ⚠️ 字号账: 三列全都放得下 ⇒ **全表字号回到 sp(14)**。
-            #    ⚠️ 加列最容易挤坏的**不是文字, 是那个按钮**(旧事故: 「详情」被挤成 25px)。
-            _HW = (dp(80), dp(66), dp(92), dp(50))
-            # ⚠️⚠️ **宽度适配**: 这一处原来**连缩放都没有**(`_table_w = sum(_HW)` 写死), 于是
-            #    平板上表格缩在中间、两边各空一大截。⇒ 和 `_show_hp_history` 那处**共用同一个
-            #    `_fit_w()`**: 同一个门槛、同一个口径。
-            #    ⚠️ 手上这两台设备里**只有平板会被放大**(手机上 `_fit_w` 返回 1.0) ——
-            #       所以这一处虽然原来"从没缩放过", 手机侧的观感也不会变。
-            _tw_max, _k = self._fit_w(sum(_HW))
-            _HW = tuple(_w * _k for _w in _HW)
-            _table_w = sum(_HW)
-            # ⚠️⚠️ **表头独立排版**: 表头**不再**和数据行共用 `_HW` —— 表头「时间」只要 ~26px,
-            #    而数据要 **113px**, 本来就不该共用一套宽度。共用的时候, 表头里最长的那一列会把
-            #    **全表字号**往下压(实测把 13.16sp 压到 **11.48sp**, 整张表的字都变小 ——
-            #    那才是真正的回归, 比"列没对齐"严重得多)。
-            #    ⇒ 表头按**自己文字的宽度**分列、整行居中; 数据行照旧用 `_HW`。
-            #    代价: 表头与数据**不逐列对齐** —— 已确认接受这一条。
-            #    ⚠️ 宽度按基准 `sp(14)` 量(不是裸 14.0 —— 那是**绝对 px**, density=2 的机器上
-            #       只有一半大), 再夹到不超过数据行总宽。
-            # ⚠️⚠️ 分母是 **3**(= 表头**自己**有几格), **不是 4**(数据行的列数):
-            #    改成 4.0 会把上限压到 115px, 而表头「平均分/平均差系数」要 **117px**
-            #    ⇒ **折成两行**, 而这一排只有 dp(22) 高, 第二行被顶出格子。
-            _head_w = [min(_table_w / 3.0 * 1.6, max(dp(30), text_px(_t, sp(14) * _k) + dp(6)))
-                       for _t in _HIST_COLS]
-            _hw_sum = sum(_head_w)
-            if _hw_sum > _table_w:
-                _head_w = [_w * _table_w / _hw_sum for _w in _head_w]
-                _hw_sum = _table_w
-            # 固定列宽表格不能默认贴在父容器左边；宽屏设备上这会明显偏左，
-            # 窄屏设备上也会造成标题/数据与面板中心不一致。表头和每一行各自整体居中。
-            columns = BoxLayout(size_hint_x=None, size_hint_y=None, width=_hw_sum,
-                                height=dp(22) * _k, pos_hint={'center_x': 0.5})
-            _heads = []
-            for _t, _w in zip(_HIST_COLS, _head_w):
-                h = Label(text=_t, halign='center', valign='middle',
-                          color=hex_rgb(COL_SUB) + (1,), size_hint_x=None)
-                h.width = _w
-                # ⚠️ 绑 `(w.width, None)` 而不是 `w.size`: 两维都给 ⇒ 宽度不够就**折行**,
-                #    而这一排只有 dp(22) 高, 第二行直接被顶出格子。
-                h.bind(size=lambda w, *_: setattr(w, 'text_size', (w.width, None)))
-                # ⚠️ **这里不调 `_fit_line`/`_fit1`** —— 表头要和数据行**同一个字号**,
-                #    统一由下面那段"全表共用一个字号"来定。单独缩表头就会出现两种字号。
-                columns.add_widget(h)
-                _heads.append(h)
-            content.add_widget(columns)
-            scroll = ScrollView(size_hint=(1, 1))
-            inner = BoxLayout(orientation='vertical', size_hint_y=None, spacing=dp(2) * _k)
-            inner.bind(minimum_height=inner.setter('height'))
-            # ⚠️ **逐列一组**, 但字号**不逐列定** —— 见下面"全表共用一个字号"那一段。
-            rows = [[], [], []]
-            for r in reversed(self.bench_history[-100:]):
-                # ⚠️ 字号/行高与另外两个列表弹窗**对齐**: 同一个滚动框里能多放约两行
-                #    (这个设计的目的是放更多内容的)。
-                render, low = r.get('render_fps'), r.get('render_1low')
-                stamp = _hist_stamp(r.get('time'))
-                if render is None or low is None:
-                    fps_text = '—'
-                else:
-                    fps_text = '%.1f/%.1f' % (float(render), float(low))
-                # ⚠️⚠️ **「CPU平均频率」那一格删掉了**: 它**已被实测证伪** —— 真机上大核报
-                #    2712MHz 而同一轮的纯算术探针低了 16%; 高通 LMH 平台上 `scaling_cur_freq`
-                #    报的是**调频器的目标值**, 实际时钟被硬件按下去**不回写**。
-                #    **留一个会误导的列, 还挤掉对齐要用的宽度。**
-                #    ⚠️ `phys_freq_mean` **照旧存在 JSON 里**, 只是**不再显示**。
-                # ⚠️ 这里原来印的是「波动」(= (max-min)/中位), 换成**平均差系数**。
-                #    ⚠️ 旧记录没有 `phys_mad` ⇒ 印「—」, **不回填、不印假数**。
-                mad = r.get('phys_mad')
-                if mad is None:
-                    soc_text = '%d/—' % r.get('phys_fps', 0)
-                else:
-                    soc_text = '%d/%.1f%%' % (
-                        r.get('phys_fps', 0), float(mad))
-                # ⚠️⚠️ **「归一化」那一列移出面板了**: 实测它在跨设置之间**并不稳定**,
-                #    还不配当"公平秤"; 而它占的宽度正好把**完整时间戳**挤掉了。
-                #    ⚠️ `phys_norm` **照旧存在 JSON 里**, 只是**不再显示**。
-                # ⚠️ **整行改成一排固定列宽的 Label**: 列宽与表头**共用 `_HW`**。
-                row = BoxLayout(size_hint_x=None, size_hint_y=None, width=_table_w,
-                                height=dp(26) * _k, pos_hint={'center_x': 0.5})
-                for _i, (_t, _w) in enumerate(zip((stamp, fps_text, soc_text), _HW)):
-                    lbl = Label(text=_t, halign='center', valign='middle',
-                                color=hex_rgb(COL_TEXT) + (1,), size_hint_x=None)
-                    lbl.width = _w
-                    # ⚠️ 绑 `(w.width, None)` 而**不是** `w.size`: 两维都给 ⇒ 宽度不够就折行。
-                    lbl.bind(size=lambda w, *_: setattr(w, 'text_size', (w.width, None)))
-                    row.add_widget(lbl)
-                    rows[_i].append(lbl)
-                # ⚠️ 第四列是**按钮**(唯一一个), **不进"全表统一字号"** —— 它不是数据格。
-                btn = Button(text='详情', font_size=sp(14) * _k, bold=True,
-                             background_normal='', size_hint_x=None, width=_HW[3],
-                             background_color=hex_rgb(COL_BTN) + (1,))
-                btn.bind(on_release=lambda _b, rr=r: self._show_bench_detail(rr))
-                row.add_widget(btn)
-                inner.add_widget(row)
-            # ⚠️⚠️ **全表共用一个字号**: **逐列**量出"这一列最多能放多大"
-            #    (`fit_font_size` 走的是同一套阶梯), 然后取**最小的那个**发给**所有**格子。
-            #    ⚠️ **不能逐列各缩** —— 表头(比数据长)会比数据行小一档, 同一张表里出两种字号。
-            #    ⚠️ **不能把所有格子塞进一个 `_fit_uniform`** —— 它取的是"组里最窄那列的宽度",
-            #       会被最窄列(88px)拖死, 整表缩到 ~11sp。
-            #    ⚠️ 必须 `sp(14)` 而不是 `14.0`: 这个形参是**绝对字号(px)**, 传裸 14.0 在
-            #       density=2 的机器上只有一半大(实测被探针逮住过)。
-            # ⚠️ **按数据列数**(`_HIST_COLS`, 3), 不是 `len(_HW)`(4) —— `_HW` 多出来的那一项
-            #    是按钮列, 而 `rows` 只有 3 组 ⇒ 按 4 会 IndexError。
-            _groups = [[_heads[_i]] + rows[_i] for _i in range(len(_HIST_COLS))]
-            _fs_all = None
-            for _i, _g in enumerate(_groups):
-                # ⚠️⚠️ **字号必须按「数据列宽」`_HW` 算, 不能按表头列宽 `_head_w`**(踩过):
-                #    表头独立排版之后, `_g[0]` 是**表头** Label, 拿 `_g[0].width` 当可用宽度
-                #    ⇒ 第一列的表头「时间」只有 2 个字(30dp), 却要塞下该列最长的内容(113px)
-                #    ⇒ 字号被压到 **5.88sp**。表头只是个标签, 它的宽度不该约束数据的字号。
-                _w = float(_HW[_i])
-                _bd = bool(getattr(_g[0], "bold", False))
-                # ⚠️ **最长内容只从「数据行」里取, 表头不参与** —— 表头有自己的宽度, 拿它来
-                #    约束字号会把整张表拖小(实测: 表头 9 个字把全表从 13.16sp 拖到 **10.64sp**)。
-                _long = max(rows[_i], key=lambda x: text_px(x.text or "", sp(14), _bd))
-                _f = fit_font_size(_long.text or "", sp(14) * _k, _w, _bd)
-                _fs_all = _f if _fs_all is None else min(_fs_all, _f)
-            for _g in _groups:
-                for _c in _g:
-                    _c.font_size = _fs_all
-            scroll.add_widget(inner)
-            content.add_widget(scroll)
-            # 底部口径说明。⚠️ **两个「中位」不是同一个东西**:
-            #   左列那个中位是**渲染帧率**(每秒画了多少帧),
-            #   右列那个中位是**物理吞吐**(每秒模拟多少步) —— 两列各自取自己的中位数。
-            # ⚠️⚠️ 三条规矩: ① **平均/1%Low帧 不解释**(常识, 占了小半屏还折行), 只留这个面板
-            #    **特有**的两条; ② **手工折行 + 全角空格做悬挂缩进**(自动折出来的续行没有缩进,
-            #    几条会糊成一片); ③ 高度走 `_auto_h`(写死高度会让最后一行被「关闭」按钮压掉一半)。
-            #    `**中位数**` 那种星号是 markdown 残留, Kivy 不认, 会在屏幕上原样显示 ——
-            #    强调一律用「」。
-            foot = Label(
-                text=('  平均分：物理引擎每秒模拟步数的平均值\n'
-                      '  平均差系数：平均差 ÷ 平均值，越小越稳'),
-                font_size='12sp', halign='left', valign='top',
-                color=hex_rgb(COL_SUB) + (1,), size_hint_y=None)
-            self._auto_h(foot, dp(44))
-            content.add_widget(foot)
-        # ⚠️ 「清空历史」只在**有记录**时才放出来 —— 空列表上摆一个"清空"是没意义的热区,
-        #    而且它离「关闭」只有 dp(8), 误触代价是**不可逆**的。
-        if self.bench_history:
-            _acts = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
-            clear_btn = Button(text='清空历史', font_size='16sp', bold=True,
-                               background_normal='',
-                               background_color=hex_rgb(COL_DARKRED) + (1,))
-            close_btn = Button(text='关闭', font_size='16sp', bold=True,
-                               background_normal='',
-                               background_color=hex_rgb(COL_BTN_OFF) + (1,))
-            _acts.add_widget(clear_btn)
-            _acts.add_widget(close_btn)
-            content.add_widget(_acts)
-        else:
-            close_btn = Button(text='关闭', font_size='16sp', bold=True,
-                               background_normal='',
-                               background_color=hex_rgb(COL_BTN_OFF) + (1,),
-                               size_hint_y=None, height=dp(46))
-            content.add_widget(close_btn)
-        # 宽高同 _popup(): 必须吃等效竖屏窗口, 不能用 size_hint(见 _popup 的说明)
-        # ⚠️ 宽 **0.96**: 固定列宽要 340px 而 0.92 只有 275px。
-        _vw, _vh = self._veq()
-        popup = RotPopup(title='', content=content, size_hint=(None, None),
-                         width=0.96 * _vw, height=0.7 * _vh,
-                         auto_dismiss=True, separator_height=0)
-        close_btn.bind(on_release=popup.dismiss)
-        if self.bench_history:
-            # ⚠️ 清空之后**当场把面板重开一次** —— 玩家要立刻看到空态, 而不是盯着
-            #    一份已经删掉的旧表格。(旧面板先 dismiss, 否则会叠两层。)
-            def _ask_clear(*_):
-                popup.dismiss()
-                self._clear_bench_history()
-            clear_btn.bind(on_release=_ask_clear)
-        popup.open()
+        records=list(reversed(self.bench_history[-100:]))
+        def cells(record):
+            fps,low=record.get("render_fps"),record.get("render_1low")
+            fps_text="—" if fps is None or low is None else "%.1f/%.1f" % (float(fps),float(low))
+            mad=record.get("phys_mad")
+            score="%d/—" % record.get("phys_fps",0) if mad is None else "%d/%.1f%%" % (record.get("phys_fps",0),float(mad))
+            return _hist_stamp(record.get("time")),fps_text,score
+        return self._show_history_table("测试历史（渲染 / CPU）",_HIST_COLS,records,cells,
+            self._show_bench_detail,self._clear_bench_history,
+            "平均分：物理引擎每秒模拟步数的平均值\n平均差系数：平均差 ÷ 平均值，越小越稳",
+            "暂无测试记录\n\n长按标题 3 秒即可测试")
 
     def _clear_bench_history(self):
         """清空「模拟测试历史」——**不可逆, 所以必须先过一道确认**。

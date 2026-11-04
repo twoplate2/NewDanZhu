@@ -62,13 +62,14 @@ VMAX = 2400.0                # 限速(须 >= 最大发射速度, 防穿透)
 FIXED_DT = 1.0 / 60.0        # 物理固定步长
 FRAME_TICK_HZ = 185          # 呈现/界面调度档位(物理仍固定在 60Hz)
 FRAME_TICK_DT = 1.0 / FRAME_TICK_HZ
+SPRING_TICK_DT = 1.0 / 30.0   # 只限制释放后的弹簧动画；弹珠与蓄力输入仍按原节拍更新。
 MAX_STEPS_PER_FRAME = 4      # 单帧最多补几个物理步(超出的积压丢掉, 见 _clamp_accum)
 SUBSTEPS = 6                 # 每帧子步数(防高速穿透)
 LAUNCH_MIN = 1077.0          # 最小发射速度
 LAUNCH_MAX = 1114.0          # 满蓄力发射速度
 CHARGE_RATE = 0.9            # 蓄力速度(每秒充满比例)
 ALIGN_VX_MAX = 800.0         # 入槽横速硬上限
-ARC_VISUAL = 1.4             # 弧面碰撞半径系数 = 渲染 BALL_VIEW; 改它会改掉 84.7% 的落格槽号
+ARC_VISUAL = 1.4             # 弧面碰撞半径系数，独立于渲染 BALL_VIEW; 改它会改掉 84.7% 的落格槽号
 _ARC_REACH = BALL_R * ARC_VISUAL   # y 带粗筛用, 必须与 _collide_arc 里算的 r 同值
 ARC_OUT_ANGLE = 35.0         # 弧面缓动出口角; 老注释残留的 25° 是错的, 不要"改回去"
 ARC_EASE_FRAMES = 3          # 弧面缓动帧数(出口速度 = 入射速度, 不耗能)
@@ -86,29 +87,15 @@ def _clamp_accum(a):
 
 
 def _spring_step(sp, sv, dt):
-    """弹簧阻尼振荡推进 `dt` **秒**, 返回 `(sp, sv)`。
-
-    ⚠️⚠️ **必须吃真实帧间隔** —— 老版这里硬编码 `FIXED_DT`, 而它在 `GameArea.tick_draw()`
-       里是「每**渲染帧**走一步」(不在物理累加器循环里) ⇒ **帧率越高回弹越快**。
-       老版 2026-09-27 实测同一发球收尾时长: 60Hz 2.817s · 120Hz 1.408s · 165Hz 1.024s ·
-       185Hz 0.914s —— **185/60 = 3.08 倍**。而 `k=120 / damp=3.2` 是照 60Hz 调的手感
-       ⇒ 高刷机上玩家看到的不是"阻尼回弹", 是"闪一下"。
-       ⚠️ 新版是**忠实重构**, 这个 bug 一并继承过来了(`tick_draw` 曾无 `dt` 参数);
-       修法照老版 `bd6b787` 原样搬, 两版行为才继续一致。
-    ⚠️ **子步上限取 `MAX_STEPS_PER_FRAME`** —— 与 `_clamp_accum` **同一口径**:
-       长停顿时两边一起丢掉同样的时间, 不会一个走一个等。
-    ⚠️ **`dt == FIXED_DT` 时 `n=1 / h=FIXED_DT` ⇒ 与改前逐位相同**(60Hz 零回归)。
-    """
-    k, damp = 120.0, 3.2
-    n = int(dt * 60.0 + 0.5)
-    if n < 1:
-        n = 1
-    elif n > MAX_STEPS_PER_FRAME:
-        n = MAX_STEPS_PER_FRAME
+    """释放后自然衰减约三次回弹；不参与弹珠物理。"""
+    dt = max(0.0, min(dt, MAX_STEPS_PER_FRAME * FIXED_DT))
+    n = max(1, int(dt * 60.0 + 0.5))
     h = dt / n
     for _ in range(n):
-        sv += (-k * sp - damp * sv) * h
+        sv += (-120.0 * sp - 6.0 * sv) * h
         sp += sv * h
+        if abs(sp) < 0.002 and abs(sv) < 0.03:
+            return 0.0, 0.0
     return sp, sv
 
 
@@ -296,12 +283,13 @@ H_BOTTOM = 64                # 重置 + 力度 + 蓄力发射
 # 于是平板(等效竖屏窗口 792dp、弹窗 760dp)上表格缩在中间、两边各空 236dp。现在按"撑满弹窗
 # 可用宽度"等比放大, 这个上限防它变成巨无霸。手机上算出来是 1.0(不触发); Y700 上算出约 2.5 ⇒ 夹到 1.6。
 _TW_GROW_MAX = 1.6
-BALL_VIEW = 1.4              # 小球视觉放大倍数(仅渲染; 碰撞半径 BALL_R 不动)
-BALL_VIS_R = BALL_R * BALL_VIEW   # = 12.6。**所有"球该坐在上面"的绘制线按它对齐**
+BALL_VIEW = 1.65              # 小球视觉放大倍数(仅渲染; 碰撞半径 BALL_R 不动)
+BALL_VIS_R = BALL_R * BALL_VIEW   # = 14.85。**所有"球该坐在上面"的绘制线按它对齐**
                              # ⚠️ 以后新加任何承托面绘制线(井区顶边/弹簧上横线/底墙上沿),
-                             #    一律用这个常量, 别写 BALL_R —— 视觉半径比碰撞半径大 3.6px,
+                             #    一律用这个常量, 别写 BALL_R —— 视觉半径比碰撞半径大 5.85px,
                              #    写 BALL_R 会让球在贴地处陷进去(玩家截图报过"小球陷入地面")。
-_BALL_TEX_PX = 128           # 飞行球仅一张纹理; 提高密度不增加每帧开销
+FLOOR_VIEW_Y = FLOOR + BALL_VIS_R - BALL_R  # 槽底、隔板与底墙共用的可见地面；不参与碰撞。
+_BALL_TEX_PX = 128           # 常用屏幕上的球直径不足 100px，128 已足够；避免额外启动合成开销。
 # 装杯压暗: 板面与 HUD 五行共用同一个色与强度。
 # ⚠️ HUD_ALPHA 与 DIM_ALPHA **故意取同值** —— 两个同屏常数迟早会各改各的(老版交接记录
 #    就为这个标过警告)。改一次两边动。

@@ -125,8 +125,8 @@ class RootWidget(BenchMixin, PlayMixin, UiMixin, BoxLayout):
             self._bench_dim_col = Color(0.05, 0.06, 0.09, 0.0)
             self._bench_dim_rect = Rectangle(pos=(0, 0), size=(0, 0))
             # ⚠️⚠️ **黑屏上的白字层必须画在矩形之后** —— 同一个 `canvas.after` 里,
-            #    **顺序即层序**。不能用盘面里现成的 `_bench_badge`: `RootWidget.canvas.after`
-            #    盖住整棵子树(含 GameArea 里的 badge), 黑屏会把那行红字一起盖掉。
+            #    **顺序即层序**。文字必须和遮罩放在同一层：`RootWidget.canvas.after`
+            #    盖住整棵子树，盘面内的文字会被黑屏盖住。
             #    ⚠️ 重烘只在**文字真变了**时做(见 `_set_bench_msg`): 一次 refresh 要重排文字,
             #       而跑分进度一共才变 5 次。
             self._bench_msg_col = Color(1, 1, 1, 0.0)

@@ -27,7 +27,7 @@ for _s in (sys.stdout, sys.stderr):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "golden")
-OLD_MAIN = r"E:\AI_Tools\other\DanZhu\android\main.py"
+OLD_MAIN = os.path.join(os.path.dirname(os.path.dirname(HERE)), "base", "main.py")
 
 # 覆盖弱蓄/中蓄/满蓄三档 + 弧面抖动最敏感的边界力度
 POWERS = [0.05, 0.15, 0.30, 0.50, 0.70, 0.85, 1.00]

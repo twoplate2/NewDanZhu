@@ -27,7 +27,7 @@ from ..fx.pile import (CX, DESIGN_H, DESIGN_W, FLOOR_Y, K2, RIM_Y, PileSpec,
                        build_pile, halfwidth, project_pile)
 from ..platform.boot import _boot_log
 from ..platform.device import _guard_warm, _vib_warm, _vibrate_tick
-from .text import (FIT_SCALES, _FRAME_FIT, _FONT_WARM_ALL, _PIN_CAND, _PIN_DONE,
+from .text import (_BALL_RIM_K, _BALL_BAND_W, _BALL_BAND_S, _BALL_BAND_SPAN, FIT_SCALES, _FRAME_FIT, _FONT_WARM_ALL, _PIN_CAND, _PIN_DONE,
                    _PIN_ORDER, _PIN_WHERE, _WARM_DID, _brk_add, _build_texwarm,
                    _find_sdl2_order, _glyph_warm_step, _warm_one, text_px)
 
@@ -36,6 +36,7 @@ from .text import (FIT_SCALES, _FRAME_FIT, _FONT_WARM_ALL, _PIN_CAND, _PIN_DONE,
 _ASSET_GLASS = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "assets", "glass")
+_ASSET_BALLS = os.path.join(os.path.dirname(_ASSET_GLASS), "balls")
 
 # ---- 投入档 -> 杯中弹珠颜色(用户定案): 1绿 / 10蓝 / 50红 / 100紫 ----
 BET_COLORS = {1: "#39c98a", 10: "#4da8ff", 50: "#e0533b", 100: "#a335ee"}
@@ -102,12 +103,15 @@ EXIT_ALPHA_TAIL = 0.03
 SPAWN_TOP = 0.08
 SPAWN_WINDOW = 1.6
 SPAWN_MIN, SPAWN_CAP = 0.016, 0.16
+ENTRY_GAP = 0.025          # 入画至少错开 25ms，避免多颗在同一帧成批露头。
+LAYER_TOUCH_GAP = 0.030    # 同层落点至少错开 30ms。
 RAIN_HEADROOM = 420.0
 RAIN_ANCHOR = 0.12         # 首球"露头"的时刻(相对 _t0)
 RAIN_SHIFT_MAX = 0.80
 FALL_GRAVITY = 1900.0
 FALL_MIN, FALL_MAX = 0.55, 1.30
 ENTER_FADE = 0.08          # 越过覆盖层顶边后的渐入
+LIGHT_APPROACH_SEC = 0.55  # 邻球接近落点时形成遮蔽，触地时完成，不在落定后补光照。
 SQUASH_W = 0.045           # 撞击压扁窗口(每个落点一次)
 
 # 落地音只靠节流限速, **不按颗数截断**(曾有"只前 N 颗"的上限, 已删: 大档后半段静音 1.4~2.3s)。
@@ -139,10 +143,6 @@ _BAKE_STATS = {}
 _BALL_TEX_ROWS = 16
 # 弹珠贴图的"型"参数: 只改烘出来的内容, 运行期一个字节没多; 尺寸/物理/玩法不动。
 # ⚠️ 调这四个数之前先出图(老工程 temp/facilitator/ab_render.py 能逐像素复现)。
-_BALL_RIM_K = 0.74       # 边缘暗环: p>0.40 的色标往外挤成 1-(1-p)*K
-_BALL_BAND_W = 0.66      # 猫眼带宽度倍率
-_BALL_BAND_S = 0.76      # 猫眼带强度倍率
-_BALL_BAND_SPAN = 0.92   # 猫眼带长度倍率
 # ⚠️ `sp()` 读当时的窗口密度, 模块导入时窗口还没建 —— **必须懒算**(见 prebake 链)。
 _FONT_WARM_SIZES = None
 _FONT_WARM_HUD = ()      # [(字号, bold)]
@@ -319,39 +319,37 @@ def _r_dp_for(n):
     """
     return 27.0
 
-def _mix_rgb(a, b, amount):
-    return tuple(int(x + (y - x) * amount) for x, y in zip(a, b))
 
 def _ball_texture(bet, rows=None):
-    """主游戏 ball_texture() 的彩色版: 同一套猫眼渐变外形, 只换球身颜色。
+    """按投注颜色复用球贴图，保持 256×256，不在逐帧绘制时烘焙。
 
-    逐像素纯 Python 合成(Android 上没有 PIL)。**单档 256×256 = 65536 像素**,
-    真机实测一档 **61~63 ms** —— 而那是**一帧**。
-
-    ## `rows` 参数: 把这一档的活**切成几段**
-
-    ⚠️⚠️ **2026-09-20 加**: `prebake_step` 原来"一次烘一档", 摊的是**次数**、
-    **没摊单次成本** —— 真机启动日志里那 4 行就是 **61.0 / 61.7 / 62.6 / 63.5 ms**,
-    而且发生在**加载页摘了 3.7 秒之后**(玩家已经在游戏里)。⇒ 按行切块:
-    一步算 `_BALL_TEX_ROWS` 行(32 行 ≈ 7.8 ms), 一档 16 步(两个阶段各 256 行)。
-
-    · `rows=None` ⇒ **一次算完**(中奖那两条路走这个 ⇒ 与改造前逐位同行为)
-    · `rows=N`    ⇒ 最多算 N 行; **没算完返回 `None`**(预热链据此决定要不要再来一步)
-
-    ⚠️ **三条必须保住的性质**(改这个函数前先读这三条):
-      ① 纹理**只在全部算完时才注册进 `_CUP_BALL_TEX`** —— 半成品绝不进表
-      ② 玩家万一在预热没完就中奖: 那两条路传 `rows=None`, 照旧一次算完
-         ⇒ **最坏情况与改造前完全相同, 不变差**
-      ③ 只是"把同一份工作切成几段", **像素值与写入顺序一位不变** ⇒ 出图逐像素相同
-
-    ⚠️ 两个阶段的**行序**是"先第一阶段全部 256 行, 再第二阶段全部 256 行" ——
-       与改造前的执行顺序一致(第二阶段要读第一阶段写出来的 alpha)。
+    rows=None 一次完成，rows=N 分块完成；两条路径像素一致。
+    材质使用柔和棚光下的实体球明暗与环境反射，四档保留各自颜色。
+    分块生成仅供资源缺失时兜底，全部完成后才注册纹理。
     """
     tex = _CUP_BALL_TEX.get(bet)
     if tex is not None:
         return tex
     job = _BAKE_JOB.get(bet)
     if job is None:
+        # 常用四档离线烘焙，避免第一次中奖还在主线程合成整张贴图。
+        if bet in BET_COLORS:
+            try:
+                started = time.perf_counter()
+                tex = _CoreImage(os.path.join(_ASSET_BALLS, "cup_%d.png" % bet), mipmap=True).texture
+                if tuple(tex.size) != (_CUP_BALL_TEX_PX, _CUP_BALL_TEX_PX):
+                    raise ValueError("cup texture size")
+                tex.mag_filter = "linear"
+                tex.min_filter = "linear_mipmap_linear"
+                elapsed = (time.perf_counter()-started)*1000.0
+                # 分帧预热由调用方计本步耗时，不能再重复累加一次。
+                _BAKE_STATS[bet] = {"total_ms": elapsed if rows is None else 0.0,
+                                    "steps": 1 if rows is None else 0,
+                                    "worst_ms": elapsed if rows is None else 0.0}
+                _CUP_BALL_TEX[bet] = tex
+                return tex
+            except Exception:
+                pass  # 资源缺失时仍可生成，不能吞掉中奖演出。
         job = _bake_begin(bet)
         _BAKE_JOB[bet] = job
     d = job["d"]
@@ -361,10 +359,10 @@ def _ball_texture(bet, rows=None):
         _bake_advance(job, rows)
         if job["done"] < 2 * d:
             return None                       # ⚠️ 没算完: 绝不注册半成品
-    tex = Texture.create(size=(d, d), colorfmt="rgba")
+    tex = Texture.create(size=(d, d), colorfmt="rgba", mipmap=True)
     tex.blit_buffer(bytes(job["buf"]), colorfmt="rgba", bufferfmt="ubyte")
     tex.mag_filter = "linear"
-    tex.min_filter = "linear"
+    tex.min_filter = "linear_mipmap_linear"
     # ⚠️⚠️ **必须在 `del` 之前把统计摘出来** —— `_bake_advance` 的耗时账(`total_ms`/`steps`/
     #    `worst_ms`)住在 job 里, 而 job 里那个 `buf` 是 **256KB**(256×256×4) ⇒ 算完必须删掉它。
     #    少了这一句, `prebake_step` 在**调用之后**才去读 `_BAKE_JOB` ⇒ 拿到 `None` ⇒
@@ -377,6 +375,11 @@ def _ball_texture(bet, rows=None):
     _CUP_BALL_TEX[bet] = tex
     del _BAKE_JOB[bet]
     return tex
+
+
+def _mix_rgb(a, b, amount):
+    return tuple(int(x + (y - x) * amount) for x, y in zip(a, b))
+
 
 
 def _bake_begin(bet):
@@ -476,6 +479,10 @@ def _bake_advance(job, n):
 _GLASS_OVER = [None, False]     # [over 纹理, 是否试过]
 
 
+
+
+
+
 def _glass_over():
     """远侧环独立层 `glass_tumbler_over.png` —— **前后半环接缝的正式修法**(生成器 179..190)。
 
@@ -488,9 +495,9 @@ def _glass_over():
     _GLASS_OVER[1] = True
     try:
         _a = _ASSET_GLASS
-        _t = _CoreImage(os.path.join(_a, "glass_tumbler_over.png")).texture
+        _t = _CoreImage(os.path.join(_a, "glass_tumbler_over.png"), mipmap=True).texture
         _t.mag_filter = "linear"
-        _t.min_filter = "linear"
+        _t.min_filter = "linear_mipmap_linear"
         _GLASS_OVER[0] = _t
     except Exception:
         _GLASS_OVER[0] = None
@@ -508,17 +515,20 @@ def _glass_textures():
         return _GLASS_TEX
     assets = _ASSET_GLASS
     try:
-        back = _CoreImage(os.path.join(assets, "glass_tumbler_back.png")).texture
-        front = _CoreImage(os.path.join(assets, "glass_tumbler_front.png")).texture
+        back = _CoreImage(os.path.join(assets, "glass_tumbler_back.png"), mipmap=True).texture
+        front_path = os.path.join(assets, "glass_tumbler_front_soft.png")
+        if not os.path.exists(front_path):
+            front_path = os.path.join(assets, "glass_tumbler_front.png")
+        front = _CoreImage(front_path, mipmap=True).texture
         for texture in (back, front):
             texture.mag_filter = "linear"
-            texture.min_filter = "linear"
+            texture.min_filter = "linear_mipmap_linear"
         _GLASS_TEX = (back, front, None)
     except Exception:
         try:
-            fallback = _CoreImage(os.path.join(assets, "glass_tumbler.png")).texture
+            fallback = _CoreImage(os.path.join(assets, "glass_tumbler.png"), mipmap=True).texture
             fallback.mag_filter = "linear"
-            fallback.min_filter = "linear"
+            fallback.min_filter = "linear_mipmap_linear"
             _GLASS_TEX = (None, None, fallback)
             print("CUP-TEX FALLBACK: 分层玻璃图缺失, 退回整图")
         except Exception:
@@ -614,6 +624,31 @@ def _topo_deal(proj, rng):
         return ms
     return out
 
+def _attach_light_links(proj):
+    """复用已计算的支撑图，只给真正贴近且挡住上方光线的邻球建立遮蔽关系。"""
+    links = [[] for _ in proj]
+    for j, upper in enumerate(proj):
+        if upper.get("meta"):
+            continue
+        uh = FLOOR_Y-upper["sy"]-K2*upper["z"]
+        for i in upper.get("sup", ()):
+            lower = proj[i]
+            dx, dz = upper["sx"]-lower["sx"], upper["z"]-lower["z"]
+            dh = uh-(FLOOR_Y-lower["sy"]-K2*lower["z"])
+            if dh <= lower["r"]*.2:
+                continue
+            distance = math.sqrt(dx*dx+dz*dz+dh*dh)
+            if distance > (upper["r"]+lower["r"])*1.08:
+                continue
+            facing = max(0.0,(-.35*dx-.40*dz+.846*dh)/max(1.,distance))
+            weight = .75*(upper["r"]/max(1.,distance))**2*facing
+            if weight > .015:
+                links[i].append((j,weight))
+    for i,p in enumerate(proj):
+        if not p.get("meta"):
+            p["light_links"] = tuple(sorted(links[i],key=lambda x:x[1],reverse=True)[:3])
+
+
 def _pile_projected(count, seed):
     """(count, seed) -> 投影绘制表, 带缓存。同 (count,seed) 逐球心一致可复现。
 
@@ -645,6 +680,7 @@ def _pile_projected(count, seed):
             if _r0:
                 for _k, _pre in _support_map(proj, _r0).items():
                     proj[_k]["sup"] = _pre
+        _attach_light_links(proj)
         _PILE_CACHE[key] = proj
         _PILE_ORDER.append(key)
         while len(_PILE_ORDER) > _PILE_CACHE_MAX:
@@ -676,7 +712,7 @@ def _rim_back_strips(back_tex):
                 y = int(round(h - (top_row + (i + 1) * sh)))   # Kivy 纹理 y 向上
                 t = back_tex.get_region(0, y, w, sh)
                 t.mag_filter = "linear"
-                t.min_filter = "linear"
+                t.min_filter = "linear_mipmap_linear"
                 seg = band_frac / n
                 out.append((t, 1.0 - y1f + seg * (n - 1 - i), seg, _rim_band_alpha(i)))
         _GLASS_RIM_TEX[id(back_tex)] = (back_tex, out)
@@ -979,12 +1015,12 @@ class WinPileFX(Widget):
                 FALL_MAX, math.sqrt(2.0 * span / FALL_GRAVITY) * u(0.88, 1.12)))
             # 越过覆盖层顶边的时刻: 之前不画, 免得球漏到板面上方的 UI 行
             f_enter = fall_time * math.sqrt(max(0.0, min(1.0, (VISIBLE_TOP - sy0) / span)))
-            bounce_1 = r * u(0.28, 0.52)
-            bounce_time_1 = u(0.13, 0.20)
+            bounce_1 = r * u(0.60, 0.90) * (1.0 if count <= 10 else 0.65)
+            bounce_time_1 = u(0.20, 0.24)
             squash_1 = u(0.08, 0.16)
             self._balls.append({
                 "i": idx, "sxf": p["sx"], "syf": p["sy"], "r_d": r,
-                "shade": p["shade"], "z": p["z"], "value": value,
+                "shade": p["shade"], "z": p["z"], "value": value, "pile_index": _k,
                 "settled": False, "t0": 0.0, "tt": -1.0, "end": 0.0,
                 "a1": False, "a2": False, "a1h": bounce_1, "a2h": bounce_1 * 0.3,
                 "f_enter": f_enter,
@@ -996,16 +1032,42 @@ class WinPileFX(Widget):
                 "hop": u(-0.24, 0.24) * r,
                 "sq1": squash_1, "sq2": squash_1 * u(0.35, 0.55)})
             idx += 1
-        self._balls.sort(key=lambda bb: -bb["z"])       # 画家序: 远先画
+        self._balls.sort(key=lambda bb: -bb["z"])
+        by_pile = {b["pile_index"]:i for i,b in enumerate(self._balls)}
+        for b in self._balls:
+            b["light_links"] = tuple((by_pile[j],weight) for j,weight
+                                     in proj[b["pile_index"]].get("light_links", ()) if j in by_pile)
+        # 画家序: 远先画
         # 投放节奏就地从颗数推: 高倍率球多, 间隔压到 SPAWN_MIN 免得堆成"喷射球云"。
         # ⚠️ 只在这里算一次 —— play_win 另算一份会漂移。
         interval = max(SPAWN_MIN, min(SPAWN_CAP, SPAWN_WINDOW / max(1, len(self._balls))))
         cursor = SPAWN_TOP
         jitter = min(0.035, interval * 0.75)
+        occupied_entries = set()
+        layer_touch = {}
+        touch_gap = min(.10, max(LAYER_TOUCH_GAP, interval))
         for b in sorted(self._balls, key=lambda bb: bb["i"]):
             b["t0"] = cursor
+            height = FLOOR_Y-b["syf"]-K2*b["z"]
+            layer = round((height-b["r_d"])/(b["r_d"]*math.sqrt(8.0/3.0)))
+            if layer in layer_touch:
+                b["t0"] = max(b["t0"], layer_touch[layer]+touch_gap-b["f"])
+            # 先发出不代表先到位：独立的下落时长可能让上层球抢先落下。
+            # 只在生成时排好时间，确保承托球停稳后上层球才接触最终位置。
+            for lower_index in proj[b["pile_index"]].get("sup", ()):
+                lower = self._balls[by_pile[lower_index]]
+                b["t0"] = max(b["t0"], lower["t0"] + .012,
+                              lower["end"] + .02 - b["f"],
+                              lower["t0"]+lower["f_enter"]+ENTRY_GAP-b["f_enter"])
+            # 支撑等待会把不同球挤到同一时刻；按可见入画时间预约独立时隙。
+            entry_slot = math.ceil((b["t0"]+b["f_enter"])/ENTRY_GAP-1e-9)
+            while entry_slot in occupied_entries:
+                entry_slot += 1
+            occupied_entries.add(entry_slot)
+            b["t0"] = entry_slot*ENTRY_GAP-b["f_enter"]
             cursor += max(0.012, interval + u(-jitter, jitter))
             b["end"] = b["t0"] + b["f"] + b["t1"] + b["t2"]
+            layer_touch[layer] = b["t0"]+b["f"]
         # ---- 整场雨前移(见 RAIN_ANCHOR 处的说明) ----
         # ⚠️ 必须**按本局实测的最早入画时刻**算, 不能钉死一个值(实测 min(t0+f_enter) 在
         #    0.29~0.86 之间波动), 钉死会让一部分局把球"还没开局就放进场"。
@@ -1133,13 +1195,12 @@ class WinPileFX(Widget):
         if b["settled"]:
             sxd, syd = b["sxf"], b["syf"]
             sx_k = sy_k = 1.0
-            angle = b["ring_angle"]
+            angle = 0.0  # 材质纹路保持稳定，不额外做逐帧光照。
         else:
             tt = b["tt"]
             if tt < 0.0:
                 return None
-            angle = b["ring_angle"] + b["spin_deg"] * max(
-                0.0, min(tt, b["f"] + b["t1"] + b["t2"]))
+            angle = 0.0
             t_land, t_b1, t_b2 = b["f"], b["t1"], b["t2"]
             if tt < t_land:
                 p = tt / t_land
@@ -1219,14 +1280,12 @@ class WinPileFX(Widget):
             alpha *= max(0.0, min(1.0, (b["tt"] - b["f_enter"]) / ENTER_FADE))
             if alpha <= 0.0:
                 return
-            shade = min(1.0, b["shade"] + 0.10)  # 飞行球提亮一档, 与堆里的区分开
-        else:
-            shade = b["shade"]
         scr = self._ball_screen(b)
         if scr is None:
             return
         x, y, rx, ry, angle = scr
-        Color(shade, shade, shade, alpha)
+        exposure = self._ball_exposure(b)
+        Color(exposure, exposure, exposure, alpha)
         PushMatrix()
         Rotate(angle=angle, origin=(x, y))
         Rectangle(texture=_ball_texture(b["value"]),
@@ -1360,6 +1419,32 @@ class WinPileFX(Widget):
             else:
                 _r.size = (0.0, 0.0)
 
+    @staticmethod
+    def _light_presence(ball):
+        """接近落点期间平滑形成遮蔽；触地前后及落定状态切换时连续。"""
+        if ball["settled"]:
+            return 1.0
+        duration = min(LIGHT_APPROACH_SEC, ball["f"])
+        if duration <= 0:
+            return 1.0
+        u = max(0.0, min(1.0, (ball["tt"]-ball["f"]+duration)/duration))
+        return u*u*(3.0-2.0*u)
+
+    def _ball_exposure(self, ball):
+        """遮蔽随邻球接近渐进形成，不额外改变最终材质亮度。"""
+        links = ball.get("light_links", ())
+        if not links:
+            return 1.0
+        arrival = self._light_presence(ball)
+        if arrival <= 0:
+            return 1.0
+        occlusion = 0.0
+        for index,weight in links:
+            other = self._balls[index]
+            amount = self._light_presence(other)
+            occlusion += weight*amount
+        return 1.0-min(.32,arrival*occlusion)
+
     def _tbl_apply_balls(self, a_cup):
         """每帧把球层的属性写一遍。逻辑与 `_draw_bead` 逐字一致, 只是**写进既有指令**。"""
         for _c, _ro, _r, _b in self._bd:
@@ -1372,17 +1457,15 @@ class WinPileFX(Widget):
                 if _al <= 0.0:
                     _r.size = (0.0, 0.0)
                     continue
-                _sh = min(1.0, _b["shade"] + 0.10)  # 飞行球提亮一档, 与堆里的区分开
-            else:
-                _sh = _b["shade"]
             _scr = self._ball_screen(_b)
             if _scr is None:
                 _r.size = (0.0, 0.0)
                 continue
             _x, _y, _rx, _ry, _ang = _scr
-            _c.rgba = (_sh, _sh, _sh, _al)
-            _ro.angle = _ang
-            _ro.origin = (_x, _y)
+            # 材质已有明暗，球体不再叠加杯底/深度压暗。
+            exposure = self._ball_exposure(_b)
+            _c.rgba = (exposure, exposure, exposure, _al)
+            # 旋转指令保持单位变换，省掉两次逐帧属性写入。
             _r.pos = (_x - _rx, _y - _ry)
             _r.size = (_rx * 2, _ry * 2)
 
@@ -1466,8 +1549,33 @@ class WinPileFX(Widget):
         self._tbl_apply_balls(a_cup)
         _brk_add("球层", _t)
 
+    def _prebake_piles(self, budget=.0025):
+        """把支撑与遮蔽预热分帧完成，避免一次性计算造成十几毫秒尖峰。"""
+        if not getattr(self, "_pile_warm_active", False):
+            self._pile_warm_active = True
+            self._pile_warm_new = 0
+            self._pile_warm_ms = 0.0
+        started = time.perf_counter()
+        for count in (2,3,5,10,20,50,100):
+            for seed in range(_PILE_VARIANTS):
+                if (count,seed) in _PILE_CACHE:
+                    continue
+                try:
+                    _pile_projected(count,seed)
+                    self._pile_warm_new += 1
+                except Exception:
+                    continue
+                if time.perf_counter()-started >= budget:
+                    self._pile_warm_ms += (time.perf_counter()-started)*1000
+                    return False
+        self._pile_warm_ms += (time.perf_counter()-started)*1000
+        _boot_log("prebake", "球堆表 %d 键(新建 %d) %.1f ms"
+                  % (7*_PILE_VARIANTS,self._pile_warm_new,self._pile_warm_ms))
+        self._pile_warm_active = False
+        return True
+
     def prebake_step(self, dt=0):
-        """启动后分帧预热: 玻璃贴图 -> 文字纹理 -> HUD 字号 -> 字形图集 -> 球纹理 -> 7 档球堆 -> GC 冻结。
+        """启动后分帧预热: 首屏字形 -> 玻璃贴图 -> 文字纹理 -> HUD 字号 -> 球纹理 -> 球堆 -> GC。
 
         ⚠️ **玻璃贴图也要预热**: `_glass_textures()` 第一次调用要现场解码两张 PNG + 上传 GL, 而它
            正好落在**冷启动后的第一次中奖**那一刻(演出起手)。
@@ -1475,6 +1583,20 @@ class WinPileFX(Widget):
         ⚠️ 自链式 Clock.schedule_once 的回调**必须能收 1 个位置参数** —— 零参签名在真机上启动
            0.7s 必闪退, 而桌面 selftest/smoke 测不出来(老工程 android/BUILD_APK.md §3.23)。
         """
+        # 余额必须先可见。若排在 52 项文字纹理之后，仅调度间隔就多等数秒。
+        # 保持每帧一档，不把整条特效预热塞进首帧。
+        if not getattr(self, "_glyph_done", False):
+            try:
+                if _glyph_warm_step(self.area):
+                    Clock.schedule_once(self.prebake_step, 0.02)
+                    return
+            except Exception as exc:
+                from .text import _glyph_finish_warm
+                _boot_log("prebake", "字形预热失败，使用普通文字: %r" % exc)
+                _glyph_finish_warm()
+            self._glyph_done = True
+            Clock.schedule_once(self.prebake_step, 0.02)
+            return
         if not self._glass_prebaked:
             self._glass_prebaked = True
             _g0 = time.perf_counter()
@@ -1540,7 +1662,7 @@ class WinPileFX(Widget):
             self._texwarm_done = True
         if _FONT_WARM_SIZES is None:
             # 首次走到这里才按**当时的窗口密度**算(模块导入时窗口还没建, 那时 sp() 是错的)。
-            # ⚠️ **必须用 `_qfs` 落同一个网格**: Kivy 的字体缓存**按精确字号索引**, 两个值差 0.25px
+            # ⚠️ **必须保留布局时的精确字号**: Kivy 的字体缓存**按精确字号索引**, 两个值差 0.25px
             #    就是**两个 fontid** ⇒ 预热等于白烘, 每次创建中奖大字都要现开一次字形表。
             # ⚠️ **必须把整个阶梯都烘掉, 不能只烘第一档**: `fit_font_size` 是阶梯, 第一档放不下就试
             #    0.94/0.88/... —— **每一档都是一个新的精确字号、每次都要现开一次字形表**; 而中奖大字的
@@ -1634,16 +1756,6 @@ class WinPileFX(Widget):
             #    `_PREBAKE_DONE` 永不置真 —— 表现是"启动预热 5.8 秒变 90 秒"而**画面上什么都看不出来**。
             Clock.schedule_once(self.prebake_step, 0.02)
             return
-        # ⚠️ 一次一档, 与字号预热同一条理由(一帧烘 11 个字形 = 一记自己造的长帧)。
-        # ⚠️ 放在**字号预热之后、球纹理之前** —— 球纹理单步真机 100~200 毫秒, 别和它挤一帧。
-        if not getattr(self, "_glyph_done", False):
-            try:
-                if _glyph_warm_step(self.area):
-                    Clock.schedule_once(self.prebake_step, 0.02)   # ⚠️ 这一句不能少(见上面那条教训)
-                    return
-            except Exception:
-                pass
-            self._glyph_done = True
         cur = getattr(getattr(self.area, "game", None), "bet", DEFAULT_BET)
         order = [cur] + [b for b in (1, 10, 50, 100) if b != cur]
         todo = [b for b in order if b not in _CUP_BALL_TEX]
@@ -1677,15 +1789,9 @@ class WinPileFX(Widget):
         # ⚠️ 必须铺满**全部 _PILE_VARIANTS 个变体**, 不能只烘 seed=1: 玩期的 key 是 (倍率, _seq % 4),
         #    只烘一个的话同一档的第 2..N 次中奖全是冷建(x100 桌面 18.7ms / 安卓估 60~150ms), 而它卡在
         #    settle 那一帧 —— 正好压住本该给玩家看的槽位白闪/绿灯。
-        # ⚠️ 这一步**一次填完, 不再分帧** —— 坐标是查离线烘的表(84 个 key 实测 1.9ms; 改造前是 381ms
-        #    纯计算 + 84 x 0.03s 的调度间隔 ≈ 2.5 秒后台)。表若缺项会自动回退到现算(单次 22ms)。
-        for n in (2, 3, 5, 10, 20, 50, 100):
-            for sd in range(_PILE_VARIANTS):
-                if (n, sd) not in _PILE_CACHE:
-                    try:
-                        _pile_projected(n, sd)
-                    except Exception:
-                        pass
+        if not self._prebake_piles():
+            Clock.schedule_once(self.prebake_step, 0)
+            return
         # ---- GC 冻结: 预热全部跑完之后, 把**已经稳定下来的对象图**永久移出 GC 的扫描集。
         # 病根(真机实测): 面板"内存回收 39.0 毫秒(最坏一次 26.8)" —— 单次 26.8ms 对 gen-0 来说大得
         #    离谱, 那是 **gen-2 全量回收**在扫整个对象图, 而 1%Low 看的就是最坏那一帧。

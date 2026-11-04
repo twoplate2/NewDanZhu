@@ -16,9 +16,9 @@ from kivy.uix.label import Label
 
 from ..config import (BALL_R, BALL_VIEW, BALL_VIS_R, CH, COL_BUMPER, COL_CANVAS,
                       COL_FIRE, COL_LAMP_OFF, COL_LANE, COL_METER, COL_PEG,
-                      COL_WALL, CW, FIELD_L, FIXED_DT, FLOOR, LANE_L,
+                      COL_WALL, CW, FIELD_L, FIXED_DT, FLOOR, FLOOR_VIEW_Y, LANE_L,
                       MISFIRE_POWER, NUM_SLOTS, PEG_R, PLUNGER_Y, RIGHT_INNER,
-                      SLOT_TOP, SLOT_W, hex_rgb, _spring_step, _squash_step)
+                      SLOT_TOP, SLOT_W, SPRING_TICK_DT, hex_rgb, _spring_step, _squash_step)
 from ..physics import power_u
 # ⚠️ `_brk_add` 的家在 `ui/text.py`(帧剖析的写入口都在那边) —— 从 platform 拿会 ImportError,
 #    因为那边已经把它让出去了(拆分时两边各建了一份, 是静默分叉)。
@@ -64,10 +64,10 @@ class GameArea(FloatLayout):
         self._spring_bars = []
         self._spring_power = 0.0
         self._spring_vel = 0.0
+        self._spring_accum = 0.0
         self._spring_bar_col = None
         self._pulse = None
         self._effects = []
-        self._bench_badge = None      # 跑分提示牌, 不走 `_effects` 的飘字动画
         self._last_size = None        # 尺寸变了才清特效
         # ⚠️ WinPileFX **必须最先 `add_widget`**: Kivy 按 children 逆序绘制(后加的画在上面),
         #    而中奖大字是 settle 时才 add 的 Label ⇒ 大字天然盖在杯层之上, 杯子压暗盖不住它。
@@ -90,8 +90,6 @@ class GameArea(FloatLayout):
         chain = [self.win_fx]
         for e in self._effects:
             chain.extend(e["ws"])
-        if self._bench_badge is not None:
-            chain.append(self._bench_badge)
         for w in chain:
             try:
                 self.canvas.remove(w.canvas)
@@ -134,7 +132,7 @@ class GameArea(FloatLayout):
             self._redraw()
             return
         fs = max(12, int(20 * self._s))
-        cy = (SLOT_TOP + FLOOR) / 2.0
+        cy = (SLOT_TOP + 3 + FLOOR_VIEW_Y) / 2.0
         for i in range(NUM_SLOTS):
             m = g.multipliers[i]
             try:
@@ -184,16 +182,17 @@ class GameArea(FloatLayout):
             Color(*hex_rgb(COL_CANVAS))
             Rectangle(pos=self.pos, size=self.size)
             Color(*hex_rgb(COL_LANE))
-            Rectangle(**self._rect(LANE_L, 0, RIGHT_INNER, FLOOR))
+            Rectangle(**self._rect(LANE_L, 0, RIGHT_INNER, FLOOR_VIEW_Y))
             Color(*hex_rgb(COL_WALL))
             for w in g.geo["walls"]:
                 if w[1] == FLOOR:
                     # ⚠️ 底墙**绘制**上沿下移到球的新下沿, 球才"坐在地面上"而非陷进去。
                     #    只改绘制: 物理层的底墙在 `physics_step` 里被显式跳过(地板不是墙),
                     #    这里的 y 不参与碰撞/落格/门禁, `build_walls()` 的几何一个字不动。
-                    Rectangle(**self._rect(w[0], FLOOR + BALL_R * (BALL_VIEW - 1), w[2], w[3]))
+                    Rectangle(**self._rect(w[0], FLOOR_VIEW_Y, w[2], w[3]))
                     continue
-                Rectangle(**self._rect(*w))
+                Rectangle(**self._rect(w[0], w[1], w[2],
+                                      FLOOR_VIEW_Y if w[3] == FLOOR else w[3]))
             # 导流弧(右壁口部弧形导轨)
             if g.geo["deflectors"]:
                 pts = []
@@ -214,7 +213,7 @@ class GameArea(FloatLayout):
             # 槽隔板
             Color(*hex_rgb(COL_BUMPER))
             for d in g.geo["dividers"]:
-                Rectangle(**self._rect(*d))
+                Rectangle(**self._rect(d[0], d[1], d[2], FLOOR_VIEW_Y))
             # 倍率槽(圆角, 颜色随盘面)
             self._slot_cols = []
             for i in range(NUM_SLOTS):
@@ -222,7 +221,7 @@ class GameArea(FloatLayout):
                 self._slot_cols.append(col)
                 RoundedRectangle(radius=[max(1.0, 6 * s)],
                                  **self._rect(FIELD_L + i * SLOT_W + 2, SLOT_TOP + 3,
-                                              FIELD_L + (i + 1) * SLOT_W - 2, FLOOR - 3))
+                                              FIELD_L + (i + 1) * SLOT_W - 2, FLOOR_VIEW_Y))
             # 槽倍率文字(走 `slot_text_tex` 的缓存; 逻辑 20px 跟盘面缩放, 手机上≈11sp)
             # ⚠️ **9 个槽全都建**(空槽用 size=(0,0) 藏起来, 视觉完全等价) —— 否则倍率的
             #    "哪几个槽有奖"每次重掷都会变, 条数跟着变就没法在原地更新了(见 `_update_slots`)。
@@ -230,7 +229,7 @@ class GameArea(FloatLayout):
             self._slot_txt_rects = []
             fs = max(12, int(20 * s))
             cx = FIELD_L + 0.5 * SLOT_W
-            cy = (SLOT_TOP + FLOOR) / 2.0
+            cy = (SLOT_TOP + 3 + FLOOR_VIEW_Y) / 2.0
             for i in range(NUM_SLOTS):
                 m = g.multipliers[i]
                 self._slot_txt_cols.append(Color(*hex_rgb(slot_txt(m))))
@@ -267,6 +266,8 @@ class GameArea(FloatLayout):
             # 弹簧: 2 条横线(在凹槽内, 间距=松弛, 贴紧=压缩)
             self._spring_bar_col = Color(*hex_rgb("#8fa0c4"))
             self._spring_bars = []
+            self._spring_draw_key = None
+            self._spring_color_key = None
             for _ in range(3):
                 self._spring_bars.append(
                     Line(points=[0, 0, 0, 0], width=max(0.8, 1.5 * s),
@@ -280,7 +281,6 @@ class GameArea(FloatLayout):
                                            2 * BALL_R * BALL_VIEW * s))
             self._ball_pop = PopMatrix()
         self._restack_overlays()
-        self._place_bench_badge()
         self.tick_draw()
 
     # ------------------------------ 特效 ------------------------------
@@ -388,39 +388,8 @@ class GameArea(FloatLayout):
                               "life": life, "rgb": hex_rgb(hexcolor),
                               "cx": cx, "cy": cy})
 
-    def _place_bench_badge(self):
-        badge = self._bench_badge
-        if badge is not None:
-            badge.center = (self._px(CW / 2.0), self._py(CH / 2.0) - self.y)
 
-    def show_bench_badge(self, text):
-        """跑分状态固定在盘面中心: 大号红字, 不置灰、不加遮挡底板。"""
-        badge = self._bench_badge
-        display = text.replace("\n", "　·　")
-        if badge is None:
-            badge = Label(text=display, font_size=sp(20), bold=True, halign="center",
-                          valign="middle", color=hex_rgb(COL_FIRE) + (1,),
-                          size_hint=(None, None))
-            _tag_texupd(badge, "跑分提示")
-            badge.texture_update()
-            badge.size = badge.texture_size
-            self._bench_badge = badge
-            self.add_widget(badge)
-        elif badge.text != display:
-            badge.text = display
-            badge.texture_update()
-            badge.size = badge.texture_size
-        self._place_bench_badge()
-        self._restack_overlays()
 
-    def hide_bench_badge(self):
-        badge = self._bench_badge
-        self._bench_badge = None
-        if badge is not None:
-            try:
-                self.remove_widget(badge)
-            except Exception:
-                pass
 
     def set_lamp(self, i, hex_color):
         if 0 <= i < len(self._lamp_cols):
@@ -431,6 +400,45 @@ class GameArea(FloatLayout):
             col.rgb = hex_rgb(COL_LAMP_OFF)
 
     # ------------------------------ 帧驱动 ------------------------------
+    def _tick_spring(self, dt):
+        """蓄力实时响应，回弹最多 30Hz；停稳后不再重写画布指令。"""
+        charging = self.model.state == "charging"
+        if charging:
+            self._spring_power = self.model.power
+            self._spring_vel = 0.0
+            self._spring_accum = 0.0
+        elif self._spring_power or self._spring_vel:
+            self._spring_accum += max(0.0, dt)
+            if self._spring_accum >= SPRING_TICK_DT:
+                self._spring_power, self._spring_vel = _spring_step(
+                    self._spring_power, self._spring_vel, self._spring_accum)
+                self._spring_accum = 0.0
+
+        compression = max(-0.25, self._spring_power)
+        key = (compression, self._s, self._ox, self._oyt)
+        if key != self._spring_draw_key:
+            top = PLUNGER_Y + BALL_VIS_R
+            bottom = top + 9 + compression * 45
+            lx, rx = self._px(LANE_L + 5), self._px(RIGHT_INNER - 5)
+            y0, y1 = self._py(top), self._py(bottom)
+            self._spring_bars[0].points = [lx, y0, rx, y0]
+            self._spring_bars[1].points = [rx, y0, lx, y1]
+            self._spring_bars[2].points = [lx, y1, rx, y1]
+            self._spring_draw_key = key
+
+        # 松手后固定灰蓝色，回弹不再在红色与金色之间跳变。
+        color = (143 / 255.0, 160 / 255.0, 196 / 255.0)
+        if charging and compression >= 0.01:
+            if compression < MISFIRE_POWER:
+                color = (196 / 255.0, 90 / 255.0, 74 / 255.0)
+            else:
+                u = power_u(compression)
+                color = tuple(int(a + (b - a) * u) / 255.0
+                              for a, b in ((143, 255), (160, 215), (196, 0)))
+        if color != self._spring_color_key:
+            self._spring_bar_col.rgb = color
+            self._spring_color_key = color
+
     def tick_draw(self, dt=None):
         """每帧只更新动态元素(ball/meter/plunger) + 特效, 不重排 canvas。
 
@@ -438,7 +446,7 @@ class GameArea(FloatLayout):
            这是本函数里**所有"逐帧积分"的唯一时间源**: 早先这些积分硬编码 `FIXED_DT`,
            而本函数是「每**渲染帧**走一次」(不在物理累加器里) ⇒ 推进速度被帧率乘了一遍
            (165Hz 上快 2.75 倍)。实测到的两处见 `_spring_step` / `_squash_step`。
-        ⚠️ 缺省 `None` ⇒ 退回 `FIXED_DT`, 且**子步数 = 1** ⇒ 与改前**逐位相同**。
+        ⚠️ 缺省 `None` ⇒ 退回 `FIXED_DT`。
            `_redraw()` 末尾那次调用(尺寸/位置变才跑)就是走这条路, 它不该按墙钟推进。
         """
         if dt is None or dt <= 0.0:
@@ -515,45 +523,7 @@ class GameArea(FloatLayout):
             self._meter_col.rgb = hex_rgb(COL_FIRE if weak else COL_METER)
         else:
             self._meter_fill.size = (0, 0)
-        # 弹簧: 蓄力时跟随, 释放后阻尼振荡回弹(过冲→往复→停止)
-        if g.state == "charging":
-            self._spring_power = g.power
-            self._spring_vel = 0.0
-        elif abs(self._spring_power) > 0.0005 or abs(self._spring_vel) > 0.005:
-            # ⚠️ 走 `_spring_step(…, dt)` 而不是硬编码 `FIXED_DT`: 本函数每**渲染帧**只调
-            #    一次, 而回弹曲线是按 60Hz 调的 ⇒ 硬编码会让高刷机上快 2.75~3.08 倍
-            #    (165Hz 上收尾时长 1.024s, 设计值 2.817s)。
-            self._spring_power, self._spring_vel = _spring_step(
-                self._spring_power, self._spring_vel, dt)
-        else:
-            self._spring_power = 0.0
-            self._spring_vel = 0.0
-        sp = max(-0.25, self._spring_power)  # 过冲到 -0.25(回弹约 11px), 视觉明显
-        # 弹簧 Z 字形: 上横线→斜线→下横线
-        bar_top = PLUNGER_Y + BALL_VIS_R      # 球的下沿: 球"坐在弹簧上"而非陷进去
-        bar_bot = bar_top + 9 + sp * 45
-        lx = self._px(LANE_L + 5)
-        rx = self._px(RIGHT_INNER - 5)
-        y0 = self._py(bar_top)
-        y1 = self._py(bar_bot)
-        bars = self._spring_bars
-        bars[0].points = [lx, y0, rx, y0]
-        bars[1].points = [rx, y0, lx, y1]
-        bars[2].points = [lx, y1, rx, y1]
-        # 弹簧颜色: 哑火→红, 正常蓄力→灰蓝渐变至金黄
-        weak = sp < MISFIRE_POWER
-        if sp < 0.01:
-            self._spring_bar_col.rgb = hex_rgb("#8fa0c4")
-        elif weak:
-            self._spring_bar_col.rgb = hex_rgb("#c45a4a")
-        else:
-            u = power_u(sp)
-            r0, g0, b0 = 0x8f, 0xa0, 0xc4
-            r1, g1, b1 = 0xff, 0xd7, 0x00
-            r = int(r0 + (r1 - r0) * u)
-            g = int(g0 + (g1 - g0) * u)
-            b = int(b0 + (b1 - b0) * u)
-            self._spring_bar_col.rgb = (r / 255.0, g / 255.0, b / 255.0)
+        self._tick_spring(dt)
         # 槽位白闪
         if self._pulse is not None:
             i, end = self._pulse

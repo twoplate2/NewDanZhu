@@ -37,7 +37,7 @@ if ROOT not in sys.path:
 
 # ⚠️ 用 os.path 拼, **不写反斜杠字面量** —— `r"...\\android\\..."` 里的 `\\a` 是 BEL,
 #    会被悄悄吃掉(实测: 文件里变成 `DanZhu` 后面跟一个响铃符再加 `ndroid`)。
-OLD_MAIN = os.path.join(os.path.dirname(ROOT), "android", "main.py")
+OLD_MAIN = os.path.join(os.path.dirname(os.path.dirname(HERE)), "base", "main.py")
 
 ROWS = []
 

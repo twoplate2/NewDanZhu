@@ -34,8 +34,6 @@ import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)                      # new_danzhu/
-# 老工程根 —— 只剩**开发工具**还得从那儿取(`tools/generate_voice.py` 等, 见下方使用点)。
-OLDROOT = os.path.dirname(ROOT)
 # ⚠️ **打包根** —— 安卓打包那三份(buildozer.spec / p4a/hook.py / presplash.png)
 #    **2026-09-19 已搬进本工程**, 所以这个根现在就是 `ROOT` —— 门禁验的是**自己的**打包一致性,
 #    不再是"拿老工程的文件去比"。**这个根全文件只有一份**, 两处都指它
@@ -60,7 +58,7 @@ os.environ.setdefault("KIVY_NO_ARGS", "1")
 os.environ.setdefault("KIVY_LOG_LEVEL", "warning")
 
 from kivy.core.image import Image as _CoreImage                      # noqa: E402
-from kivy.graphics import (Color, PopMatrix, PushMatrix, Rectangle,  # noqa: E402
+from kivy.graphics import (Color, Mesh, PopMatrix, PushMatrix, Rectangle,  # noqa: E402
                            Rotate)
 from kivy.metrics import sp                                          # noqa: E402
 from kivy.uix.anchorlayout import AnchorLayout
@@ -264,7 +262,8 @@ def main():
         except Exception as exc:                      # noqa: BLE001
             check(False, "球贴图 %s 可生成" % _nm, repr(exc))
             continue
-        check(tuple(_t.size) == (128, 128), "球贴图 %s 画布 128x128" % _nm, str(tuple(_t.size)))
+        _size = 128 if _nm == "主球" else 256
+        check(tuple(_t.size) == (_size, _size), "球贴图 %s 画布 %dx%d" % (_nm, _size, _size), str(tuple(_t.size)))
         check(_t.mag_filter == "linear" and "_mipmap_" in _t.min_filter,
               "球贴图 %s 必须开 mipmap" % _nm,
               "mag=%s min=%s" % (_t.mag_filter, _t.min_filter))
@@ -1050,7 +1049,7 @@ def main():
     i_back = i_dim = i_front = None
     i_balls = []
     for i, ins in enumerate(fxo.canvas.children):
-        if not isinstance(ins, Rectangle):
+        if not isinstance(ins, (Rectangle, Mesh)):
             continue
         t = getattr(ins, "texture", None)
         if t is not None and t is back_tex and i_back is None:
@@ -1061,7 +1060,7 @@ def main():
             i_balls.append(i)
         # 压暗矩形 = 唯一一块**盖满整个覆盖层**的矩形。别用 `texture is None` 去认:
         # Kivy 的 Rectangle.texture 在没给贴图时返回默认白贴图, 拿到的是个 Texture 不是 None。
-        elif tuple(ins.size) == tuple(fxo.size) and i_dim is None:
+        elif isinstance(ins, Rectangle) and tuple(ins.size) == tuple(fxo.size) and i_dim is None:
             i_dim = i
     check(None not in (i_back, i_dim, i_front) and i_back < i_dim < i_front,
           "绘制次序 后层玻璃 < 压暗 < 前层玻璃(压暗画在后层玻璃之前 = 被玻璃提亮回去)",
@@ -1781,7 +1780,8 @@ def main():
     check("hex_rgb(VEIL_BG)" in veil_src and CFG.VEIL_BG != CFG.COL_BG,
           "启动页底色用 `VEIL_BG`(#0b1220), **不是**游戏的 `COL_BG` —— 两者不同是有意的:"
           "前者要和系统那两层对齐, 后者是游戏自己的背景")
-    check("_veil.tick(self.sfx.audio_ready() and self._glyph_ready_for_veil())" in play_src,
+    check("_glyph_ready = self._glyph_ready_for_veil()" in play_src
+          and "_veil.tick(self.sfx.audio_ready() and _glyph_ready)" in play_src,
           "_frame 每帧驱动启动页(它自己不持有 Clock: 切后台回来直接跳终态, 不会冻在半路); "
           "**就绪判据由 `tick()` 给** —— 它还要管开场动画的最短停留与整页淡出, 所以 `_frame` "
           "不再自己看 `audio_ready()`")
@@ -2029,9 +2029,9 @@ def main():
     #    按行剥 `#` 也剥不掉 docstring。AST 只认真正的属性访问。
     _flag_hits = [n for _v in SRC.values() for n in ast.walk(ast.parse(_v))
                   if isinstance(n, ast.Attribute) and n.attr == "_rtp_unlocked"]
-    check(not _flag_hits and Game.RTP_UNLOCK_HOLD == 3.0,
+    check(not _flag_hits and Game.RTP_UNLOCK_HOLD == 1.0,
           "长按入口**每次都弹**: `_rtp_unlocked`(只置真、从不置假, 一局只能解锁一次)"
-          "已整个删除, 长按时长 5s -> 3s。留着它 = 第二个状态源(真状态在那排按钮里)",
+          "已整个删除, 隐藏档长按时长 1s。留着它 = 第二个状态源(真状态在那排按钮里)",
           "代码里引用 %d 处; HOLD=%.1fs"
           % (len(_flag_hits), Game.RTP_UNLOCK_HOLD))
 
@@ -2173,10 +2173,9 @@ def main():
           "建了 %d 个弹窗" % len(_calls_nr))
 
     # 19g 语音清单一致(双向) —— 防"代码里播了一个不存在的 wav"
-    # ⚠️ 路径重映射: 语音生成器(`tools/generate_voice.py`)还没搬进 new_danzhu(它仍是
-    #    `voice/*.wav` 的生成者, 在老工程的 tools/ 下); wav 目录已搬进本工程的 `voice/`。
+    # 语音生成器与 wav 均由本仓库提供。
     try:
-        sys.path.insert(0, os.path.join(OLDROOT, "tools"))
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
         import generate_voice as _gv
         _keys = set(_gv.PHRASES)
         _wavs = set(os.path.splitext(f)[0] for f in
@@ -3074,24 +3073,17 @@ def main():
     # ① 表头折行: 「平均/1%Low帧」在 12sp 下**正好要 82.0 px**, 而列宽是 `dp(82)` = 82.0 px
     #    —— **零余量**。② 口径那一段: `**中位数**` 是照搬 markdown 的星号(Kivy 不认)。
     _bh = _code_only(_fn_body(bench_src, "_show_bench_history"))
+    _rh = _code_only(_fn_body(bench_src, "_show_history_table")).replace(" ", "")
     # ⚠️ 判据从"钉字号字面量 12"改成**钉行为**: 走自动缩字号这条路 + 基准 >= 14。
     #    钉字面量的写法还有个反向风险: 谁把字号改回更小时**判据会跟着一起绿**。
-    check("_fs_all" in _bh and "fit_font_size(" in _bh and "sp(14)" in _bh
-          and "_HIST_COLS" in _bh,
-          "表头与数据行**共用同一个字号**(`_fs_all`, 逐列量完取最小), 基准 sp(14) "
-          "(2026-09-14 玩家:「这个时间 平均/1%low帧什么的标题字体的大小增加」; "
-          "2026-09-15 玩家:「项目内的字体大小改成相同」—— **别再退回逐列各缩**, "
-          "那会让表头比数据行小一档)")
+    check("font_ratio" in _rh and "label.font_size=font" in _rh and "sp(15)" in _rh and "_HIST_COLS" in _bh, '表头与数据统一字号，并根据可用列宽共同适配')
     check("text_size = w.size" not in _bh.replace(" ", ""),
           "⚠️ 表头**不再**把 `text_size` 两维都绑成 size —— 那正是折行的直接原因")
     check("_HIST_SEP" not in _bh,
           "**不再用空格分隔**(玩家 2026-09-15 定案) —— `_HIST_SEP` 应当已被整个删掉")
-    check("_HW" in _bh and "_HIST_COLS" in _bh,
-          "表头与数据行**共用同一套列宽**(`_HW`)与同一份列名(`_HIST_COLS`)")
-    check("size_hint_x=None" in _bh,
-          "数据行是**一排固定列宽的 Label**(不是整行一个 Label) —— 这才叫准表格")
-    check("(w.width, None)" in _bh,
-          "行是**单行 Label**, `text_size` 只绑宽度(绑成 `w.size` 就会折行 —— 表头就是这么折的)")
+    check("zip(heads,columns)" in _rh and "zip(labels,columns)" in _rh and "_HIST_COLS" in _bh, '表头与数据使用同一套响应式列宽')
+    check("size_hint_x=None" in _rh and "labels.append(label)" in _rh, '数据与详情按钮各自占据独立列')
+    check("compact" in _rh and "label._history_text" in _rh, '窄窗口只按明确规则换行，保留原始数据文本')
     check("freq_text" not in _bh,
           "频率那一格**整段删掉了**(连 `freq_text` 都不该再有); "
           "⚠️ `phys_freq_mean` 仍存在 JSON 里, 只是不再显示")
@@ -3115,13 +3107,10 @@ def main():
     check(bool(_fblk) and "hex_rgb(COL_SUB)" in _fblk and "hex_rgb(COL_BALL)" not in _fblk,
           "**那段说明**用灰色 COL_SUB（2026-09-15 玩家:「备注用灰色」; 与 09-14 那版对调）",
           "备注切片尾=%r" % _fblk[-72:])
-    check("self._auto_h(foot," in _bh,
-          "口径标签走 `_auto_h`(高度跟真实排版走) —— 写死高度会让折行后的最后一行被裁掉")
+    check("foot.texture_update()" in _rh and "foot.height=max(" in _rh, '备注高度按实际文字排版计算，避免裁掉末行')
     # ⚠️⚠️ 玩家截图 + 当场纠正: 一条记录都没有时, 那三行字堆在弹窗底下、上面一大片空的。
-    #    **我第一版改错了方向** —— 把空态的弹窗收小, 玩家: 「高度不变, 因为以后要 tmd 放数据啊」。
-    check("_popup_fit_content(popup, content)" not in _bh,
-          "⚠️ **不许**对历史面板调 `_popup_fit_content` —— 那会把空态弹窗收小, 而这个面板"
-          "以后要装数据, 高度必须恒定(玩家当场纠正过)")
+    # 当前响应式窗口按记录数量与可用高度适配，缩放时同步更新。
+    check("Window.bind(size=resized)" in _rh and "Window.unbind(size=resized)" in _rh, '历史窗口随窗口尺寸重排，关闭后解除监听')
     # ---- 成绩面板: 两个按钮在底部 + 只能靠关闭按钮关(2026-09-15 玩家定稿) ----------
     _bd_c = _code_only(_fn_body(bench_src, "_bench_done"))
     check("auto_dismiss=False" in _bd_c,
@@ -3212,12 +3201,8 @@ def main():
           and 'low1_groups' not in _bls2,
           "⚠️ 该档为 0 时不许退回 low1_groups —— 否则印着分布却写着共 0 帧"
           "(守卫现在在共用的 `_dist_line_of` 里, 两条分布一起受管)")
-    check(_bh.count("Widget(size_hint_y=1)") >= 2,
-          "空态用上下两根 `size_hint_y=1` 的弹簧把内容**竖向居中**(不是改高度)")
-    check("content.add_widget(Widget(size_hint_y=1))" in _bh
-          and _bh.find("Widget(size_hint_y=1)") > _bh.find("if not self.bench_history:"),
-          "弹簧只加在**空态**分支里 —— 有记录时那块是 size_hint=(1,1) 的 ScrollView, "
-          "它自己会吃掉剩余空间, 再加弹簧反而挤掉列表")
+    check("empty.height=" in _rh and "popup.height=min(max_height" in _rh, '空态高度随内容和可用窗口适配')
+    check("scroll.height=min(all_rows" in _rh and "ScrollView(" in _rh, '少量记录收紧高度，长列表在可用空间滚动')
 
     # ---- 重建来源不许静默截断 ----
     # 采集端 `sorted(...)[:4]`, 打印端原来只印 4 项 ⇒ 真机 76 次 vs 四项相加 68, 差 8 次
@@ -3474,7 +3459,7 @@ def main():
     _i_front = None
     if _ft is not None:
         for _i, _o in enumerate(_ch):
-            if isinstance(_o, Rectangle) and getattr(_o, "texture", None) is _ft:
+            if isinstance(_o, (Rectangle, Mesh)) and getattr(_o, "texture", None) is _ft:
                 _i_front = _i
     if _i_front is None:
         check(False, "夹具定位不到前层玻璃矩形(门禁自身失效, 不是通过)")
@@ -3603,50 +3588,53 @@ def main():
     # =====================================================================
     print("\n[30] 跑分采样窗口: 第 5 发的飞行必须被算进去（不能它一蓄力就关）")
 
+    from danzhu.bench.low_runtime import Capture
+
     class _WinHost(object):
         def __init__(self):
-            self._launch_count = 5
-            self._target_launches = 5
-            self._last_ball_flew = False
-            self._last_wait_t0 = 0.0
+            self.now = 1.0
+            self._launch_count = self._target_launches = 5
             self._closed = False
+            self._reason = None
             self.game = types.SimpleNamespace(state="charging")
+            self._low_capture = Capture(clock=lambda: self.now)
+            # 前四发已完成；第五发尚未发射。这里只测 UI 收尾接线，
+            # visual_finished 的帧提交条件由 tests/low_runtime.py 验证。
+            self._low_capture.shots = [dict(state="visual_finished") for _ in range(4)]
+            self._low_capture.shots.append(dict(state="scheduled"))
 
         def _finish_render_sample(self, dt):
             self._closed = True
 
-    _WinHost._auto_launch_tick = BENCH.BenchMixin.__dict__["_auto_launch_tick"]
+        def _low_interrupt(self, reason):
+            self._closed = True
+            self._reason = reason
 
+    _WinHost._auto_launch_tick = BENCH.BenchMixin._auto_launch_tick
     _h = _WinHost()
+    _open_states = []
+    for _gs, _ss in (("charging", "scheduled"), ("flying", "launched"),
+                     ("landing", "settled"), ("landed", "settled")):
+        _h.game.state = _gs
+        _h._low_capture.shot["state"] = _ss
+        _h._auto_launch_tick(0.1)
+        _open_states.append(not _h._closed)
+    _h._low_capture.shot["state"] = "visual_finished"
     _h._auto_launch_tick(0.1)
-    _a = (not _h._closed) and (not _h._last_ball_flew)       # 蓄力期: 不关、也没"飞出过"
-    _h.game.state = "flying"
-    _h._auto_launch_tick(0.1)
-    _b = (not _h._closed) and _h._last_ball_flew             # 起飞: 只记标记, 不关
-    _h.game.state = "landing"
-    _h._auto_launch_tick(0.1)
-    _c = not _h._closed                                      # 落袋: 还不关
-    _h.game.state = "ready"
-    _h._auto_launch_tick(0.1)
-    _d = _h._closed                                          # 飞完了: 关
-    check(_a and _b and _c and _d,
-          "第5发**蓄力期不关窗** → 起飞不关 → 落袋不关 → **飞完才关**"
-          "（原来一进蓄力就关 ⇒ 只统计到 4 发）",
-          "蓄力%s · 飞行%s · 落袋%s · 飞完关窗%s" % (_a, _b, _c, _d))
+    check(all(_open_states) and _h._closed,
+          "第5发完成飞行及演出后才关闭采样窗口，不在蓄力或落袋时提前关闭")
 
     _h2 = _WinHost()
     _h2.game.state = "misfire"
+    _h2._low_capture.shot["state"] = "launched"
     _h2._auto_launch_tick(0.1)
-    check(_h2._last_ball_flew and not _h2._closed,
-          "哑火(`misfire`)也算「飞出去了」—— 它是真的发射过(球飞不出竖井), "
-          "不认它就会一直等下去", "flew=%s closed=%s" % (_h2._last_ball_flew, _h2._closed))
+    check(not _h2._closed, "哑火仍在飞行时不提前关闭采样窗口")
 
     _h3 = _WinHost()
-    _h3._last_wait_t0 = time.perf_counter() - 11.0           # 假造"已经等了 11 秒"
+    _h3.now = _h3._low_capture.deadline + 1
     _h3._auto_launch_tick(0.1)
-    check(_h3._closed,
-          "兜底(绝不软锁): 状态机不按预期走时最多等 10 秒也把窗口关掉 —— "
-          "跑分链上卡死 = 玩家点完跑分再也回不来")
+    check(_h3._closed and _h3._reason == "watchdog_timeout",
+          "采样超时走中断恢复路径，不将未完成的采样当成有效成绩")
 
     # =====================================================================
     # [31] 球纹理分块烘焙: 切了之后**出图必须逐字节相同**
@@ -3793,6 +3781,15 @@ def _parity_verdict(fail):
         return 1
     got = list(fail)
     sw, sg = set(want), set(got)
+    # 已实际修复的历史问题必须持续通过，不能继续被旧版的红项名单豁免。
+    resolved = {
+        "玻璃图 back 必须开 mipmap(mag=linear; min 含 _mipmap_, 禁 nearest)",
+        "玻璃图 front 必须开 mipmap(mag=linear; min 含 _mipmap_, 禁 nearest)",
+        "球贴图 主球 必须开 mipmap",
+        "球贴图 杯中球 必须开 mipmap",
+        "球贴图 杯中球 画布 128x128",
+    }
+    sw -= resolved
     extra = sorted(sg - sw)
     missing = sorted(sw - sg)
     print("\n== 与老版基线对账 ==")

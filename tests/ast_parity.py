@@ -45,7 +45,7 @@ ROOT = os.path.dirname(HERE)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-OLD_MAIN = os.path.join(os.path.dirname(ROOT), "android", "main.py")
+OLD_MAIN = os.path.join(os.path.dirname(os.path.dirname(HERE)), "base", "main.py")
 GOLDEN = os.path.join(HERE, "golden", "ast_diff.txt")
 NEW_PKG = os.path.join(ROOT, "danzhu")
 

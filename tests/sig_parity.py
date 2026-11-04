@@ -40,7 +40,7 @@ for _s in (sys.stdout, sys.stderr):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-OLD_MAIN = os.path.join(os.path.dirname(ROOT), "android", "main.py")
+OLD_MAIN = os.path.join(os.path.dirname(os.path.dirname(HERE)), "base", "main.py")
 NEW_PKG = os.path.join(ROOT, "danzhu")
 GOLDEN = os.path.join(HERE, "golden", "sig_diff.txt")
 GOLDEN_C = os.path.join(HERE, "golden", "const_diff.txt")

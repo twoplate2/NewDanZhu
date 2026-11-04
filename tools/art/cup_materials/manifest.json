@@ -1,0 +1,44 @@
+{
+  "tool": "built-in image_gen",
+  "sources": {
+    "1": "source_1.png",
+    "10": "source_10.png",
+    "50": "source_50.png",
+    "100": "source_100.png"
+  },
+  "reference": "User-provided image of polished purple balls in a cardboard box",
+  "base_prompt": "Use case: product-mockup / game sprite. Use the attached photo ONLY as material and lighting reference. Create one isolated perfectly spherical purple marble/solid polished bead with the same believable physical surface as the purple balls in that photograph. Orthographic frontal camera, exact circular silhouette, centered on a square canvas, ball diameter approximately 85% of canvas width with equal transparent margins. Smooth rich purple body (base hue approximately #a335ee), broad continuous gentle shading that clearly describes a real sphere, softly reflected studio environment at upper left, subtle contact-side darkening in the bottom edge. Keep body color visible over most of the sphere. Small natural soft surface reflections, not an emissive dot; no stripes, no seams, no printed pattern, no internal glow, no bloom, no white center, no thick black outline. Photorealistic polished resin / glass-like solid opaque bead, not metallic, not a flat circle or icon. Do not include the box, cup, any other balls, ground plane, cast shadow outside the ball, text, labels or UI. Transparent RGBA background, no checkerboard drawn into the image. Intended to be displayed around 60-80 screen pixels in a Kivy game; prioritize a clear natural sphere at that size. Output one sprite.",
+  "variant_prompt": "Edit the attached game sprite. Change ONLY the purple material/pigment of the sphere to {color} (base color approximately {hex}). Preserve the exact sphere silhouette, centered placement, image framing, size, transparent alpha background, photorealistic polished solid-bead surface, upper-left broad studio reflection, secondary right-side reflection and the same continuous shading. Specular reflections remain neutral white, not tinted into glow. Do not add anything: no ground shadow, no background, no stripes, no seams, no symbols or text. This will be one of four matching colored spheres in the same game. Output a transparent RGBA sprite with the same composition.",
+  "variant_values": {
+    "1": [
+      "emerald green",
+      "#39c98a"
+    ],
+    "10": [
+      "sky blue",
+      "#4da8ff"
+    ],
+    "50": [
+      "coral red",
+      "#e0533b"
+    ]
+  },
+  "sprite_preparation": {
+    "output_size": [
+      256,
+      256
+    ],
+    "source_rim_inset_per_side": 0.015,
+    "body_alpha": "opaque",
+    "edge_feather_pixels": 1,
+    "runtime_size_unchanged": true,
+    "purpose": "remove pale source-edge fringe that looked like a translucent film",
+    "highlight_compression": 1.5,
+    "highlight_comparison_levels": [
+      0,
+      1.5,
+      4
+    ],
+    "highlight_method": "compress excess neutral reflection above material body color; preserve base, shadows and alpha"
+  }
+}

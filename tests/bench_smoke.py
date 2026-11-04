@@ -158,7 +158,6 @@ def main():
     probe("跑分启动 _start_bench_test", root._start_bench_test, pump_n=30)
     probe("设备信息 _device_info", root._device_info)
     probe("构建信息 _build_info", root._build_info)
-    probe("诊断正文 _bench_diag_text", lambda: root._bench_diag_text())
     probe("启动日志正文 _startup_log_text", lambda: root._startup_log_text())
     probe("电源日志正文 _power_log_text", lambda: root._power_log_text())
     probe("帧记录 _bench_frame_log", lambda: root._bench_frame_log())
@@ -166,7 +165,7 @@ def main():
     probe("跑分菜单简介 _bench_menu_desc", lambda: B._bench_menu_desc())
 
     bad = [r for r in rows if r[0] == "FAIL"]
-    print("== 跑分链冒烟(18 个入口) ==")
+    print("== 跑分链冒烟(现有界面入口) ==")
     for tag, name, det in rows:
         if tag == "FAIL":
             print("  [FAIL] %s  %s" % (name, det))

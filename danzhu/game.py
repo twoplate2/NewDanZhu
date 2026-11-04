@@ -247,7 +247,7 @@ class Game(object):
     RTP_TIERS = (("80%", 0.80), ("120%", 1.20), ("200%", 2.00), ("360%", 3.60))
     # 隐藏档(长按"期望返还比例"解锁, **不保存**)。三档全部"必中"(K_DIST={9:1.0})。
     RTP_HIDDEN = (("1000%", 10.0), ("2000%", 20.0), ("5000%", 50.0))
-    RTP_UNLOCK_HOLD = 3.0        # 长按多久触发隐藏档弹窗
+    RTP_UNLOCK_HOLD = 1.0        # 隐藏档入口：长按 1 秒
     SOUND_MODES = ("on", "off")
 
     def __init__(self, fx=None, config_path=None, history_path=None,
@@ -366,7 +366,6 @@ class Game(object):
         self.power_grain = POWER_GRAIN_DEFAULT
         self._bench_running = False  # 跑分开关(普通玩法恒 False; 跑分链自己置位)
         self._bench_ball_i = 0
-        self._bench_status_active = False
         self.power_label = ""        # 老版 power_lbl.text
         self._auto_reset_on_start = False
         self._round_end_shown = False
@@ -1191,8 +1190,6 @@ class Game(object):
     # 经济 / 配置
     # =====================================================================
     def _refresh_stats(self):
-        if self._bench_status_active:
-            return
         rate = 100.0 * self.hits / self.plays if self.plays > 0 else 0
         self._emit("stats", {"text": "累计%d投%d中(%.0f%%)" % (self.plays, self.hits, rate)})
 
@@ -1297,7 +1294,7 @@ class Game(object):
         return opts, cur
 
     def ask_unlock_rtp(self):
-        """长按 3 秒: 四选一 + 确认。返回 True = 弹窗该开(UI 负责画, 关掉后回调)。
+        """长按 1 秒: 四选一 + 确认。返回 True = 弹窗该开(UI 负责画, 关掉后回调)。
 
         ⚠️ **非 ready 不弹**: 弹窗是 Window 的直接子控件, 输入锁拦不住它上面的按钮
         ⇒ 装杯等待期(landed)长按也能开、也能点「确定」, 而那时盘面换不动 ⇒ 又是"切一半"。
