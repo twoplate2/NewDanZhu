@@ -7,10 +7,13 @@ from pathlib import Path
 import json
 import sys
 import statistics
+import argparse
+import os
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
+os.environ.setdefault("KIVY_NO_ARGS", "1")
 from kivy.core.window import Window
 from kivy.core.image import Image as CoreImage
 from kivy.graphics import Fbo, ClearColor, ClearBuffers, Rectangle, Callback
@@ -56,9 +59,17 @@ def render(texture, size, pos, draw_size, path, fragment=None):
 
 
 def main():
-    source_dir = ROOT / "tools/art/cup_materials"
-    manifest = json.loads((source_dir/"manifest.json").read_text(encoding="utf-8"))
-    target = ROOT / "assets/balls"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path, default=ROOT/"tools/art/cup_materials/manifest.json")
+    parser.add_argument("--output", type=Path, default=ROOT/"assets/balls")
+    parser.add_argument("--balls-only", action="store_true")
+    args = parser.parse_args()
+    source_dir = args.manifest.resolve().parent
+    manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
+    preparation = manifest.get("sprite_preparation", {})
+    inset = preparation.get("source_rim_inset_per_side", .015)
+    compression = preparation.get("highlight_compression", HIGHLIGHT_COMPRESSION)
+    target = args.output.resolve()
     target.mkdir(parents=True,exist_ok=True)
     for bet,name in manifest["sources"].items():
         source = source_dir/name
@@ -78,14 +89,16 @@ def main():
                          for channel in range(3))
         # 源图最外圈的浅亮杂边会在游戏里重复成一层“塑料膜”。
         # 去掉这圈边缘并重建一像素抗锯齿轮廓，球身保持实心，显示直径不变。
-        cut_x,cut_y=(x1-x0)*.015,(y1-y0)*.015
+        cut_x,cut_y=(x1-x0)*inset,(y1-y0)*inset
         x0+=cut_x; x1-=cut_x
         y0+=cut_y; y1-=cut_y
         sx,sy = 254/(x1-x0),254/(y1-y0)
         path = target/("cup_%s.png" % bet)
         render(CoreImage(str(source)).texture,(256,256),
-               (1-x0*sx,1-(h-y1)*sy),(w*sx,h*sy),path,ball_fragment(base_color))
-        print(path.relative_to(ROOT),path.stat().st_size,"bytes")
+               (1-x0*sx,1-(h-y1)*sy),(w*sx,h*sy),path,ball_fragment(base_color,compression))
+        print(path,path.stat().st_size,"bytes")
+    if args.balls_only:
+        return
     # 保留原玻璃的完整杯壁/边缘，仅让内部填充在原来的硬切口前渐隐。
     source = ROOT / "assets/glass/glass_tumbler_front.png"
     texture = CoreImage(str(source)).texture

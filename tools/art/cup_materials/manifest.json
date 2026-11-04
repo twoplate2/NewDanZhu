@@ -1,44 +1,38 @@
 {
   "tool": "built-in image_gen",
   "sources": {
-    "1": "source_1.png",
-    "10": "source_10.png",
-    "50": "source_50.png",
-    "100": "source_100.png"
+    "1": "v2/source_1.png",
+    "10": "v2/source_10.png",
+    "50": "v2/source_50.png",
+    "100": "v2/source_100.png"
   },
-  "reference": "User-provided image of polished purple balls in a cardboard box",
-  "base_prompt": "Use case: product-mockup / game sprite. Use the attached photo ONLY as material and lighting reference. Create one isolated perfectly spherical purple marble/solid polished bead with the same believable physical surface as the purple balls in that photograph. Orthographic frontal camera, exact circular silhouette, centered on a square canvas, ball diameter approximately 85% of canvas width with equal transparent margins. Smooth rich purple body (base hue approximately #a335ee), broad continuous gentle shading that clearly describes a real sphere, softly reflected studio environment at upper left, subtle contact-side darkening in the bottom edge. Keep body color visible over most of the sphere. Small natural soft surface reflections, not an emissive dot; no stripes, no seams, no printed pattern, no internal glow, no bloom, no white center, no thick black outline. Photorealistic polished resin / glass-like solid opaque bead, not metallic, not a flat circle or icon. Do not include the box, cup, any other balls, ground plane, cast shadow outside the ball, text, labels or UI. Transparent RGBA background, no checkerboard drawn into the image. Intended to be displayed around 60-80 screen pixels in a Kivy game; prioritize a clear natural sphere at that size. Output one sprite.",
-  "variant_prompt": "Edit the attached game sprite. Change ONLY the purple material/pigment of the sphere to {color} (base color approximately {hex}). Preserve the exact sphere silhouette, centered placement, image framing, size, transparent alpha background, photorealistic polished solid-bead surface, upper-left broad studio reflection, secondary right-side reflection and the same continuous shading. Specular reflections remain neutral white, not tinted into glow. Do not add anything: no ground shadow, no background, no stripes, no seams, no symbols or text. This will be one of four matching colored spheres in the same game. Output a transparent RGBA sprite with the same composition.",
-  "variant_values": {
-    "1": [
-      "emerald green",
-      "#39c98a"
-    ],
-    "10": [
-      "sky blue",
-      "#4da8ff"
-    ],
-    "50": [
-      "coral red",
-      "#e0533b"
-    ]
-  },
+  "reference": "User red opaque satin ball pile reference, ScreenClip {C6CAF750-BEC0-4F94-A26E-86151BCEC8D0}.png; material only, keep four game color identities.",
+  "base_prompt": "Create a production game sprite: ONE isolated solid opaque PURPLE sphere, straight-on orthographic view, perfect circular silhouette centered in a square transparent canvas, sphere diameter 82% of image. Use the attached red-ball reference ONLY for its material and light/shadow character, NOT the red color and NOT the cup or pile. Translate that reference into rich amethyst purple body, muted lilac light-facing area, deep plum/cool violet shadows. Match the reference's substantial solid ball: smooth satin luster with ONE restrained, soft-edged compact highlight at upper left (10 o'clock), broad form shading over the upper-left hemisphere and rich deep lower-right shadow. The diffuse body color remains saturated over most of the sphere; do not wash it out. Strong rounded volume even at 65px display diameter. The highlight is softly colored pale lilac, not a bright white sticker or a rectangular studio softbox; no multiple reflected windows. Opaque smooth surface, no clearcoat film, no glass, no translucency, no refraction, no glow, no luminous rim, no hard dark outline, no noise or texture, no cast shadow outside the silhouette. No cup, no ground, no text, no other spheres. Alpha 1 inside the sphere; genuinely transparent outside with clean antialiased boundary. The lower-right surface should be dark saturated purple, not black. Render as refined realistic 2.5D game art.",
+  "variant_prompt": "Edit the attached single-sphere game sprite. Change ONLY its pigment/color palette to {color}. Preserve exactly the opaque satin material, restrained soft highlight at upper left, highlight size and softness, continuous strong rounded shading, silhouette, scale and transparent background. Keep most of the sphere rich in its body color. The highlight may be gently lighter and less saturated than the body but must not become a white reflective sticker. No transparent resin, no clearcoat film, no glass, no luminous rim, no secondary highlights, no ground shadow, no noise, no cup, no text. Return ONE centered perfect circular sphere on genuinely transparent background; fully opaque interior. This is a matching sprite in a four-color set.",
+  "variant_values": [
+    {
+      "bet": 1,
+      "color": "emerald green body, gently jade-green brights, deep pine-green shadows with a hint of cool cyan"
+    },
+    {
+      "bet": 10,
+      "color": "rich cobalt blue body, soft restrained sky-blue brights, deep navy shadows preserving saturated blue detail"
+    },
+    {
+      "bet": 50,
+      "color": "rich carmine red body, softly warm coral-red brights, wine-red shadows with a slight cool purple undertone"
+    }
+  ],
   "sprite_preparation": {
     "output_size": [
       256,
       256
     ],
-    "source_rim_inset_per_side": 0.015,
+    "source_rim_inset_per_side": 0.003,
     "body_alpha": "opaque",
     "edge_feather_pixels": 1,
     "runtime_size_unchanged": true,
-    "purpose": "remove pale source-edge fringe that looked like a translucent film",
-    "highlight_compression": 1.5,
-    "highlight_comparison_levels": [
-      0,
-      1.5,
-      4
-    ],
-    "highlight_method": "compress excess neutral reflection above material body color; preserve base, shadows and alpha"
+    "highlight_compression": 0,
+    "purpose": "preserve prepainted satin shading; trim only alpha-fringe contamination at source boundary"
   }
 }
