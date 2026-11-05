@@ -32,7 +32,7 @@ from ..config import (COL_BALL, COL_BTN_OFF, COL_FIRE, COL_GRAY, COL_SUB,
 from ..platform.device import _device_is_wide
 from .text import (_GLYPH_ATLAS, _GLYPH_HIT, _GLYPH_MAX_CHARS, _GLYPH_MISS,
                    _GLYPH_WAITERS, _GLYPH_WAIT_MAX, _glyph_chars_ok, _glyph_warm_done,
-                   _POPUP_N, _glyph_key, _glyph_quads, _glyph_rec)
+                   _POPUP_N, _glyph_key, _glyph_quads, _glyph_rec, _brk_add)
 
 
 def _land_angle():
@@ -192,7 +192,9 @@ class RotPopup(Popup):
 
     def open(self, *_args, **kwargs):
         self._popup_gate(1)
+        stamp=time.perf_counter()
         self._arm_high_refresh()
+        _brk_add('弹窗高刷重申',stamp)
         layer = _land_layer()
         if layer is None or layer.angle == 0:
             return super().open(*_args, **kwargs)

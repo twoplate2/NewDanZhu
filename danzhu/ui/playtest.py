@@ -88,6 +88,8 @@ class PlaytestMixin:
                                       gap_before_refresh_s=.3,gap_after_refresh_s=.3,
                                       stats_execution='worker',number_rendering='glyph_atlas',
                                       round_end_popup='cached_prewarmed_static_and_atlas_numbers',
+                                      text_measurement='single_line_extents_without_texture',
+                                      display_request='cached_classes_and_argument_queue',
                                       gc_policy='generational_collect_when_visually_quiet',
                                       low_0_1pct_window_s=10,low_0_1pct_rounding='ceil',
                                       low_0_1pct_aggregation='mean_and_minimum_of_complete_10s_groups',
@@ -284,8 +286,10 @@ class PlaytestMixin:
         fields=[];plain=[]
         for value,unit in ((sample.get('temp'),'度'),(sample.get('watts'),'W')):
             if value is not None:
-                plain.append('%.1f%s'%(value,unit))
-                fields.append('[color=%s]%.1f[/color]%s'%(COL_BALL.lstrip('#'),value,unit))
+                prefix='温度：' if unit=='度' else '功耗：'
+                number=('%.1f' if unit=='度' else '%.2f')%value
+                plain.append('%s%s%s'%(prefix,number,unit))
+                fields.append('%s[color=%s]%s[/color]%s'%(prefix,COL_BALL.lstrip('#'),number,unit))
         self._playtest_sensor_plain=' '.join(plain)
         self._playtest_sensor.text=' '.join(fields)
         self._playtest_layout()

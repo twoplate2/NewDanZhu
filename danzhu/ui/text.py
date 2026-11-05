@@ -1116,10 +1116,15 @@ def text_px(text, fs, bold=False, base=None, ctx=None, force=False):
         _t_cold = time.perf_counter()
         try:
             _cl = CoreLabel(text=text, font_size=fs, bold=bold, text_size=(None, None))
-            _cl.refresh()
-            got = _cl.texture.size[0]
-            # ⚠️ **冷开够多次 ⇒ 钉住**(见 `_pin_fontid`): 此刻 `refresh()` 刚把它重新插回
-            #    order 尾部, 正是摘掉它的最佳时机。`_get_font_id()` 是 Kivy 自己拼的
+            # 单行只查询字体尺寸，不创建Texture及绑定自身的填纹回调循环。
+            # 多行仍交原排版路径处理，不能用整串extents代替逐行宽度。
+            try:got = _cl.get_extents(text)[0] if not any(c in text for c in '\n\r\t') else 0
+            except Exception:got=0
+            if got<=1:
+                _cl.refresh()
+                got = _cl.texture.size[0]
+            # ⚠️ **冷开够多次 ⇒ 钉住**(见 `_pin_fontid`): 字体provider查询已完成，
+            #    此时处理缓存队列。`_get_font_id()` 是 Kivy 自己拼的
             #    6 段键 —— **必须用它**, 手拼会错(字体路径是运行期解析出来的)。
             if _prev_n >= _PIN_AFTER - 1:
                 if _POPUP_N[0] > 0:

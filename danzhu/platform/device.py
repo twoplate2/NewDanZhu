@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 import time
+from collections import deque
 
 from ..config import (FPS_CAP_DEFAULT, FPS_CAP_FALLBACK,
                       FPS_CAP_OPTIONS, FPS_CAP_PC, _FPS_INFO, _FPS_USER_CAP)
@@ -40,6 +41,9 @@ _CPUFRQ = {"freqs": [], "cap": 0.0, "stop": True, "thr": None}
 #    缓存类对象把那 50 次查表砍掉, 只留 `getRefreshRate()` 那一下。
 # ⚠️ **只缓存类, 不缓存 `mActivity`**: activity 重建后旧引用会失效, 那个必须每次现取。
 _ACT_CLS = [None]
+_SETTINGS_CLS = [None]
+_SDK_LEVEL = [None]
+_DISPLAY_APPLIER = [None]
 
 
 def _cpufreq_cores():
@@ -153,7 +157,9 @@ def _android_system_fps_cap(activity):
     """读取 Android 用户/系统设置的峰值刷新率上限；读不到返回 0 表示未知。"""
     try:
         from jnius import autoclass
-        settings = autoclass("android.provider.Settings$System")
+        settings = _SETTINGS_CLS[0]
+        if settings is None:
+            settings = _SETTINGS_CLS[0] = autoclass("android.provider.Settings$System")
         key = settings.PEAK_REFRESH_RATE
         cap = float(settings.getFloat(activity.getContentResolver(), key, 0.0))
         return cap if cap > 1.0 else 0.0
@@ -264,30 +270,41 @@ def _request_android_high_hz():
         mode_id = int(chosen.getModeId()) if chosen is not None else 0
         mode_hz = hz(chosen) if chosen is not None else 0.0
         target = min(target, mode_hz) if mode_hz > 0.0 else target
-        sdk = int(autoclass("android.os.Build$VERSION").SDK_INT)
-
-        from android.runnable import run_on_ui_thread
-
-        @run_on_ui_thread
-        def apply_request(win, requested_mode_id, requested_hz, api_level):
-            # Window API 从 Android 11 起可用；即使没有列出 mode，也保留高刷窗口请求。
-            if api_level >= 30:
-                try:
-                    win.setFrameRate(float(requested_hz))
-                except Exception:
-                    pass
-            if requested_mode_id:
-                try:
-                    attrs = win.getAttributes()
-                    attrs.preferredDisplayModeId = requested_mode_id
-                    win.setAttributes(attrs)
-                except Exception:
-                    pass
-
-        apply_request(window, mode_id, mode_hz, sdk)
+        sdk = _SDK_LEVEL[0]
+        if sdk is None:sdk = _SDK_LEVEL[0] = int(autoclass("android.os.Build$VERSION").SDK_INT)
+        _display_applier()(window, mode_id, mode_hz, sdk)
         return (mode_hz, target)
     except Exception:
         return (0.0, float(_fps_user_cap()))
+
+
+def _display_applier():
+    """缓存UI线程投递器；每次仍传入当前Window，不能缓存Activity/Window实例。"""
+    if _DISPLAY_APPLIER[0] is None:
+        from android.runnable import run_on_ui_thread
+        requests=deque()
+        lock=threading.Lock()
+        @run_on_ui_thread
+        def drain_requests():
+            # p4a的缓存Runnable共享args，不能把不同请求直接作为装饰函数参数。
+            with lock:
+                batch=tuple(requests)
+                requests.clear()
+            for win,requested_mode_id,requested_hz,api_level in batch:
+                if api_level >= 30:
+                    try:win.setFrameRate(float(requested_hz))
+                    except Exception:pass
+                if requested_mode_id:
+                    try:
+                        attrs=win.getAttributes()
+                        attrs.preferredDisplayModeId=requested_mode_id
+                        win.setAttributes(attrs)
+                    except Exception:pass
+        def enqueue(win,mode,hz,sdk):
+            with lock:requests.append((win,mode,hz,sdk))
+            drain_requests()
+        _DISPLAY_APPLIER[0]=enqueue
+    return _DISPLAY_APPLIER[0]
 
 
 def _refresh_screen_hz(*_):
