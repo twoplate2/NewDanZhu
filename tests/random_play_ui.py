@@ -40,6 +40,12 @@ def main():
         sensor_calls.append(clock.t)
         return read_sensor()
     module._live_power_snapshot=checked_sensor
+    read_memory=module.process_memory_snapshot
+    def checked_memory():
+        assert threading.get_ident()!=main_thread,'memory read must not block UI thread'
+        assert root._playtest_gap is not None
+        return read_memory()
+    module.process_memory_snapshot=checked_memory
     with tempfile.TemporaryDirectory() as directory:
         with patch.object(App,'get_running_app',return_value=SimpleNamespace(user_data_dir=directory)):
             root._start_playtest()
@@ -75,6 +81,8 @@ def main():
             assert record.settings['current_fps_window_s']==10
             assert record.sensors and len(record.sensors)<=len(record.gaps)
             assert len(sensor_calls)==len(record.sensors)
+            assert all(s.get('memory_rss_bytes',0)>0 for s in record.sensors)
+            assert all(s.get('worker_memory_ms',-1)>=0 for s in record.sensors)
             for sample in record.sensors:
                 assert any(g['begin_s']<=sample['elapsed_s']<=g.get('end_s',float('inf')) for g in record.gaps)
             for gap in record.gaps:
@@ -89,6 +97,7 @@ def main():
                 clock.t+=1/120;Clock.tick();root._frame_timed(1/120);root._playtest_flip(Window)
                 if root._playtest_info_built:break
             assert root._playtest_info_built and root._playtest_info_box.parent is root._playtest_panel
+            assert '占用内存：' in root._playtest_label.text and 'MB' in root._playtest_label.text
             root._toggle_playtest_info()
             assert root._playtest_info_box.parent is None
             frozen=(root._playtest_label.text,root._playtest_sensor.text)
@@ -121,6 +130,9 @@ def main():
             assert report['settings']['bet']==100 and report['settings']['rtp']==3.6
             assert report['metrics']['frame_count']==len(record.frames)//4
             assert report['summary']['duration_s']==record.duration_s
+            assert report['summary']['memory_rss_first_bytes']==record.sensors[0]['memory_rss_bytes']
+            assert report['summary']['memory_rss_max_bytes']==max(s['memory_rss_bytes'] for s in record.sensors)
+            assert '占用内存（RSS）' in saved_text
             assert report['diagnostics']['core_frame_count']==report['metrics']['frame_count']
             assert report['diagnostics']['cases']
             assert report['settings']['overlay_visible_default'] is False

@@ -67,6 +67,16 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(parsed['diagnostics']['core_frame_count'],300)
         self.assertIn('不能直接判定',report)
 
+    def test_memory_report_uses_samples_and_preserves_missing(self):
+        document={'sensors':[{'memory_rss_bytes':150000000},
+                             {'memory_rss_bytes':None,'memory_error':'unavailable'},
+                             {'memory_rss_bytes':120000000}]}
+        report=format_report(document)
+        self.assertIn('首次 150.0MB；末次 120.0MB；采样最高 150.0MB；变化 -30.0MB',report)
+        data=json.loads(report.split('=== DATA JSON ===\n',1)[1])
+        self.assertIsNone(data['sensors'][1]['memory_rss_bytes'])
+        self.assertIn('占用内存（RSS）：未采到',format_report({}))
+
     def test_gameplay_worst_survives_slower_test_gaps(self):
         diag=DiagnosticFrames(limit=4)
         for i in range(100):

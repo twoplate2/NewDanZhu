@@ -22,6 +22,7 @@ from ..bench.low_runtime import ACTIVE
 from ..game import Game
 from ..config import MISFIRE_POWER, COL_BALL
 from ..platform.benchcpu import _live_power_snapshot
+from ..platform.memory import process_memory_snapshot
 from ..platform.device import _set_keep_awake, _screen_hz
 from .text import _set_label_text, _hist_stamp, text_px
 from .widgets import _app_version
@@ -34,6 +35,8 @@ def _compute_playtest_snapshot(work):
     computed=time.perf_counter()
     sample=_live_power_snapshot()
     sampled=time.perf_counter()
+    sample.update(process_memory_snapshot())
+    sample["worker_memory_ms"]=(time.perf_counter()-sampled)*1000
     sample.update(worker_stats_ms=(computed-start)*1000,worker_sensor_ms=(sampled-computed)*1000)
     return work,sample
 
@@ -85,6 +88,8 @@ class PlaytestMixin:
         self._playtest.settings = dict(bet=simulation.bet, rtp=simulation.rtp_target,
                                       fps_cap=simulation.fps_cap_setting, sensor_interval_s=None,
                                       sensor_policy='between_shots',ui_refresh_policy='between_shots',
+                                      memory_metric='process_rss',memory_unit='MB_decimal',
+                                      memory_policy='between_shots_worker',
                                       overlay_visible_default=False,overlay_visible=False,overlay_requested=False,
                                       big_result_widget_pool='two_pairs_per_renderer',
                                       current_fps_window_s=10,minimum_fps_window_s=1,
@@ -207,9 +212,10 @@ class PlaytestMixin:
         panel.width = min(Window.width, dp(620))
         panel.pos = ((Window.width-panel.width)/2, Window.height-panel.height)
         if not self._playtest_info_built or not self._playtest_show_info:return
-        self._playtest_label.font_size=sp(max(13,min(17,Window.width/dp(27))))
-        self._playtest_label.text_size=(panel.width-dp(10),None)
-        font=self._playtest_label.font_size
+        font=sp(max(13,min(17,Window.width/dp(27))))
+        header_width=panel.width-dp(10)
+        self._playtest_label.font_size=font*min(1.,header_width/max(1,text_px(self._playtest_label.text,font)))
+        self._playtest_label.text_size=(header_width,None)
         prefix=max(text_px('1%low：',font),text_px('帧率：',font))+dp(3)
         widths=[prefix]+[(panel.width-dp(8)-prefix)/3]*3
         for cells in self._playtest_stat_cells:
@@ -321,6 +327,8 @@ class PlaytestMixin:
         def fmt(value): return '采样中' if value is None else '%.2f'%value
         self._playtest_label.text = '更新 %s · 投%d · 返还%.0f%%' % (
             _duration(values.get('sample_elapsed_s',time.perf_counter()-record.started)),record.settings['bet'],record.settings['rtp']*100)
+        rss=sample.get('memory_rss_bytes')
+        self._playtest_label.text+=' · 占用内存：'+('未采到' if rss is None else '%.1fMB'%(rss/1000000))
         for cells,keys in zip(self._playtest_stat_cells,(('current_fps','minimum_fps','average_fps'),
                                                        ('current_low','minimum_low','average_low'))):
             for cell,key in zip(cells[1:],keys):
@@ -427,10 +435,15 @@ class PlaytestMixin:
 
     def _playtest_summary(self, record):
         temps=[s['temp'] for s in record.sensors if s.get('temp') is not None]
+        memory=[s['memory_rss_bytes'] for s in record.sensors if s.get('memory_rss_bytes') is not None]
         return dict(id=str(time.time_ns()),time=time.strftime('%Y-%m-%d %H:%M:%S'),version=_app_version(),duration_s=record.duration_s,
                     reason=record.reason, settings=dict(record.settings), shots=len(record.events),
                     metrics=record.metrics(full=True),live=dict(record.live),
                     temperature_start=temps[0] if temps else None,
+                    memory_rss_first_bytes=memory[0] if memory else None,
+                    memory_rss_last_bytes=memory[-1] if memory else None,
+                    memory_rss_max_bytes=max(memory) if memory else None,
+                    memory_rss_delta_bytes=memory[-1]-memory[0] if memory else None,
                     big_text_pool={key:value-self._playtest_big_text_start.get(key,0)
                                    for key,value in self.game_area._big_text_stats.items()},
                     temperature_end=temps[-1] if temps else None,
@@ -500,6 +513,10 @@ class PlaytestMixin:
               _number(live.get('average_low_0_1pct'),2),_number(live.get('minimum_low_0_1pct'),2),
               _number(result.get('temperature_start')),_number(result.get('temperature_end')),_number(result.get('temperature_max')),
               m.get('frame_count',0),_number(m.get('max_ms'),2),_number(m.get('worst_frame_fps'),2))
+        if 'memory_rss_first_bytes' in result:
+            vals=[result.get('memory_rss_'+key+'_bytes') for key in ('first','last','max','delta')]
+            text+='\n\n占用内存：首次 %sMB → 末次 %sMB\n采样最高 %sMB；变化 %sMB\n进程驻留内存（RSS，含共享页），1MB=1000000字节。'%tuple(
+                _number(v/1000000) if v is not None else '未采到' for v in vals)
         text=text.replace('当前帧率（1秒）','当前帧率（%d秒）'%settings.get('current_fps_window_s',1))
         content=BoxLayout(orientation='vertical',padding=dp(10),spacing=dp(8))
         scroll=ScrollView(do_scroll_x=False)

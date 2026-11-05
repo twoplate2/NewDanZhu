@@ -244,6 +244,11 @@ def format_report(document):
                sum(e.get('event')=='request' for e in document.get('display_events',[]))),
            'GC设置：'+('关闭（自动循环GC及主动回收均禁用；引用计数照常）' if settings.get('gc_policy')=='disabled' else '手动（落杯关闭后0.3秒、间隔至少60秒、画面稳定后回收）' if settings.get('gc_policy')=='manual_close_after_interval' else '开启（画面稳定后按代回收）'),
            '', '一、最慢 1% 帧分布（与全程 1% Low 使用同一批帧）']
+    memory=[s['memory_rss_bytes'] for s in document.get('sensors',[]) if s.get('memory_rss_bytes') is not None]
+    memory_line=('占用内存（RSS）：首次 %.1fMB；末次 %.1fMB；采样最高 %.1fMB；变化 %+.1fMB'%
+                 (memory[0]/1e6,memory[-1]/1e6,max(memory)/1e6,(memory[-1]-memory[0])/1e6)) if memory else '占用内存（RSS）：未采到'
+    lines.insert(-2,memory_line)
+    lines.insert(-2,'内存口径：进程驻留内存，含共享页；非独占PSS或完整GPU用量。1MB=1000000字节，仅发射间隔采样，最高值非瞬时峰值。')
     for phase,row in sorted(document.get('low_1pct_by_phase',{}).items(),key=lambda item:int(item[0])):
         lines.append('%s：最慢1%% %d帧；最慢0.1%% %d帧；共%d帧'%(phases[int(phase)],row['slowest_1pct_frames'],row.get('slowest_0_1pct_frames',0),row['frames']))
     for key,label in (('gameplay','游戏阶段最差单帧'),('test_gap','测试间隔最差单帧')):

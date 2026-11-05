@@ -57,7 +57,7 @@ class Probe(PlinkoApp):
         r.clock=time.perf_counter;r.previous=time.perf_counter()
         root._playtest=r
         UI._live_power_snapshot=lambda:dict(temp=36.,mv=4000,current_raw=600000,current_source='preview',
-                                          current_unit='ua',watts=2.4,plugged=0)
+                                          current_unit='ua',watts=2.4,plugged=0,memory_rss_bytes=356700000,memory_source='preview')
         kind,_,_=self.case
         if kind!='hidden':root._toggle_playtest_info()
         root._playtest_live(0)
