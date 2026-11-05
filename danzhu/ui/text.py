@@ -433,28 +433,7 @@ def _build_texwarm(rw, bet=None):
     out = []
     if rw is None:
         return out
-    # ---- 状态栏: 10 句固定文案(颜色恒定, 只有 `_fit1` 可能改字号) ----
-    _st = getattr(rw, "status_lbl", None)
-    if _st is not None:
-        try:
-            _c = tuple(_st.color)
-        except Exception:
-            _c = None
-        for _t in ("按住蓄力发射", "已重置", "蓄力中", "力度不足,未扣弹珠", "发射!", "未中",
-                   "即将入袋…", "弹跳中…", "入场中…", "性能测试中…", str(_st.text)):
-            out.append((_st, _t, _c))
-        # ---- 带数字的那两句: **取值域有限, 所以能枚举** ----
-        # ⚠️ 倍率与投注档**从代码里派生, 不许手抄一份** —— 抄的那份迟早和真值脱钩,
-        #    而脱钩的表现是"预热白做、还不报错"。倍率真源 = `VALUE_SHAPE` 的键(再并上 x2)。
-        try:
-            _mults = sorted({2} | {int(_k) for _d in VALUE_SHAPE.values() for _k in _d})
-            for _m in _mults:
-                out.append((_st, "命中 x%d · 结算中" % _m, _c))
-            _my_bet = bet if bet in PRESETS else (PRESETS[0] if PRESETS else 1)
-            for _m in _mults:
-                out.append((_st, "中奖! +%d (x%d)" % (_my_bet * _m, _m), _c))
-        except Exception:
-            pass
+    # 右上角只显示罕见重要消息，不再预热普通玩法状态文案。
     # ---- 音效按钮: 两句话 x 两种颜色(`_refresh_mute_btn` 里那两个) ----
     _mb = getattr(rw, "mute_btn", None)
     if _mb is not None:

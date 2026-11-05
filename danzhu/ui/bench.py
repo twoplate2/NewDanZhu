@@ -346,7 +346,7 @@ class BenchMixin(object):
             return
         self._prog_last = _t
         try:
-            _set_label_text(self.status_lbl, _t)
+            self._status_message(_t)
         except Exception:
             pass
         # ⚠️ **同步刷黑屏上的白字**: 它是画在 `RootWidget.canvas.after` 里的 **CoreLabel 纹理,
@@ -391,7 +391,7 @@ class BenchMixin(object):
         self._prog_start()
         # ⚠️ **黑屏与白字不在这里建** —— 本函数可能跑在**工作线程**上, 而它们要碰 Kivy 的
         #    canvas / CoreLabel。**在调用方 `_wait_idle_then_hp`(主线程)那里建。**
-        _set_label_text(self.status_lbl, "CPU高压测试第1/%d秒" % int(SOC_SUSTAIN_WALL_SEC))
+        self._status_message("CPU高压测试第1/%d秒" % int(SOC_SUSTAIN_WALL_SEC))
         # ⚠️ 走 `game._controls`, **不是** `self._set_controls_enabled` —— 后者只是这条链的
         #    **界面那一半**(染色/标签), 状态位在 `Game`。老版那一下是同一个方法(置位 + 染色一起),
         #    而新版的状态位由 `on_touch_down_allowed()`(`_restyle_buttons` 的置灰)读
@@ -797,8 +797,8 @@ class BenchMixin(object):
         self._hide_bench_dim()
         self._prog_stop()
         self._act(self.game._controls, True)          # 理由同 `_start_hp_test`: 状态位在 Game, 老版同一个方法
-        _set_label_text(self.status_lbl,
-                        getattr(self, "_hp_saved_status", "按住蓄力发射"))
+        self._status_message(
+                        getattr(self, "_hp_saved_status", ""))
         self._hp_running = False
         # ⚠️ **落一条历史**。存的东西要够"详细成绩 + CPU 平均频率"看 —— 逐窗曲线也存下
         #    (详情弹窗要画它)。存不成也不能影响结果弹窗, 所以整段 try 包着。
@@ -1645,7 +1645,7 @@ class BenchMixin(object):
         #    (玩家原话:「都是*100 这个明显不合理」), 一直挂到下一次发射才自愈。
         self._bench_save_board()
         ver = _app_version()
-        _set_label_text(self.status_lbl, ("模拟测试中 " + ver) if ver else "模拟测试中…")
+        self._status_message(("模拟测试中 " + ver) if ver else "模拟测试中…")
         # ⚠️ 走 `game._controls`(状态位 + 染色一起), 理由见 `_start_hp_test`。
         #    老版对应点: main.py 的 `_start_bench_test` 里那句 `_set_controls_enabled(False)`。
         self._act(self.game._controls, False)
@@ -1857,7 +1857,7 @@ class BenchMixin(object):
             self.game._anim_pending = False
             self.game.park_ball(reroll=False)
             self._low_restore_fixed()
-            _set_label_text(self.status_lbl, "采样无效：" + reason)
+            self._status_message("采样无效：" + reason,important=True)
         else:
             _TEXUPD_ACTIVE[0] = False
 
@@ -2046,7 +2046,7 @@ class BenchMixin(object):
         Window.unbind(on_flip=self._on_flip)
         if not self._low_capture.summary["valid"]:
             self._low_restore_fixed()
-            _set_label_text(self.status_lbl, "采样无效：" + ",".join(self._low_capture.reasons))
+            self._status_message("采样无效：" + ",".join(self._low_capture.reasons),important=True)
             return
         # 主渲染线程的锁核只属于帧率采样窗口；后续物理跑分会在它自己的工作线程上单独锁核。
         _render_aff_before = getattr(self, "_render_aff_before", None)
@@ -2112,7 +2112,7 @@ class BenchMixin(object):
         self._render_lows[1] = self._render_1low
         if getattr(self, "_low_render_only", False):
             self._low_restore_fixed()
-            _set_label_text(self.status_lbl, "五发采样完成，可在采样菜单导出")
+            self._status_message("五发采样完成，可在采样菜单导出")
         else:
             self.game._low_no_save = False
             self._wait_idle_then_bench()
@@ -2769,7 +2769,7 @@ class BenchMixin(object):
         popup.open()
         self._popup_fit_content(popup, content)
         self._prog_stop()
-        _set_label_text(self.status_lbl, getattr(self, '_bench_saved_status', '按住蓄力发射'))
+        self._status_message(getattr(self, '_bench_saved_status', ''))
         self._act(self.game._controls, True)           # 理由同 `_start_bench_test`: 状态位在 Game
         # ⚠️ **盘面必须和随机数一起还**。放在 `_bench_running = False` **之前** ——
         #    之后 `park_ball` 就会重掷盘面, 这里要还的是"跑分之前那份", 不是"新掷的一份"。
@@ -4746,7 +4746,7 @@ class BenchMixin(object):
             self.hp_history = []
             self._save_hp_history()          # 盘上也要清, 否则重启又回来了
             popup.dismiss()
-            _set_label_text(self.status_lbl, 'CPU 高压测试历史已清空')
+            self._status_message('CPU 高压测试历史已清空')
             self._show_hp_history()          # 当场重开 → 看到空态
 
         cancel.bind(on_release=popup.dismiss)
@@ -5135,7 +5135,7 @@ class BenchMixin(object):
             self.bench_history = []
             self._save_bench_history()          # 盘上也要清, 否则重启又回来了
             popup.dismiss()
-            _set_label_text(self.status_lbl, '模拟测试历史已清空')
+            self._status_message('模拟测试历史已清空')
             self._show_bench_history()          # 当场重开 → 看到空态
 
         cancel.bind(on_release=popup.dismiss)

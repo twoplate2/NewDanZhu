@@ -1833,6 +1833,16 @@ class WinPileFX(Widget):
         if not self._prebake_piles():
             Clock.schedule_once(self.prebake_step, 0)
             return
+        # 启动尾部的显式全代GC也必须等画面稳定；不能绕过前台空闲回收策略。
+        host=getattr(self.area,'game',None)
+        if host is not None and hasattr(host,'_idle_gc_quiet'):
+            quiet=host._idle_gc_quiet()
+            stamp=time.perf_counter()
+            if not quiet:self._gc_quiet_since=None
+            elif getattr(self,'_gc_quiet_since',None) is None:self._gc_quiet_since=stamp
+            if not quiet or stamp-self._gc_quiet_since<.3:
+                Clock.schedule_once(self.prebake_step,.1)
+                return
         # ---- GC 冻结: 预热全部跑完之后, 把**已经稳定下来的对象图**永久移出 GC 的扫描集。
         # 病根(真机实测): 面板"内存回收 39.0 毫秒(最坏一次 26.8)" —— 单次 26.8ms 对 gen-0 来说大得
         #    离谱, 那是 **gen-2 全量回收**在扫整个对象图, 而 1%Low 看的就是最坏那一帧。
@@ -1863,7 +1873,10 @@ class WinPileFX(Widget):
             _t0 = time.perf_counter()
             _gc.collect(2)
             _t1 = time.perf_counter()
-            _gc.freeze()
+            # 若玩家已经开始游戏，不把动态弹珠/诊断对象永久冻结。
+            _host=getattr(self.area,'game',None)
+            if (_host is None or (getattr(_host.game,'plays',0)==0 and getattr(_host,'_playtest',None) is None)):
+                _gc.freeze()
             _t2 = time.perf_counter()
             _gc.collect(2)                # 冻结后再来一次: 这次扫不到东西
             _t3 = time.perf_counter()

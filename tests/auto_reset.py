@@ -132,9 +132,9 @@ def main():
     # ⚠️ 只有 4 条: `Game._controls` **只发 `controls`**(底色由它的处理函数重刷)。
     #    原来这里多一条 `restyle_buttons` —— 那正是第三轮 AST 审计抓到的"同帧多跑一次"
     #    (`_restyle_buttons` 老版 1 次 / 新版 2 次), 这条闸反而把它**钉死**了。
-    want = ["stats", "status", "sound", "controls"]
-    check(order[:4] == want,
-          "缓冲区**最前面 4 条** = %r（补位跑在 `set_bet`/`set_rtp`/`park_ball` 之前）"
+    want = ["stats", "sound", "controls"]
+    check(order[:3] == want,
+          "缓冲区**最前面 3 条** = %r（普通状态消息已按用户要求删除）"
           % (want,),
           "实得全序 %r" % (order,))
     # ⚠️⚠️ **精确判据**: `Game._controls` **只许发 `controls` 一条**。
@@ -153,8 +153,8 @@ def main():
           "（多发 `restyle_buttons` = 底色重刷同帧跑两次）",
           "实得 %r" % (_k,))
     st = _kinds(evs, "status")
-    check(len(st) == 1 and st[0].data.get("text") == "已重置",
-          "唯一那条 status 是「已重置」", "%r" % ([e.data for e in st],))
+    check(not st,
+          "重置不再向右上角发送普通消息", "%r" % ([e.data for e in st],))
     snd = _kinds(evs, "sound")
     check([e.name for e in snd] == ["cash"],
           "`cash` 那一声**照发**（`notify=False` **不**管它 —— 两版都是无条件发）",

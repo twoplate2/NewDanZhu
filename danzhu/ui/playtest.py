@@ -20,8 +20,8 @@ from ..bench.playtest import PlaytestRecord, format_report
 from ..bench.playtest_probe import PlayProbe
 from ..bench.low_runtime import ACTIVE
 from ..game import Game
-from ..config import MISFIRE_POWER
-from ..platform.benchcpu import _live_power_temp_line, _live_power_snapshot
+from ..config import MISFIRE_POWER, COL_BALL
+from ..platform.benchcpu import _live_power_snapshot
 from ..platform.device import _set_keep_awake, _screen_hz
 from .text import _set_label_text, _hist_stamp, text_px
 from .widgets import _app_version
@@ -55,7 +55,7 @@ class PlaytestMixin:
             return
         fx = self.game_area.win_fx
         if self.game.state != 'ready' or fx.mode != 'idle':
-            _set_label_text(self.status_lbl, '请在本次落珠结束后开始随机实玩模拟')
+            self._status_message('请在本次落珠结束后开始随机实玩模拟')
             return
         directory = os.path.join(App.get_running_app().user_data_dir, 'random_play_sandbox')
         os.makedirs(directory, exist_ok=True)
@@ -87,6 +87,7 @@ class PlaytestMixin:
                                       current_fps_window_s=10,minimum_fps_window_s=1,
                                       gap_before_refresh_s=.3,gap_after_refresh_s=.3,
                                       stats_execution='worker',number_rendering='glyph_atlas',
+                                      gc_policy='collect_when_visually_quiet',
                                       low_0_1pct_window_s=10,low_0_1pct_rounding='ceil',
                                       low_0_1pct_aggregation='mean_and_minimum_of_complete_10s_groups',
                                       display_hz=_screen_hz(),kivy_cap=getattr(Clock,'_max_fps',None),
@@ -136,10 +137,15 @@ class PlaytestMixin:
                           setattr(row,'height',max(c.texture_size[1] for c in cells)))
             self._playtest_stat_cells.append(cells);stats.add_widget(stat_row)
         self._playtest_stats=stats
-        panel.add_widget(stats);panel.add_widget(self._playtest_sensor)
+        panel.add_widget(stats)
         low_row=BoxLayout(size_hint_y=None,height=dp(22))
+        self._playtest_sensor.size_hint_x=None
+        self._playtest_sensor_plain=''
+        low_row.add_widget(self._playtest_sensor)
+        self._playtest_low01_title=Label(text='0.1%Low：',size_hint_x=None,halign='left',valign='middle')
+        low_row.add_widget(self._playtest_low01_title)
         self._playtest_low01_cells=[NumberCell(caption=caption,text='采样中',
-            font_size=sp(max(13,min(17,Window.width/dp(27))))) for caption in ('平均0.1%low：','最低0.1%low：')]
+            size_hint_x=None,font_size=sp(max(13,min(17,Window.width/dp(27))))) for caption in ('平均','/最低')]
         for cell in self._playtest_low01_cells:
             low_row.add_widget(cell)
             cell.bind(texture_size=lambda _w,_v,row=low_row:setattr(row,'height',max(c.texture_size[1] for c in row.children)))
@@ -160,17 +166,23 @@ class PlaytestMixin:
         panel = self._playtest_panel
         panel.width = min(Window.width, dp(620))
         panel.pos = ((Window.width-panel.width)/2, Window.height-panel.height)
-        for label in (self._playtest_label, self._playtest_sensor):
-            label.font_size = sp(max(13,min(17,Window.width/dp(27))))
-            label.text_size = (panel.width-dp(10), None)
-        self._playtest_sensor.font_size = sp(max(11,min(15,Window.width/dp(30))))
+        self._playtest_label.font_size=sp(max(13,min(17,Window.width/dp(27))))
+        self._playtest_label.text_size=(panel.width-dp(10),None)
         font=self._playtest_label.font_size
         prefix=max(text_px('1%low：',font),text_px('帧率：',font))+dp(3)
         widths=[prefix]+[(panel.width-dp(8)-prefix)/3]*3
         for cells in self._playtest_stat_cells:
             for cell,width in zip(cells,widths):
                 cell.width=width;cell.font_size=font;cell.text_size=(width,None)
-        for cell in self._playtest_low01_cells:cell.font_size=font
+        plain=self._playtest_sensor_plain
+        texts=(plain,'0.1%Low：','平均000.00','/最低000.00')
+        total=sum(text_px(t,font) for t in texts if t)+(dp(6) if plain else 0)
+        line_font=font*min(1.,(panel.width-dp(8))/max(1,total))
+        widgets=(self._playtest_sensor,self._playtest_low01_title,*self._playtest_low01_cells)
+        for index,(widget,text) in enumerate(zip(widgets,texts)):
+            widget.font_size=line_font
+            widget.width=(text_px(text,line_font) if text else 0)+(dp(6) if index==0 and plain else 0)
+            widget.text_size=(widget.width,None)
 
     def _playtest_flip(self, *_):
         started=time.perf_counter()
@@ -228,7 +240,7 @@ class PlaytestMixin:
                 try:work,sample=self._playtest_job.result()
                 except Exception as exc:
                     self._stop_playtest('statistics_failed')
-                    _set_label_text(self.status_lbl,'统计失败：'+str(exc))
+                    self._status_message('统计失败：'+str(exc),important=True)
                     return False
                 values=self._playtest.apply_live(work)
                 self._playtest_live(0,values=values,sample=sample)
@@ -268,8 +280,15 @@ class PlaytestMixin:
         sample = _live_power_snapshot() if sample is None else sample
         sample['fps'] = dict(values)
         record.sensor(sample)
-        sensor = _live_power_temp_line(sample).replace('温度：','当前温度：').replace('耗电：','当前耗电：').replace('充电：','当前充电：').replace(' 度','')
-        self._playtest_sensor.text = sensor
+        fields=[];plain=[]
+        for value,unit in ((sample.get('temp'),'度'),(sample.get('watts'),'W')):
+            if value is not None:
+                plain.append('%.1f%s'%(value,unit))
+                fields.append('[color=%s]%.1f[/color]%s'%(COL_BALL.lstrip('#'),value,unit))
+        self._playtest_sensor_plain=' '.join(plain)
+        self._playtest_sensor.text=' '.join(fields)
+        self._playtest_layout()
+        if hasattr(self,'_idle_gc'):self._idle_gc.quiet_since=None
         return True
 
     def _stop_playtest(self, reason='user', show_summary=True):
@@ -306,7 +325,7 @@ class PlaytestMixin:
         self.game_area._effects.clear()
         self._act(self.game._refresh_stats)
         self._act(self.game._controls,self.game._controls_enabled)
-        _set_label_text(self.status_lbl,self._playtest_status_before)
+        self._status_message(self._playtest_status_before)
         self._restyle_buttons()
         self.game_area._update_slots()
         self.game_area.tick_draw()
@@ -386,7 +405,7 @@ class PlaytestMixin:
                 json.dump(data,stream,ensure_ascii=False)
             os.replace(path+'.tmp',path)
         except OSError as exc:
-            _set_label_text(self.status_lbl,'模拟历史保存失败：'+str(exc))
+            self._status_message('模拟历史保存失败：'+str(exc),important=True)
 
     def _show_playtest_history(self):
         def cells(r):

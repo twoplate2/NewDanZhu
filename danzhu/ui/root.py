@@ -152,6 +152,10 @@ class RootWidget(PlaytestMixin, BenchMixin, PlayMixin, UiMixin, BoxLayout):
         #     · A→B 翻转**照旧发生**(3/7)
         # ⇒ 判据要取「**稳定 A 的比例**」和「A 组的分数」, **不能取"按中位分类的比例"**。
         Clock.schedule_interval(self._frame_timed, FRAME_TICK_DT)
+        from ..idle_gc import IdleGC
+        self._idle_gc=IdleGC()
+        self._idle_gc.start()
+        self._idle_gc_event=Clock.schedule_interval(self._idle_gc_tick,.1)
         # 中奖杯的球纹理/球堆预热: 分帧摊在启动后做, 别等中奖那一刻现算(低端机单档
         # d=128 纯 Python 合成要 100~200ms, 一次做完就是几个长帧, 而这动画的全部意义
         # 就是丝滑)。排在 _frame 之后, 不影响冷启动的建界面/烘音效。

@@ -37,11 +37,17 @@ from .game_area import GameArea
 from .text import (_COLD_FS_BASE, _COLD_FS_TAG, _FRAME_FIT, _TINT_BRIGHT,
                    _TINT_DIM, _set_lbl_tint, _tag_texupd, fit_font_size,
                    text_px)
+from .text import _set_label_text
 from .widgets import RotPopup
 from .number_cell import NumberCell
 
 
 class UiMixin(object):
+
+    def _status_message(self,text,important=False):
+        if important or not text:
+            if text!=self.status_lbl.text and hasattr(self,'_idle_gc'):self._idle_gc.quiet_since=None
+            _set_label_text(self.status_lbl,text)
 
     # ------------------------------ 尺寸 ------------------------------
     def _veq(self):
@@ -508,7 +514,7 @@ class UiMixin(object):
         # 状态装在**弹性容器**里(与左边等宽), "右对齐"才是相对那一半而言。
         right_box = BoxLayout()
         self._top_right = right_box
-        self.status_lbl = self._mk_label("按住蓄力发射", "13sp", COL_SUB, "right", False)
+        self.status_lbl = self._mk_label("", "13sp", COL_SUB, "right", False)
         _tag_texupd(self.status_lbl, "状态栏")
         right_box.add_widget(self.status_lbl)
         top.add_widget(right_box)

@@ -101,7 +101,9 @@ POWER_GRAINS = ("每帧", "每5秒")
 POWER_GRAIN_DEFAULT = "每帧"
 
 CUP_TRIGGER_DELAY = 0.15     # 结算 -> "弹珠落容器"事件的延迟(账务/音效仍在 t=0)
-STATS_REFRESH_DELAY = 0.20   # 统计写文字的延后(躲"落袋那一拍"的字形重排)
+STATS_REFRESH_DELAY = 0.12   # 未中奖：回弹结束后再显示累计数据
+WIN_BALANCE_DELAY = 0.12
+WIN_STATS_DELAY = 0.24
 TOAST_RESET_DELAY = 0.05     # reset 的 toast 延后
 ROUND_END_VOICE_GAP = 0.005  # 语音序列的片段间隔
 
@@ -349,6 +351,9 @@ class Game(object):
 
         # 揭晓合流(中奖): 大字/余额/语音 全部推迟到"最后一颗球落定"那一刻一起给。
         self._anim_pending = False   # 为真时余额冻结在扣注后的值, 一帧都不许追平
+        self._balance_release_at = None
+        self._stats_release_at = None
+        self._lose_stats_pending = False
         self._reveal_done = True     # 本局是否已揭晓(幂等闸, 唯一真源在 settle 的 _on_settled)
         self._reveal_deadline = 0.0  # 兜底: 到点还没揭就自己揭(防 tick 停摆把数字吞了)
         self._pending_win = None     # (m, payout), 兜底揭晓时要用
@@ -421,9 +426,9 @@ class Game(object):
         self.sounds.append(e)
         return e
 
-    def _status(self, text):
-        """老版 `_set_game_status`(只写状态栏那一行)。"""
-        self._emit("status", {"text": text})
+    def _status(self, text, important=False):
+        """右上角只保留重要异常；普通玩法不再生成状态文案事件。"""
+        if important:self._emit("status", {"text": text,"important":True})
 
     def _set_state(self, name):
         if name == self.state:
@@ -724,10 +729,19 @@ class Game(object):
             self._emit("power_label", {"text": ""})
 
         now = self.now
+        if self._lose_stats_pending and self.state=='landed':
+            self._lose_stats_pending=False
+            self._stats_release_at=now+STATS_REFRESH_DELAY
+        if self._balance_release_at is not None and now>=self._balance_release_at:
+            self._balance_release_at=None
+            self._anim_pending=False
+        if self._stats_release_at is not None and now>=self._stats_release_at:
+            self._stats_release_at=None
+            self._refresh_stats()
         if self._coin_start <= now < self._coin_until:
             self._snd("coin", 0.8, 0.055)
         # ⚠️ 余额不再"滚"上去(玩家定案): 落杯子的动画已经承担了"钱到账"的演出。
-        #    揭晓前仍然不许动(`_anim_pending`): 数字必须跟大字/语音在同一刻出来。
+        #    余额在中奖大字之后延后0.12秒显示，账务值从未延后。
         if not self._anim_pending:
             self.display_balance = self.balance
         # 兜底揭晓: 正常路径下 FX 的 `_pump_reveal()` 会先放; 这条只在 tick 完全停摆
@@ -777,6 +791,9 @@ class Game(object):
     def launch(self):
         if self.state != "charging":
             return
+        self._balance_release_at=None
+        self._stats_release_at=None
+        self._lose_stats_pending=False
         # ⚠️ 老版在这里有 `_SINCE_LAUNCH[0] = 0`(帧探针账本, 判"最差帧是不是紧跟在发射后")。
         #    那是 UI 侧的账本, 本模块不该 import 它 —— 所以**只发事件**, 由 UI 的派发器清零。
         #    位置等价: 老版那句在状态守卫之后、哑火分支**之前**(哑火也清), 所以事件也发在这里。
@@ -945,9 +962,8 @@ class Game(object):
         self.balance += payout
         if m > 0:
             self.hits += 1
-        # ⚠️ **统计不在这一帧写**: 这一帧是"落袋那一拍" —— 灯/槽闪/音效/余额/揭晓全挤在
-        #    这里, 而写文字 = 重排一次字形纹理(真机 4~7 毫秒)。挪后 0.20 秒。
-        self._schedule(self._refresh_stats, STATS_REFRESH_DELAY)
+        # 账务立即更新；累计显示按中奖揭晓/未中奖回弹结束分别延迟。
+        self._lose_stats_pending=m<=0
         # 指示灯回答的是"哪一格中了", 所以固定 绿=中 / 红=未中(与 PC 版同一套设计)
         self._emit("lamp", {"slot": int(i), "hex": COL_FIRE if m <= 0 else COL_GREEN})
         self._emit("pulse_slot", {"slot": int(i), "life": 0.30})
@@ -1056,13 +1072,15 @@ class Game(object):
                               "easter": bool(easter)})
 
     def _reveal_win(self, m, payout):
-        """揭晓: 装杯最后一颗球落定的那一刻, 大字 + 余额 + coin 一起给。
+        """揭晓先立大字；余额与累计显示分别延后0.12/0.24秒。
 
         语音的挂点不在这里 —— 它挂在 settle 的 `_on_settled` 里(和这里同拍)。
         ⚠️ **幂等闸不在这里**: 唯一真源是 settle() 的 `_on_settled`(它同时挡住语音)。
         """
         try:
-            self._anim_pending = False
+            self._anim_pending = True
+            self._balance_release_at=self.now+WIN_BALANCE_DELAY
+            self._stats_release_at=self.now+WIN_STATS_DELAY
             self._status(("中奖! +%d (x%d)" % (payout, m)) if payout > 0 else "未中")
             self._emit("big_result", {"m": m, "payout": payout})
             now = self.now
@@ -1391,6 +1409,14 @@ class Game(object):
         self._emit("reflow_row_budget")
 
     def reset_balance(self, notify=True):
+        self._balance_release_at=None
+        self._stats_release_at=None
+        self._lose_stats_pending=False
+        self._anim_pending=False
+        self._win_seq+=1
+        self._reveal_done=True
+        self._pending_win=None
+        self._settle_cb=None
         # 强制中断当前操作(充电/飞行/哑火/着陆), 回到 ready
         if self.state in ("charging", "flying", "misfire", "landing"):
             self._set_state("ready")

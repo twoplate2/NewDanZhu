@@ -70,6 +70,32 @@ from .widgets import _land_layer
 class PlayMixin(object):
     """`Game` ↔ 控件的适配层。**不定义 `__init__`**(`__init__` 只在 root.py)。"""
 
+    def _idle_gc_quiet(self):
+        from .text import _POPUP_N
+        game,area=self.game,self.game_area
+        fx=area.win_fx
+        still_cup=(fx.mode=='result' and not getattr(fx,'_closing_at',0) and not getattr(fx,'_dirty',False))
+        return (getattr(self,'_load_veil',None) is None and not _POPUP_N[0]
+                and game.state in ('ready','landed') and (fx.mode=='idle' or still_cup)
+                and not area._effects and area._pulse is None and not game._anim_pending
+                and game._balance_release_at is None and game._stats_release_at is None
+                and game.now>=game._anim_start_time+game._anim_dur
+                and abs(area._spring_power)<.002 and abs(area._spring_vel)<.03
+                and not game._round_end_shown)
+
+    def _idle_gc_tick(self,_dt):
+        from .winfx import _PREBAKE_DONE
+        quiet=self._idle_gc_quiet() and _PREBAKE_DONE[0] and not getattr(self,'_hp_running',False)
+        event=self._idle_gc.tick(quiet)
+        if event:
+            from ..bench.playtest_probe import ACTIVE_PLAY
+            probe=ACTIVE_PLAY[0]
+            if probe is not None:probe.step('空闲GC',event['duration_ms']/1000)
+            record=getattr(self,'_playtest',None)
+            if record is not None and record.active:
+                record.idle_gc_events.append(dict(event='idle_gc',elapsed_s=record.clock()-record.started,
+                    state=self.game.state,cup_mode=self.game_area.win_fx.mode,**event))
+
     # =====================================================================
     # 〇、同步入口 —— **从 UI 侧调 Game 一律走 `_act`, 不要直接 `self.game.xxx()`**
     # =====================================================================
@@ -389,7 +415,10 @@ class PlayMixin(object):
         #    是 `Game._frame` 的**最后一条**事件、派发到它就会调 `tick_draw()` ⇒ 若把余额
         #    写在派发之后, 两者就调换了。数值上等价(`display_balance` 在 `step` 内已更新完),
         #    但"同一帧里谁先谁后"是本工程的对账口径, 不靠"反正互不依赖"来省。
-        _set_label_text(self.balance_lbl, str(int(round(self.game.display_balance))))
+        balance_text=str(int(round(self.game.display_balance)))
+        if balance_text!=self.balance_lbl.text and hasattr(self,'_idle_gc'):
+            self._idle_gc.quiet_since=None
+        _set_label_text(self.balance_lbl,balance_text)
         self._dispatch(_events, dt)
         # 装杯期把整块界面(减去游戏区)压暗。⚠️ 位置: 必须在 `tick_draw()` **之后** ——
         # 演出由 tick_draw -> win_fx.tick() -> `_redraw()` 推进, 而 `_redraw` 会把**本帧
@@ -435,6 +464,8 @@ class PlayMixin(object):
         """派发**一条**事件。清单见 `_dispatch` 的说明。"""
         if True:
             kind = ev.kind
+            if kind in ('state','stats','big_result','controls','update_slots','toast','toast_clear','round_end_popup','round_end_close'):
+                if hasattr(self,'_idle_gc'):self._idle_gc.quiet_since=None
             if kind == "launch":
                 # 老版 `launch()` 里那句 `_SINCE_LAUNCH[0] = 0`(在"state 必须是 charging"
                 # 守卫之后、**哑火分支之前** —— 所以哑火也清)。
@@ -445,7 +476,7 @@ class PlayMixin(object):
             elif kind == "sound":
                 self.sfx.play(ev.name, ev.gain, ev.throttle)
             elif kind == "status":
-                _set_label_text(self.status_lbl, ev.data["text"])
+                self._status_message(ev.data['text'],important=ev.data.get('important',False))
             elif kind == "stats":
                 # ⚠️ **不额外调 `_fit1`**: `_install_fit` 已经把 `_fit1` 挂在 `text` 上了,
                 #    再调一次就是多量一次字宽(而 `_FRAME_FIT[0]` 是跑分对账的口径)。
