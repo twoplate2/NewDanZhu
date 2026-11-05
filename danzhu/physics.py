@@ -1,7 +1,7 @@
 """纯物理层: 积分 / 碰撞 / 发射 / 哑火。不依赖 GUI, 不依赖 Kivy。
 
 数值一律从 .config 读 —— 本模块不重新定义任何常量。
-顺序即语义: 碰钉七道限幅、缓动带球的每帧角度改写、物理步内 墙→弧→钉→隔板→落袋
+顺序即语义: 碰钉七道限幅、弧面法线反射、物理步内 墙→弧→钉→隔板→落袋
 的次序, 动一个落格分布就变。
 """
 
@@ -15,7 +15,7 @@ from . import config as C
 #    目前只有 `_ARC_FRAME` 一个, 它一律走 `C._ARC_FRAME` 现读(physics_step / advance_flight)。
 #    调试期调参改 config 后必须重新 import 本模块, 否则静默无效果。
 from .config import (
-    _ARC_REACH, ARC_EASE_FRAMES, ARC_OUT_ANGLE, ARC_VISUAL, BALL_R,
+    _ARC_REACH, ARC_VISUAL, BALL_R,
     E, E_FAST, E_SIDE, E_SLOW, E_VREF, EV_ARC, EV_CEIL, EV_DIV, EV_PEG, EV_WALL,
     FIELD_L, FIXED_DT, FLOOR, G, KNOB_ARC_ANGLE, KNOB_ARC_BOOST, KNOB_CEIL_ANGLE,
     KNOB_CEIL_BOOST, LAUNCH_MAX, LAUNCH_MIN, MISFIRE_BOUNCE_VY, MISFIRE_E,
@@ -170,15 +170,12 @@ def _collide_rect(b, rx1, ry1, rx2, ry2, e, ev=0):
             _mark(b, EV_CEIL if is_ceil else ev, hit)
 
 
-# ⚠️ frame 必须是**必填位置参数**, 两种"补默认值"的写法都是坑:
-#    写成 `frame=C._ARC_FRAME` —— 在 def 那行就求值, 把逐帧递增的计数冻成 import 时刻的 0,
-#      缓动步数 n 从此永远停在 1(缓动只走一帧), 不报错、只是手感变了。
-#    写成 `frame=None` 再回读 —— 省略时它每帧都读到新值, 与老版冻结的 0 行为分叉。
-#    必填 ⇒ 漏传当场 TypeError, 不存在静默分叉的可能。
+# frame 保留为显式参数，供接触次数记录；不再参与出口方向或速率的计算。
 def _collide_arc(b, x1, y1, x2, y2, frame):
-    """弧面"接触帧缓动带球": 首次接触把出口方向缓动到 ARC_OUT_ANGLE, 速率不变。
+    """按真实接触法线弹性反射，接触当拍完成导流、保留速率。
 
-    n 只在**新的一帧**上 +1 ⇒ 同一物理步的 6 个子步只算一次缓动。
+    原来的三帧转向叠加随机偏角，会在首拍把球转回右侧或近乎竖直，
+    满力也可能在顶部拖沓。出口由弧面几何决定，不按蓄力档抽转向。
     """
     dx, dy = x2 - x1, y2 - y1
     L2 = dx * dx + dy * dy
@@ -199,22 +196,17 @@ def _collide_arc(b, x1, y1, x2, y2, frame):
     st = getattr(b, "arc_ease", None)     # park_ball 造的球无此字段
     if st is None:
         rng = getattr(b, "_rng", None) or random
-        band = _power_band(getattr(b, "launch_power", 0.5))    # 力度档 → 4 旋钮离散表
+        band = _power_band(getattr(b, "launch_power", 0.5))
+        # 只消费历史随机流位置，保留 arc_ease 的记录格式；不再应用偏角/乘速。
         angle = _sample_table(KNOB_ARC_ANGLE[band], rng)
         _sample_table(KNOB_ARC_BOOST[band], rng)  # 不再在最显眼的顶部随机减速/加速
         st = [0, -1, angle, 1.0]
         b.arc_ease = st
-    n, lf = st[0], st[1]
-    if lf != frame:
-        n += 1
-        lf = frame
-    th = ARC_OUT_ANGLE * min(1.0, n / ARC_EASE_FRAMES) + st[2]
-    a = math.radians(th)
-    sp = math.hypot(b.vx, b.vy)
-    b.vx = sp * (-math.sin(a))
-    b.vy = sp * (-math.cos(a))
-    st[0], st[1] = n, lf
-    _mark(b, EV_ARC, -vn)
+    if st[1] != frame:
+        st[0] += 1
+        st[1] = frame
+    hit = _reflect(b, nx, ny, 1.0)
+    _mark(b, EV_ARC, hit)
 
 
 def physics_step(b, geo, dt):

@@ -81,6 +81,12 @@ class Probe(PlinkoApp):
             for label in (self.rootw._playtest_label,self.rootw._playtest_sensor):
                 label.texture_update()
                 assert label.texture_size[1]<=label.height+1,(label.text,label.texture_size,label.size)
+            first,second=self.rootw._playtest_stat_cells
+            for a,b in zip(first,second):
+                assert abs(a.to_window(a.x,a.y)[0]-b.to_window(b.x,b.y)[0])<.1
+                for label in (a,b):
+                    label.texture_update()
+                    assert label.texture_size[1]<=label.height+1
         glPixelStorei(GL_PACK_ALIGNMENT,1)
         try:path=Window.screenshot(str(OUT/('%s_%dx%d.png'%self.case)))
         finally:glPixelStorei(GL_PACK_ALIGNMENT,4)

@@ -217,8 +217,10 @@ class PlayMixin(object):
         ⚠️ 包一层而不是改 `_frame` 内部: 那个函数里有提前 return, 内嵌计时容易漏。
         """
         _capture = ACTIVE[0]
+        playtest = getattr(self, '_playtest', None)
         _t0 = time.perf_counter()
-        _cpu0 = time.thread_time() if _capture is not None and _capture.active else 0.0
+        _cpu0 = time.thread_time() if ((_capture is not None and _capture.active) or
+                                      (playtest is not None and playtest.active)) else 0.0
         try:
             self._frame(dt)
         except BaseException:
@@ -230,6 +232,7 @@ class PlayMixin(object):
             playtest = getattr(self, '_playtest', None)
             if playtest is not None and playtest.active:
                 playtest.frame(_wall)
+                self._playtest_probe.frame((time.thread_time()-_cpu0)*1000)
             _FRAME_SELF[0] += _wall
             if _capture is not None and _capture.active:
                 _capture.frame_end(self.game, self.game_area, _wall,

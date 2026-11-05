@@ -17,6 +17,8 @@ def main():
     import danzhu.ui.playtest as module
     clock.time_ns=lambda:int(clock.t*1e9)
     module.time=clock
+    awake=[]
+    module._set_keep_awake=awake.append
     root._load_veil=None
     old=root.game
     root._act(old.set_bet,100);root._act(old.set_rtp,3.6)
@@ -31,6 +33,7 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         with patch.object(App,'get_running_app',return_value=SimpleNamespace(user_data_dir=directory)):
             root._start_playtest()
+            assert awake==[True]
             record=root._playtest
             assert root.game is not old and root.game_area.model is root.game
             assert not root.game._bench_running and not getattr(root.game,'_low_no_save',False)
@@ -44,8 +47,11 @@ def main():
             assert len(record.events)>=2,len(record.events)
             assert len({round(e['power'],2) for e in record.events})>1
             assert all(e['bet']==100 for e in record.events)
+            assert all(e['power']>=.15 for e in record.events)
+            assert record.settings['random_power_range']==[.15,1.0]
             assert writes and all('random_play_sandbox' in p for p in writes)
             root._stop_playtest()
+            assert awake==[True,False]
             assert root.game is old and root.game_area.model is old
             assert initial==(old.balance,old.plays,old.hits,old.bet,old.rtp_target,list(old.multipliers))
             assert random.getstate()==rng
@@ -60,10 +66,14 @@ def main():
             root._bench_save_log=export
             root._save_playtest()
             assert saved.wait(5),'report export did not finish'
-            report=json.loads(Path(directory,'report.json').read_text(encoding='utf-8'))
+            saved_text=Path(directory,'report.json').read_text(encoding='utf-8')
+            assert '最慢 1% 帧分布' in saved_text
+            report=json.loads(saved_text.split('=== DATA JSON ===\n',1)[1])
             assert report['settings']['bet']==100 and report['settings']['rtp']==3.6
             assert report['metrics']['frame_count']==len(record.frames)//4
             assert report['summary']['duration_s']==record.duration_s
+            assert report['diagnostics']['core_frame_count']==report['metrics']['frame_count']
+            assert report['diagnostics']['cases']
             assert len(root._load_playtest_history())==1,'save must not duplicate history'
             root._playtest_summary_popup.dismiss(animation=False)
             root._close_playtest()
@@ -72,6 +82,7 @@ def main():
             clock.t=record.started+6000
             root._playtest_tick(.05)
             assert not record.active and record.reason=='100_minutes'
+            assert awake==[True,False,True,False]
             assert len(root._load_playtest_history())==2
             root._playtest_summary_popup.dismiss(animation=False)
             root._close_playtest()

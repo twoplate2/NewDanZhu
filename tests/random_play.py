@@ -32,12 +32,12 @@ class PlaytestTests(unittest.TestCase):
         self.assertAlmostEqual(live['average_low'],reference['low_1pct_fps'])
         self.assertAlmostEqual(self.r.metrics(full=True)['average_fps'],reference['average_fps'])
 
-    def test_power_missing_and_charging_separate(self):
+    def test_current_power_readings_kept_without_average(self):
         for p in (2,4,None):self.r.sensor(dict(watts=p,plugged=0))
         self.r.sensor(dict(watts=9,plugged=1))
-        self.assertEqual(self.r.power_summary()['average_power_w'],3)
-        self.assertEqual(self.r.power_summary()['average_charge_w'],9)
-        self.assertEqual(self.r.power_summary()['discharge_samples'],2)
+        self.assertEqual([s['watts'] for s in self.r.sensors],[2,4,None,9])
+        self.r.stop()
+        self.assertNotIn('power',self.r.document())
 
     def test_stop_and_hundred_minutes(self):
         self.t=5999.99

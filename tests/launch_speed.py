@@ -6,7 +6,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from danzhu import config as C, physics as P
+from danzhu import config as C, physics as P, geo
 
 
 class LaunchTests(unittest.TestCase):
@@ -36,6 +36,29 @@ class LaunchTests(unittest.TestCase):
                 # 某些出口角会触发既有 vy=180 防贴顶；其余严格遵循碰撞能量。
                 if b.vy > 180:
                     self.assertAlmostEqual(math.hypot(b.vx,b.vy), math.hypot(400,350))
+
+    def test_guide_reflects_from_surface_not_random_angle_or_frame(self):
+        # 45 度直线导轨：竖直上行应转为水平向左；次数/随机种子不改变接触几何。
+        for frame in (1,2,30):
+            for seed in range(20):
+                b=P.launch_ball(1,random.Random(seed))
+                b.x,b.y,b.vx,b.vy=45,55,0,-500
+                P._collide_arc(b,0,0,100,100,frame)
+                self.assertAlmostEqual(b.vx,-500)
+                self.assertAlmostEqual(b.vy,0)
+                self.assertLess(b.x-b.y,0)  # 球仍处于导轨左下侧
+
+    def test_first_guide_contact_always_enters_left_for_real_geometry(self):
+        for power in C.KNOB_POWERS:
+            for dy in (-6,-3,0,3,6):
+                scene=geo.build_geo()
+                scene['deflectors']=[(a,b+dy,c,d+dy) for a,b,c,d in scene['deflectors']]
+                ball=P.launch_ball(power,random.Random(21))
+                for _ in range(120):
+                    P.advance_flight(ball,scene)
+                    if ball.events&C.EV_ARC:break
+                else:self.fail('valid launch missed guide')
+                self.assertLess(ball.vx,-250,(power,dy,ball.vx))
 
 
 if __name__ == '__main__': unittest.main()

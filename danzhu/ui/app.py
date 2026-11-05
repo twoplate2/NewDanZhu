@@ -370,6 +370,13 @@ def _brk_install():
             "_brk_wrap 取不到属性是**静默 return**, 不报就会让那一格恒为 0。" % (missing,))
     for cls, attr, tag in targets:
         _brk_wrap(cls, attr, tag)
+    from kivy.uix.label import Label
+    from ..audio.bus import Sfx
+    for cls,attr,tag in ((Game,'_frame','游戏逻辑'),(Game,'_save_config','存档投递'),
+                         (RootWidget,'_dispatch','事件派发'),(RootWidget,'_playtest_live','面板刷新'),
+                         (RootWidget,'_playtest_tick','模拟输入'),(Label,'texture_update','文字'),
+                         (Sfx,'play','音效'),(WinPileFX,'prebake_step','预热')):
+        _brk_wrap(cls,attr,tag,playtest_only=True)
 
 
 # ⚠️⚠️ **必须模块级调用** —— 漏掉这一行, 上面那 8 格子步骤计时(板面/重掷/字号/装杯/发射/

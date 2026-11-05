@@ -80,15 +80,22 @@ _CLOCK_END = [0.0]               # Clock.tick 结束那一刻(「尾」三分段
 _ON_DRAW_MS = [0.0]
 
 
+from ..bench.playtest_probe import ACTIVE_PLAY
+
+
 def _brk_add(tag, t0):
     """记一笔子步骤耗时(秒)。只在跑分采样期真读, 平时只是一次字典读改写。"""
+    play=ACTIVE_PLAY[0]
+    if play is not None and play.active:
+        play.step(tag,time.perf_counter()-t0)
+        return
     if ACTIVE[0] is None or not ACTIVE[0].active or ACTIVE[0].probe != "full":
         return
     d = _FRAME_BRK.get(tag)
     _FRAME_BRK[tag] = (d or 0.0) + (time.perf_counter() - t0)
 
 
-def _brk_wrap(cls, attr, tag):
+def _brk_wrap(cls, attr, tag, playtest_only=False):
     """给一个方法包一层计时。⚠️ 包装函数的 `__name__` 必须**与原方法同名** ——
     Kivy 的 WeakMethod 存的是 `__name__`, 名字对不上会在下次调度时 AttributeError
     (老版的探针踩过一次)。"""
@@ -97,13 +104,15 @@ def _brk_wrap(cls, attr, tag):
         return
 
     def f(*a, **k):
-        if ACTIVE[0] is None or not ACTIVE[0].active or ACTIVE[0].probe != "full":
+        play=ACTIVE_PLAY[0]
+        live=play is not None and play.active
+        if not live and (playtest_only or ACTIVE[0] is None or not ACTIVE[0].active or ACTIVE[0].probe != "full"):
             return orig(*a, **k)
         t0 = time.perf_counter()
         try:
             return orig(*a, **k)
         finally:
-            _brk_add(tag, t0)
+            _brk_add(getattr(a[0],'_playtest_probe_tag',tag) if tag=='文字' and a else tag, t0)
     f.__name__ = attr
     setattr(cls, attr, f)
 
@@ -723,7 +732,7 @@ def _texfill_wrap():
         return
 
     def _texture_fill(self, texture, *a, **k):
-        if not _TEXUPD_ACTIVE[0]:
+        if not _TEXUPD_ACTIVE[0] and ACTIVE_PLAY[0] is None:
             return _orig(self, texture, *a, **k)
         _t0 = time.perf_counter()
         try:
@@ -761,6 +770,11 @@ def _swap_wrap():
         return
 
     def flip(self, *a, **k):
+        play=ACTIVE_PLAY[0]
+        if play is not None and play.active:
+            start=time.perf_counter()
+            try:return _orig(self,*a,**k)
+            finally:play.submit(start,time.perf_counter())
         capture = ACTIVE[0]
         if capture is None or not capture.active:
             return _orig(self, *a, **k)
@@ -835,6 +849,11 @@ def _ondraw_wrap():
         return
 
     def on_draw(self, *a, **k):
+        play=ACTIVE_PLAY[0]
+        if play is not None and play.active:
+            start=time.perf_counter()
+            try:return _orig(self,*a,**k)
+            finally:play.step('画布提交',time.perf_counter()-start)
         capture = ACTIVE[0]
         if capture is None or not capture.active:
             return _orig(self, *a, **k)
