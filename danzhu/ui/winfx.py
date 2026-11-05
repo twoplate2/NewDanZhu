@@ -1361,6 +1361,8 @@ class WinPileFX(Widget):
         self._fx_pre = []          # 球**之前**的固定层: (kind, Color, Shape, f0, fh, a)
         self._fx_post = []         # 球**之后**的固定层(前层玻璃)
         self._bd = []              # 球层: 每球 (Color, Rotate, Rectangle, ball)
+        self._bd_state = []
+        self._fixed_state = None
         with self.canvas:
             # ① 堆体接地的软阴影(替代逐球贴球心阴影, 不再放大悬空感)
             self._fx_pre.append(("shadow", Color(0.02, 0.02, 0.03, 0.0),
@@ -1407,6 +1409,7 @@ class WinPileFX(Widget):
                 _r = Rectangle(texture=_ball_texture(_b["value"]), pos=(0, 0), size=(0, 0))
                 PopMatrix()
                 self._bd.append((_c, _ro, _r, _b))
+                self._bd_state.append(None)
             # ⑥ 前层玻璃(必须在球**之后**)
             self._fx_post.append(("front", Color(1.0, 1.0, 1.0, 0.0),
                                   Rectangle(texture=front_tex, pos=(0, 0), size=(0, 0)),
@@ -1418,6 +1421,9 @@ class WinPileFX(Widget):
 
     def _tbl_apply_fixed(self, a_cup, a_dim, bx, by, bw, bh):
         """每帧把固定层的**属性**写一遍(不重建指令)。"""
+        state=(a_cup,a_dim,bx,by,bw,bh,tuple(self.pos),tuple(self.size))
+        if state==self._fixed_state:return
+        self._fixed_state=state
         for _k, _c, _r, _f0, _fh, _a in self._fx_pre:
             if _k == "shadow":
                 if a_cup > 0.0:
@@ -1490,28 +1496,36 @@ class WinPileFX(Widget):
         return 1.0-min(.32,arrival*occlusion)
 
     def _tbl_apply_balls(self, a_cup):
-        """每帧把球层的属性写一遍。逻辑与 `_draw_bead` 逐字一致, 只是**写进既有指令**。"""
-        for _c, _ro, _r, _b in self._bd:
+        """运动、遮蔽仍逐帧计算；只将改变的属性写入既有画布指令。"""
+        for index,(_c, _ro, _r, _b) in enumerate(self._bd):
+            previous=self._bd_state[index]
             _al = a_cup
             if not _b["settled"]:
                 if _b["tt"] < _b["f_enter"]:        # 还在可见顶边之上: 不画
-                    _r.size = (0.0, 0.0)
+                    if previous is not None:
+                        _r.size = (0.0, 0.0)
+                        self._bd_state[index]=None
                     continue
                 _al *= max(0.0, min(1.0, (_b["tt"] - _b["f_enter"]) / ENTER_FADE))
                 if _al <= 0.0:
-                    _r.size = (0.0, 0.0)
+                    if previous is not None:
+                        _r.size = (0.0, 0.0)
+                        self._bd_state[index]=None
                     continue
             _scr = self._ball_screen(_b)
             if _scr is None:
-                _r.size = (0.0, 0.0)
+                if previous is not None:
+                    _r.size = (0.0, 0.0)
+                    self._bd_state[index]=None
                 continue
             _x, _y, _rx, _ry, _ang = _scr
             # 材质已有明暗，球体不再叠加杯底/深度压暗。
             exposure = self._ball_exposure(_b)
-            _c.rgba = (exposure, exposure, exposure, _al)
-            # 旋转指令保持单位变换，省掉两次逐帧属性写入。
-            _r.pos = (_x - _rx, _y - _ry)
-            _r.size = (_rx * 2, _ry * 2)
+            state=((exposure, exposure, exposure, _al),(_x-_rx,_y-_ry),(_rx*2,_ry*2))
+            if previous is None or state[0]!=previous[0]:_c.rgba=state[0]
+            if previous is None or state[1]!=previous[1]:_r.pos=state[1]
+            if previous is None or state[2]!=previous[2]:_r.size=state[2]
+            self._bd_state[index]=state
 
     def _tbl_drop(self):
         """作废持久表(并把画布清干净)。
@@ -1526,6 +1540,8 @@ class WinPileFX(Widget):
         self._fx_pre = []
         self._fx_post = []
         self._bd = []
+        self._bd_state = []
+        self._fixed_state = None
 
     def _redraw(self, *_):
         """装杯演出的每帧绘制。**持久指令表版**。

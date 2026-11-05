@@ -92,6 +92,7 @@ class PlaytestMixin:
                                       memory_policy='between_shots_worker',
                                       overlay_visible_default=False,overlay_visible=False,overlay_requested=False,
                                       big_result_widget_pool='two_pairs_per_renderer',
+                                      cup_draw_updates='changed_properties_only',
                                       current_fps_window_s=10,minimum_fps_window_s=1,
                                       gap_before_refresh_s=.3,gap_after_refresh_s=.3,
                                       stats_execution='worker',number_rendering='glyph_atlas',

@@ -17,6 +17,7 @@ sys.path.insert(0,str(ROOT))
 
 def main():
     parser=argparse.ArgumentParser()
+    parser.add_argument("--draw-baseline",action="store_true",help="使用0.8.147逐帧属性写入作视觉对照")
     parser.add_argument("--assets",type=Path,default=ROOT/"assets/balls")
     parser.add_argument("--label",default="current")
     parser.add_argument("--counts",default="1,2,10,100")
@@ -44,6 +45,15 @@ def main():
     from danzhu.ui.app import PlinkoApp
     from danzhu.ui.root import RootWidget
     C.SOUND_ENABLED=False
+    if args.draw_baseline:
+        import ast
+        import subprocess
+        source=subprocess.check_output(['git','show','e7e65c2:danzhu/ui/winfx.py'],cwd=ROOT,encoding='utf-8')
+        cls=next(n for n in ast.parse(source).body if isinstance(n,ast.ClassDef) and n.name=='WinPileFX')
+        nodes=[n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name in ('_tbl_apply_fixed','_tbl_apply_balls')]
+        namespace=dict(vars(W))
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),'baseline_winfx','exec'),namespace)
+        for node in nodes:setattr(W.WinPileFX,node.name,namespace[node.name])
     if args.pile_json:
         piles=json.loads(args.pile_json.read_text(encoding="utf-8"))
         baked=W._beads_from_baked
@@ -125,7 +135,12 @@ def main():
                      "rest":fx._last_settle+.1}
             moment=moments[phase]
             fx._t0=time.time()-moment;fx.mode="win"
-            fx._advance_balls(moment);fx._redraw();self.rootw._sync_hud_dim()
+            fx._advance_balls(moment)
+            from types import SimpleNamespace
+            from unittest.mock import patch
+            with patch.object(W,'time',SimpleNamespace(time=lambda:fx._t0+moment,perf_counter=time.perf_counter)):
+                fx._redraw()
+            self.rootw._sync_hud_dim()
             if args.glass!="full":
                 for _,color,*_ in fx._fx_post:
                     color.a=0
