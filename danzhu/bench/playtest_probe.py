@@ -5,6 +5,7 @@ import gc
 import heapq
 import math
 import time
+import threading
 
 ACTIVE_PLAY = [None]
 CORE_COLUMNS = ('thread_cpu_ms','frame_cpu_ms','swap_ms','draw_ms','monitor_ms')
@@ -22,6 +23,7 @@ class PlayProbe:
         self.interval_id=0
         self.active=True
         self.gc_start=None
+        self.owner_thread=threading.get_ident()
 
     def step(self, tag, seconds):
         if not self.active:return
@@ -48,7 +50,8 @@ class PlayProbe:
     def gc_callback(self,phase,info):
         if phase=='start':self.gc_start=self.clock()
         elif self.gc_start is not None:
-            self.step('GC',self.clock()-self.gc_start);self.gc_start=None
+            tag='GC' if threading.get_ident()==self.owner_thread else '后台GC'
+            self.step(tag,self.clock()-self.gc_start);self.gc_start=None
 
     def start(self):
         ACTIVE_PLAY[0]=self
@@ -65,6 +68,7 @@ class DiagnosticFrames:
         self.core=array('f')
         self.recent=deque(maxlen=8)
         self.cases=[]
+        self.gameplay_cases=[]
         self.pending=[]
         self.limit=limit
 
@@ -79,19 +83,26 @@ class DiagnosticFrames:
         for case in self.pending:
             case['frames'].append(row);case['following_left']-=1
         self.pending=[c for c in self.pending if c['following_left']>0]
-        if len(self.cases)<self.limit or interval>self.cases[0][0]:
+        overall=len(self.cases)<self.limit or interval>self.cases[0][0]
+        game_limit=min(64,self.limit)
+        gameplay=phase!=7 and (len(self.gameplay_cases)<game_limit or interval>self.gameplay_cases[0][0])
+        if overall or gameplay:
             case=dict(trigger_index=index,frames=list(self.recent)+[row],following_left=4)
             entry=(interval,index,case)
-            if len(self.cases)<self.limit:heapq.heappush(self.cases,entry)
-            else:heapq.heapreplace(self.cases,entry)
+            if overall:
+                if len(self.cases)<self.limit:heapq.heappush(self.cases,entry)
+                else:heapq.heapreplace(self.cases,entry)
+            if gameplay:
+                if len(self.gameplay_cases)<game_limit:heapq.heappush(self.gameplay_cases,entry)
+                else:heapq.heapreplace(self.gameplay_cases,entry)
             self.pending.append(case)
         self.recent.append(row)
 
-    def document(self, low_indices):
+    def document(self, low_indices,low01_indices=()):
         n=len(self.core)//len(CORE_COLUMNS)
         low=set(low_indices)
         groups={}
-        for name,indices in (('slowest_1pct',low),('other_frames',(i for i in range(n) if i not in low))):
+        for name,indices in (('slowest_1pct',low),('slowest_0_1pct',low01_indices),('other_frames',(i for i in range(n) if i not in low))):
             sums=[0.]*len(CORE_COLUMNS);counts=[0]*len(CORE_COLUMNS)
             for index in indices:
                 for column in range(len(CORE_COLUMNS)):
@@ -100,6 +111,8 @@ class DiagnosticFrames:
             groups[name]={key:(sums[i]/counts[i] if counts[i] else None) for i,key in enumerate(CORE_COLUMNS)}
         return dict(core_columns=CORE_COLUMNS,core_frame_count=n,group_mean_ms=groups,
                     cases=[entry[2] for entry in sorted(self.cases,reverse=True)],
+                    gameplay_cases=[entry[2] for entry in sorted(self.gameplay_cases,reverse=True)],
+                    gameplay_case_limit=min(64,self.limit),
                     case_limit=self.limit,context_before=8,context_after=4,
                     core_memory_bytes=len(self.core)*self.core.itemsize,
                     timing_note='子步骤含嵌套，不能相加；swap 是前一次提交，归属当前帧间隔。CPU 低不等于已证明 GPU 瓶颈。')

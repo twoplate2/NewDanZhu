@@ -1393,7 +1393,7 @@ def _glyph_key(fs, bold):
     return (float(fs), bool(bold), _GLYPH_FONT)
 
 
-def _glyph_bake(fs, bold):
+def _glyph_bake(fs, bold, chars=None):
     """烘一档(11 个字形)。任何一步不对**返回 None** ⇒ 这一档永不启用, 退回普通 Label。
 
     ⚠️ 三道门禁都是**真的会失败**的, 不是"看起来对":
@@ -1404,6 +1404,7 @@ def _glyph_bake(fs, bold):
       ③ 逐字宽相加 == `text_px` 整串量(**`force=True`**)。`force` 不能省: `_FIT_PX` 的
          key 含 text, 命中的话这一句什么都不做。
     """
+    chars=_GLYPH_CHARS if chars is None else chars
     try:
         rec = {"fs": float(fs), "bold": bool(bold), "adv": {}, "tex": {}, "keep": [],
                "h": 0, "ok": False}
@@ -1411,7 +1412,7 @@ def _glyph_bake(fs, bold):
         #    **绝不可以一个字一个 CoreLabel 地烘**: 逐像素对照实测, 单独烘出来的字形
         #    竖直落点比"在整串里"的**高半个像素**, 整块字差 704 个像素(平移 ±2 行扫过
         #    一遍, 0 偏移最优 ⇒ 不是位移, 是 SDL 的次像素定位)。
-        _cl = CoreLabel(text=_GLYPH_CHARS, font_size=float(fs), bold=bool(bold),
+        _cl = CoreLabel(text=chars, font_size=float(fs), bold=bool(bold),
                         font_name=_GLYPH_FONT, text_size=(None, None))
         _cl.refresh()
         _t = _cl.texture
@@ -1421,14 +1422,14 @@ def _glyph_bake(fs, bold):
         _W, _H = _t.size
         if _H <= 0:
             return None
-        _adv = [int(text_px(c, float(fs), bool(bold), force=True)) for c in _GLYPH_CHARS]
+        _adv = [int(text_px(c, float(fs), bool(bold), force=True)) for c in chars]
         # 门禁③: 逐字宽相加 == 整串纹理宽。不过就整档作废(宁可退回 Label, 不许拼歪)。
         if sum(_adv) != _W:
             return None
         # 门禁①: 每个字都真的画出了东西(空字形 = 这档废掉, 别静默拼出一串空白)
         _px = _t.pixels
         _x = 0
-        for _c, _w in zip(_GLYPH_CHARS, _adv):
+        for _c, _w in zip(chars, _adv):
             if _w <= 0:
                 return None
             _n = 0
@@ -1447,7 +1448,11 @@ def _glyph_bake(fs, bold):
         rec["h"] = _H
         rec["keep"].append(_cl)                         # ⚠️ 强引用: 子纹理靠父纹理活着
         # 门禁②: 逐字宽相加 == `text_px` 整串量(拿几个真串验, 不只验字符集本身)
-        for s in ("0", "8", "+2", "+10000", "273300", "1234567890"):
+        samples=("0", "8", "+2", "+10000", "273300", "1234567890")
+        if '.' in chars:samples+=('0.00','100.12','1.20')
+        if '累' in chars:samples+=('累计1投0中(0%)','累计999投100中(10%)')
+        for s in samples:
+            if any(c not in rec['adv'] for c in s):continue
             if sum(rec["adv"][c] for c in s) != text_px(s, float(fs), bool(bold), force=True):
                 return None
         rec["ok"] = True
@@ -1646,6 +1651,9 @@ def _set_lbl_tint(lbl, rgba):
     ⚠️ 拿不到就返回 False, 调用方**必须退回写 `lbl.color`** —— 绝不静默不染色
        (那会变成"状态卡住时看不出按钮是暗的")。
     """
+    if hasattr(lbl,'set_atlas_tint'):
+        lbl.set_atlas_tint(rgba)
+        return True
     _c = _lbl_canvas_color(lbl)
     if _c is None:
         return False

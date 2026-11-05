@@ -75,5 +75,32 @@ class PlaytestTests(unittest.TestCase):
             self.assertAlmostEqual(a[key],b[key],msg=key)
         self.assertLess(b['minimum_low'],b['current_low'])
 
+    def test_point_one_percent_uses_ceiling_and_ten_second_groups(self):
+        for i in range(1,1201):
+            self.t=i*(10-.053)/1198 if i<=1198 else (9.967 if i==1199 else 10)
+            self.r.flip(2)
+        live=self.r.update_live()
+        self.assertEqual(self.r.low01_groups[0]['frame_count'],1200)
+        self.assertEqual(self.r.low01_groups[0]['selected_frames'],2)
+        expected=2000/53
+        self.assertAlmostEqual(live['average_low_0_1pct'],expected)
+        for i in range(1,601):
+            self.t=10+i/60;self.r.flip(2)
+        live=self.r.update_live()
+        self.assertEqual(self.r.low01_groups[1]['selected_frames'],1)
+        self.assertAlmostEqual(live['minimum_low_0_1pct'],expected)
+        self.assertAlmostEqual(live['average_low_0_1pct'],(expected+60)/2)
+        self.assertEqual(self.r.metrics(full=True)['low_0_1pct_count'],2)
+
+    def test_worker_snapshot_isolated_from_new_frames(self):
+        for _ in range(1200):self.tick(10)
+        work=self.r.snapshot_live()
+        for _ in range(50):self.tick(30)
+        work.compute_live();self.r.apply_live(work)
+        self.assertAlmostEqual(self.r.live['average_fps'],100)
+        self.assertEqual(self.r._stats_cursor,1200)
+        self.r.update_live()
+        self.assertEqual(self.r._stats_cursor,1250)
+
 
 if __name__=='__main__':unittest.main()

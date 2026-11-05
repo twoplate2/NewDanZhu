@@ -38,6 +38,7 @@ from .text import (_COLD_FS_BASE, _COLD_FS_TAG, _FRAME_FIT, _TINT_BRIGHT,
                    _TINT_DIM, _set_lbl_tint, _tag_texupd, fit_font_size,
                    text_px)
 from .widgets import RotPopup
+from .number_cell import NumberCell
 
 
 class UiMixin(object):
@@ -140,7 +141,8 @@ class UiMixin(object):
         try:
             pad = getattr(w, "padding", [0, 0, 0, 0])
             avail = max(1.0, w.width - pad[0] - pad[2] - inset)
-            fs = fit_font_size(w.text or "", b, avail,
+            width=w.atlas_width(b) if hasattr(w,'atlas_width') else None
+            fs = b if width is not None and width<=avail else fit_font_size(w.text or "", b, avail,
                                bool(getattr(w, "bold", False)))
             if abs(float(w.font_size) - fs) > 0.01:
                 w.font_size = fs
@@ -581,8 +583,9 @@ class UiMixin(object):
         self.balance_lbl = self._mk_balance_lbl(str(self.game.balance))
         _tag_texupd(self.balance_lbl, "余额")
         info.add_widget(self.balance_lbl)
-        self.stats_lbl = self._mk_label("", "15sp", COL_TEXT, "center", True,
-                                        size_hint_x=0.70)
+        # 正常游戏每次落袋都更新的计数行：预烘字符后只摆字形，避免整行重建纹理。
+        self.stats_lbl = NumberCell(text='',font_size=sp(15),bold=True,
+            chars='0123456789累计投中(%)',centered=True,color=hex_rgb(COL_TEXT)+(1,),capacity=40,size_hint_x=.70)
         _tag_texupd(self.stats_lbl, "统计")
         self.stats_lbl._tint_base_rgba = hex_rgb(COL_TEXT) + (1,)
         self.stats_lbl._tint_key = "text"

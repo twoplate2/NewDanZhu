@@ -31,6 +31,9 @@ class PlaytestRecord:
         self._stats_cursor=0
         self._stats_window=deque()
         self._next_stats_at=.5
+        self.low01_groups=[]
+        self._low01_pending=[]
+        self._low01_end=10.
 
     def frame(self, ms):
         self.wall_ms += ms
@@ -74,7 +77,48 @@ class PlaytestRecord:
             self.minimum_low = min(self.minimum_low if self.minimum_low is not None else low, low)
         return fps,low
 
+    def snapshot_live(self):
+        """主线程只复制新增帧和小窗口；后台不读写仍在采集的容器。"""
+        work=PlaytestRecord.__new__(PlaytestRecord)
+        work.started=0.
+        at=self.clock()-self.started
+        work.clock=lambda:at
+        work._full_count=len(self.frames)//4
+        work._commit_cursor=work._full_count
+        work.frames=self.frames[self._stats_cursor*4:]
+        work._stats_cursor=0
+        work._stats_window=deque(self._stats_window)
+        work._next_stats_at=self._next_stats_at
+        work.minimum_fps=self.minimum_fps
+        work.minimum_low=self.minimum_low
+        work.tail=self.tail[-max(1,work._full_count//100):]
+        work.total_ms=self.total_ms
+        work.low01_groups=list(self.low01_groups)
+        work._low01_pending=list(self._low01_pending)
+        work._low01_end=self._low01_end
+        return work
+
+    def apply_live(self,work):
+        self._stats_cursor=work._commit_cursor
+        for name in ('_stats_window','_next_stats_at','minimum_fps','minimum_low','live',
+                     'low01_groups','_low01_pending','_low01_end'):
+            setattr(self,name,getattr(work,name))
+        return self.live
+
     def update_live(self):
+        work=self.snapshot_live();work.compute_live()
+        return self.apply_live(work)
+
+    def _finish_low01_group(self):
+        values=self._low01_pending
+        if values:
+            k=max(1,(len(values)+999)//1000)
+            self.low01_groups.append(dict(start_s=self._low01_end-10,end_s=self._low01_end,
+                frame_count=len(values),selected_frames=k,
+                fps=1000*k/math.fsum(sorted(values)[-k:]),worst_ms=max(values)))
+        self._low01_pending=[];self._low01_end+=10
+
+    def compute_live(self, yielding=False):
         # 只在发射间隔/结束时做统计；按历史0.5秒窗口补算，不能因少刷新而漏掉最低值。
         now=self.clock()-self.started
         n=len(self.frames)//4
@@ -83,6 +127,9 @@ class PlaytestRecord:
             while self._next_stats_at<elapsed:
                 self._window_values(self._next_stats_at)
                 self._next_stats_at+=.5
+                if yielding:time.sleep(0)
+            while self._low01_end<elapsed:self._finish_low01_group()
+            self._low01_pending.append(interval)
             self._stats_window.append((elapsed,interval))
             while self._stats_window and self._stats_window[0][0]<=elapsed-10:
                 self._stats_window.popleft()
@@ -90,12 +137,18 @@ class PlaytestRecord:
         while self._next_stats_at<=now:
             self._window_values(self._next_stats_at)
             self._next_stats_at+=.5
+            if yielding:time.sleep(0)
+        while self._low01_end<=now:self._finish_low01_group()
         fps,low=self._window_values(now,track=False)
-        n = len(self.frames)//4
+        n = self._full_count
         k = max(1,n//100)
         average_low = 1000*k/math.fsum(self.tail[-k:]) if n and k<=len(self.tail) else None
         self.live = dict(current_fps=fps, minimum_fps=self.minimum_fps,
+                         sample_elapsed_s=now,
                          current_low=low, minimum_low=self.minimum_low, average_low=average_low,
+                         average_low_0_1pct=(math.fsum(g['fps'] for g in self.low01_groups)/len(self.low01_groups)
+                                            if self.low01_groups else None),
+                         minimum_low_0_1pct=min((g['fps'] for g in self.low01_groups),default=None),
                          average_fps=1000*n/self.total_ms if n else None)
         return self.live
 
@@ -107,8 +160,11 @@ class PlaytestRecord:
             n=len(self.frames)//4
             if not n: return None
             k=max(1,n//100)
+            k01=max(1,(n+999)//1000)
             return dict(frame_count=n,duration_ms=self.total_ms,average_fps=1000*n/self.total_ms,
-                        low_1pct_fps=1000*k/math.fsum(self.tail[-k:]),max_ms=self.tail[-1])
+                        low_1pct_fps=1000*k/math.fsum(self.tail[-k:]),max_ms=self.tail[-1],
+                        low_0_1pct_fps=1000*k01/math.fsum(self.tail[-k01:]),low_0_1pct_count=k01,
+                        worst_frame_fps=1000/self.tail[-1])
         values = list(self.frames[1::4]) if full else [v for _, v in self.recent]
         return compute_metrics(values) if values else None
 
@@ -126,13 +182,23 @@ class PlaytestRecord:
         n=len(self.frames)//4
         low=heapq.nlargest(max(1,n//100),range(n),key=lambda i:self.frames[i*4+1])
         low_set=set(low)
+        low01=low[:max(1,(n+999)//1000)]
+        low01_set=set(low01)
         phases={}
         for i in range(n):
             phase=int(self.frames[i*4+3])
-            group=phases.setdefault(phase,dict(frames=0,slowest_1pct_frames=0))
+            group=phases.setdefault(phase,dict(frames=0,slowest_1pct_frames=0,slowest_0_1pct_frames=0))
             group['frames']+=1;group['slowest_1pct_frames']+=int(i in low_set)
+            group['slowest_0_1pct_frames']+=int(i in low01_set)
         worst=heapq.nlargest(min(200,n),range(n),key=lambda i:self.frames[i*4+1])
         selected=sorted({j for i in worst for j in range(max(0,i-2),min(n,i+3))})
+        extremes={}
+        for label,is_gap in (('gameplay',False),('test_gap',True)):
+            index=max((i for i in range(n) if (self.frames[i*4+3]==7)==is_gap),
+                      key=lambda i:self.frames[i*4+1],default=None)
+            extremes[label]=(dict(frame_index=index,elapsed_s=self.frames[index*4],
+                interval_ms=self.frames[index*4+1],equivalent_fps=1000/self.frames[index*4+1],
+                phase=int(self.frames[index*4+3])) if index is not None else None)
         return dict(schema='danzhu.random_play.v2', mode='random_real_play',
                     timing_source='on_flip_application_pre_submit', present_source='unavailable',
                     reason=self.reason, metrics=self.metrics(full=True),
@@ -140,7 +206,12 @@ class PlaytestRecord:
                     columns=['elapsed_s', 'interval_ms', 'frame_wall_ms', 'phase'],
                     phases=['ready', 'charging', 'flying', 'misfire', 'landing', 'landed', 'cup','test_gap'],
                     frame_scope='worst_200_intervals_with_2_neighbors',
-                    low_1pct_by_phase=phases,diagnostics=self.diagnostics.document(low),
+                    low_1pct_by_phase=phases,diagnostics=self.diagnostics.document(low,low01),
+                    low_0_1pct_groups=list(self.low01_groups),
+                    worst_frame_by_scope=extremes,
+                    low_0_1pct_partial=(dict(start_s=self._low01_end-10,end_s=self.duration_s,
+                        frame_count=len(self._low01_pending),complete=False) if self._low01_pending else None),
+                    low_0_1pct_definition='10-second disjoint groups; k=max(1,ceil(n/1000)); average of group FPS; incomplete final group excluded',
                     frame_indices=selected,
                     frames=[list(self.frames[i*4:i*4+4]) for i in selected],
                     events=list(self.events), sensors=list(self.sensors),test_gaps=list(self.gaps),
@@ -160,12 +231,20 @@ def format_report(document):
                settings.get('bet'),settings.get('rtp',0)*100,settings.get('display_hz'),settings.get('kivy_cap')),
            '全程：%d 帧；平均 %s FPS；1%% Low %s FPS；最长 %s ms'%(
                m.get('frame_count',0),number(m.get('average_fps')),number(m.get('low_1pct_fps')),number(m.get('max_ms'))),
+           '0.1%% Low：10秒分组平均 %s FPS；分组最低 %s FPS；全程 %s FPS'%(
+               number(document.get('live',{}).get('average_low_0_1pct')),
+               number(document.get('live',{}).get('minimum_low_0_1pct')),number(m.get('low_0_1pct_fps'))),
+           '最差单帧：%s ms，等效 %s FPS'%(number(m.get('max_ms')),number(m.get('worst_frame_fps'))),
            '', '一、最慢 1% 帧分布（与全程 1% Low 使用同一批帧）']
     for phase,row in sorted(document.get('low_1pct_by_phase',{}).items(),key=lambda item:int(item[0])):
-        lines.append('%s：%d / %d 帧'%(phases[int(phase)],row['slowest_1pct_frames'],row['frames']))
+        lines.append('%s：最慢1%% %d帧；最慢0.1%% %d帧；共%d帧'%(phases[int(phase)],row['slowest_1pct_frames'],row.get('slowest_0_1pct_frames',0),row['frames']))
+    for key,label in (('gameplay','游戏阶段最差单帧'),('test_gap','测试间隔最差单帧')):
+        row=document.get('worst_frame_by_scope',{}).get(key)
+        if row:lines.append('%s：#%d @%.3fs，%.3fms，约%.2f FPS，%s'%(
+            label,row['frame_index'],row['elapsed_s'],row['interval_ms'],row['equivalent_fps'],phases[row['phase']]))
     lines.extend(['','二、慢帧与其余帧的核心计时均值（ms）',
                   '主线程 CPU / 游戏帧 CPU / 前次 swap 等待 / 画布提交 / 面板自身'])
-    for key,label in (('slowest_1pct','最慢1%'),('other_frames','其余帧')):
+    for key,label in (('slowest_1pct','最慢1%'),('slowest_0_1pct','最慢0.1%'),('other_frames','其余帧')):
         row=diag.get('group_mean_ms',{}).get(key,{})
         lines.append(label+'：'+' / '.join(number(row.get(k)) for k in diag.get('core_columns',())))
     lines.extend(['','三、最慢十帧与最大子步骤（全部详细案例在后面的 JSON 中）'])
@@ -181,9 +260,10 @@ def format_report(document):
                   '子步骤含嵌套，不能直接相加；面板刷新、面板文字、记录器已单列。',
                   'swap 记录前一次提交，属于当前帧间隔；interval_id 与 swap_source_interval 可核对。',
                   'CPU 较低只说明可能存在等待，不能直接判定为 GPU、系统调度或温控。',
-                  '最慢案例最多128组，每组前8帧、后4帧；结束附近可能缺少后续帧，following_left 明示缺口。',
+                  '全程最慢案例最多128组，另保留游戏阶段最慢64组；每组前8帧后4帧。结束处 following_left 标明缺少后续帧。',
                   '原始帧片段仅含最慢200帧及邻帧；全程指标、阶段分布和核心计时均使用全部帧。',
                   '温度与电池功率读取策略：%s；缺失读数不编造，不提供平均耗电。'%settings.get('sensor_policy','periodic_0.5s'),
                   '测试间隔单独标记；全程指标仍包含间隔帧，不删除刷新产生的慢帧。',
+                  '0.1% Low：固定10秒分组，取最慢 max(1,ceil(N/1000)) 帧；1200帧取2帧。不完整尾组单列，不计入分组平均/最低。',
                   '', '=== DATA JSON ===',json.dumps(document,ensure_ascii=False,allow_nan=False)])
     return '\n'.join(lines)

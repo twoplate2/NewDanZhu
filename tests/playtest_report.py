@@ -67,5 +67,15 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(parsed['diagnostics']['core_frame_count'],300)
         self.assertIn('不能直接判定',report)
 
+    def test_gameplay_worst_survives_slower_test_gaps(self):
+        diag=DiagnosticFrames(limit=4)
+        for i in range(100):
+            diag.append(i,i*.01,40 if i%2==0 else 12,7 if i%2==0 else 2,
+                        dict(thread_cpu_ms=1,frame_cpu_ms=.3,swap_ms=1,steps={}))
+        doc=diag.document([0])
+        self.assertTrue(all(c['frames'][next(j for j,r in enumerate(c['frames']) if r['frame_index']==c['trigger_index'])]['phase']==7 for c in doc['cases']))
+        self.assertEqual(len(doc['gameplay_cases']),4)
+        self.assertTrue(all(next(r for r in c['frames'] if r['frame_index']==c['trigger_index'])['phase']==2 for c in doc['gameplay_cases']))
+
 
 if __name__=='__main__':unittest.main()

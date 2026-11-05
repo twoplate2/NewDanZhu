@@ -32,7 +32,9 @@ def main():
     old._save_cfg=write
     read_sensor=module._live_power_snapshot
     sensor_calls=[]
+    main_thread=threading.get_ident()
     def checked_sensor():
+        assert threading.get_ident()!=main_thread,'sensor read must not block UI thread'
         assert root.game.state=='ready' and root.game_area.win_fx.mode=='idle'
         assert root._playtest_gap is not None
         sensor_calls.append(clock.t)
@@ -79,6 +81,8 @@ def main():
             root._stop_playtest()
             assert awake==[True,False]
             assert root.game is old and root.game_area.model is old
+            assert old._bench_running is False
+            assert root.stats_lbl._rec is not None
             assert initial==(old.balance,old.plays,old.hits,old.bet,old.rtp_target,list(old.multipliers))
             assert random.getstate()==rng
             rows=root._load_playtest_history()
@@ -100,6 +104,8 @@ def main():
             assert report['summary']['duration_s']==record.duration_s
             assert report['diagnostics']['core_frame_count']==report['metrics']['frame_count']
             assert report['diagnostics']['cases']
+            assert report['low_0_1pct_groups']
+            assert report['metrics']['low_0_1pct_count']==max(1,(report['metrics']['frame_count']+999)//1000)
             assert len(root._load_playtest_history())==1,'save must not duplicate history'
             root._playtest_summary_popup.dismiss(animation=False)
             root._close_playtest()
