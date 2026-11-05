@@ -31,12 +31,18 @@ class IdleGC:
         if self.quiet_since is None:self.quiet_since=now
         if now-self.quiet_since<self.quiet_delay or now-self.last_collect<1.:
             return None
-        threshold=self.backend.get_threshold()[0]
-        if self.backend.get_count()[0]<max(1,threshold):return None
+        counts=self.backend.get_count()
+        thresholds=self.backend.get_threshold()
+        if thresholds[0]<=0 or counts[0]<thresholds[0]:return None
+        # 年轻代达到阈值不等于要全堆扫描。显式collect会推进代计数，按配置逐代升级。
+        generation=0
+        if counts[1]>=max(1,thresholds[1]):generation=1
+        if counts[2]>=max(1,thresholds[2]):generation=2
         start=self.clock()
-        collected=self.backend.collect(2)
+        collected=self.backend.collect(generation)
         end=self.clock()
         self.last_collect=end
-        event=dict(monotonic_s=start,duration_ms=(end-start)*1000,collected=collected,generation=2)
+        event=dict(monotonic_s=start,duration_ms=(end-start)*1000,collected=collected,generation=generation,
+                   counts_before=list(counts),thresholds=list(thresholds),counts_after=list(self.backend.get_count()))
         self.events.append(event)
         return event

@@ -248,6 +248,8 @@ def format_report(document):
         collections=document['idle_gc_events']
         lines.append('空闲策略GC：%d次，最长%.3fms（不含启动预热）；回收帧仍计入全程统计。'%(
             len(collections),max((e['duration_ms'] for e in collections),default=0)))
+        lines.append('回收代数：'+ ' / '.join('第%d代 %d次'%(generation,sum(e.get('generation')==generation for e in collections))
+                                            for generation in (0,1,2)))
     lines.extend(['','二、慢帧与其余帧的核心计时均值（ms）',
                   '主线程 CPU / 游戏帧 CPU / 前次 swap 等待 / 画布提交 / 面板自身'])
     for key,label in (('slowest_1pct','最慢1%'),('slowest_0_1pct','最慢0.1%'),('other_frames','其余帧')):

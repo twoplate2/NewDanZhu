@@ -7,15 +7,21 @@ from danzhu.idle_gc import IdleGC
 
 
 class FakeGC:
-    def __init__(self,enabled=True):self.enabled=enabled;self.count=1000;self.collections=0
+    def __init__(self,enabled=True):
+        self.enabled=enabled;self.count=1000;self.collections=0
+        self.older=[0,0];self.generations=[]
     def isenabled(self):return self.enabled
     def enable(self):self.enabled=True
     def disable(self):self.enabled=False
-    def get_count(self):return (self.count,0,0)
+    def get_count(self):return (self.count,*self.older)
     def get_threshold(self):return (700,10,10)
     def collect(self,generation):
-        assert generation==2
-        self.collections+=1;self.count=0;return 7
+        self.generations.append(generation)
+        self.collections+=1;self.count=0
+        if generation==0:self.older[0]+=1
+        elif generation==1:self.older=[0,self.older[1]+1]
+        else:self.older=[0,0]
+        return 7
 
 
 class GCTests(unittest.TestCase):
@@ -35,6 +41,23 @@ class GCTests(unittest.TestCase):
         t[0]=.7;self.assertIsNone(p.tick(True))
         t[0]=.81;self.assertIsNotNone(p.tick(True))
         p.stop();self.assertFalse(backend.enabled)
+
+    def test_sixty_six_quiet_windows_do_not_force_full_heap_sweeps(self):
+        t=[0.];backend=FakeGC();p=IdleGC(backend,lambda:t[0]);p.start();p.tick(True)
+        for i in range(66):
+            backend.count=1000;t[0]=i*2+1;p.tick(True)
+        self.assertEqual(backend.generations.count(0),60)
+        self.assertEqual(backend.generations.count(1),6)
+        self.assertEqual(backend.generations.count(2),0)
+
+    def test_old_generation_requires_its_own_threshold(self):
+        t=[0.];backend=FakeGC();p=IdleGC(backend,lambda:t[0]);p.start();p.tick(True)
+        for i in range(111):
+            backend.count=1000;t[0]=i*2+1;event=p.tick(True)
+        self.assertEqual(backend.generations.count(2),1)
+        self.assertEqual(event['generation'],2)
+        self.assertEqual(event['counts_before'][2],10)
+        self.assertEqual(event['counts_after'],[0,0,0])
 
 
 if __name__=='__main__':unittest.main()
