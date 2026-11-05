@@ -156,6 +156,7 @@ class RootWidget(PlaytestMixin, BenchMixin, PlayMixin, UiMixin, BoxLayout):
         self._idle_gc=IdleGC()
         self._idle_gc.start()
         self._idle_gc_event=Clock.schedule_interval(self._idle_gc_tick,.1)
+        self._round_end_prepare_event=Clock.schedule_once(self._prepare_round_end,.1)
         # 中奖杯的球纹理/球堆预热: 分帧摊在启动后做, 别等中奖那一刻现算(低端机单档
         # d=128 纯 Python 合成要 100~200ms, 一次做完就是几个长帧, 而这动画的全部意义
         # 就是丝滑)。排在 _frame 之后, 不影响冷启动的建界面/烘音效。

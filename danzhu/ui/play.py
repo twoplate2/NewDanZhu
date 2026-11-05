@@ -807,40 +807,15 @@ class PlayMixin(object):
         """弹窗关掉 -> 整段彩蛋结束, 放行 `park_ball`。"""
         self.game.easter_finish()
 
-    def _show_round_end(self, data):
-        """本轮游戏结束弹窗: 恭喜文案 + 统计 + 语音播报(玩家点"确定"才重置并关闭)。
+    def _prepare_round_end(self, _dt=0):
+        if getattr(self, '_round_end_view', None) is None:
+            from .round_end import RoundEndView
+            self._round_end_view = RoundEndView(self)
+        return self._round_end_view
 
-        ⚠️ `plays` / `balance` 取事件的**快照**(`Game.show_round_end` 发事件那一刻的值),
-           不要去读 `game.round_plays` —— 那是"现在"的值, 而两者中间隔着一帧。
-        语音播报在 `Game._play_round_end_voice` 里(它按老版次序发 `sound` 事件), 这里不播。
-        """
-        content = BoxLayout(orientation="vertical", padding=dp(20), spacing=dp(14))
-        msg = "本轮游戏 %d 次已结束\n剩余 [color=%s]%d[/color] 个弹珠\n弹珠数量已调整到1000个\n欢迎你再次挑战" % (
-            data["plays"], COL_BALL, data["balance"])
-        lbl = Label(text=msg, font_size="18sp", halign="center", valign="middle",
-                    markup=True, color=hex_rgb(COL_TEXT) + (1,),
-                    size_hint_y=None, height=dp(96))
-        self._auto_h(lbl, dp(72), dp(8))
-        content.add_widget(lbl)
-        ok_btn = Button(text="确定", font_size="16sp", bold=True,
-                        background_normal="", background_down="",
-                        background_color=hex_rgb(COL_BTN) + (1,),
-                        color=(1, 1, 1, 1), size_hint_y=None, height=dp(48))
-        content.add_widget(ok_btn)
-        popup = self._popup(0.82, 320, title="本轮游戏结束", content=content,
-                            auto_dismiss=False,
-                            title_color=hex_rgb(COL_TEXT) + (1,),
-                            title_size="19sp",
-                            separator_color=hex_rgb(COL_DIV) + (1,))
-        popup.open()
-        self._popup_fit_content(popup, content)
-        # 点"确定"才重置并关闭; 去重闸(`_round_end_ack`)与重置都在 `Game` 里,
-        # 关窗由 `round_end_close` 事件驱动(事件是**唯一**的出口, 不在这里 dismiss)。
-        self._round_end_popup = popup
-        # ⚠️ 当拍(`_act`): 老版 `_auto_reset()` 是 `reset_balance(notify=False)` +
-        #    `popup.dismiss()` 一口气同步做完的 —— 直调晚一帧的话, "重置"那一串界面反响
-        #    (余额/统计/输入解锁/按钮底色)会比关窗晚一拍落地。
-        ok_btn.bind(on_release=lambda *_: self._act(self.game.round_end_confirm))
+    def _show_round_end(self, data):
+        # 动态数据取结算事件快照；窗口和按钮回调只建一次。
+        self._round_end_popup = self._prepare_round_end().show(data)
 
     def _show_round_settings(self):
         """轮次设定弹窗: 选择 20/50/100 + 最近完成的轮次历史。"""

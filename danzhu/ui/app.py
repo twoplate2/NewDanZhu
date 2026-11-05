@@ -313,6 +313,8 @@ class PlinkoApp(App):
         return True
 
     def on_stop(self):
+        if getattr(self.rootw,'_round_end_prepare_event',None) is not None:self.rootw._round_end_prepare_event.cancel()
+        if getattr(self.rootw,'_round_end_view',None) is not None:self.rootw._round_end_view.dispose()
         if getattr(self.rootw,'_idle_gc',None) is not None:self.rootw._idle_gc.stop()
         if getattr(self.rootw,'_idle_gc_event',None) is not None:self.rootw._idle_gc_event.cancel()
         self.rootw._close_playtest()
@@ -379,6 +381,7 @@ def _brk_install():
     for cls,attr,tag in ((Game,'_frame','游戏逻辑'),(Game,'_save_config','存档投递'),
                          (RootWidget,'_dispatch','事件派发'),(RootWidget,'_playtest_live','面板刷新'),
                          (RootWidget,'_playtest_tick','模拟输入'),(Label,'texture_update','文字'),
+                         (RootWidget,'_show_round_end','轮次弹窗'),
                          (Sfx,'play','音效'),(WinPileFX,'prebake_step','预热')):
         _brk_wrap(cls,attr,tag,playtest_only=True)
 

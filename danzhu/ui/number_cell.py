@@ -18,6 +18,7 @@ class NumberCell(Widget):
     texture_size=ListProperty([0,0])
     text_size=ListProperty([None,None])
     bold=BooleanProperty(False)
+    scale_to_fit=BooleanProperty(False)
 
     def __init__(self, caption='', chars='0123456789.', centered=False, color=None, capacity=12, **kw):
         self.caption=caption
@@ -76,12 +77,15 @@ class NumberCell(Widget):
         self._label.text_size=(self._label.width,None)
         quads=self._quads[0] if self._quads is not None else ()
         height=self._rec['h'] if self._rec is not None else 0
+        numeric_width=self._quads[1] if self._quads is not None else 0
+        scale=min(1.,max(0.,self.width-self._caption_width)/numeric_width) if self.scale_to_fit and numeric_width else 1.
         for index,rect in enumerate(self._rects):
             if index<len(quads):
                 texture,x,width=quads[index]
-                left=self.x+(self.width-self.texture_size[0])/2 if self.centered else self.x
-                rect.texture=texture;rect.pos=(int(left+self._caption_width+x),int(self.y+(self.height-height)/2))
-                rect.size=(width,height)
+                displayed_width=self._caption_width+numeric_width*scale
+                left=self.x+(self.width-displayed_width)/2 if self.centered else self.x
+                rect.texture=texture;rect.pos=(int(left+self._caption_width+x*scale),int(self.y+(self.height-height*scale)/2))
+                rect.size=(width*scale,height*scale)
             else:rect.size=(0,0)
 
     def texture_update(self,*_):

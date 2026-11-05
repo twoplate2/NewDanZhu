@@ -87,6 +87,7 @@ class PlaytestMixin:
                                       current_fps_window_s=10,minimum_fps_window_s=1,
                                       gap_before_refresh_s=.3,gap_after_refresh_s=.3,
                                       stats_execution='worker',number_rendering='glyph_atlas',
+                                      round_end_popup='cached_prewarmed_static_and_atlas_numbers',
                                       gc_policy='generational_collect_when_visually_quiet',
                                       low_0_1pct_window_s=10,low_0_1pct_rounding='ceil',
                                       low_0_1pct_aggregation='mean_and_minimum_of_complete_10s_groups',
