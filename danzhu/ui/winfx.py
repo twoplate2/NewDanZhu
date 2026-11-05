@@ -787,6 +787,8 @@ class WinPileFX(Widget):
         self._value = DEFAULT_BET
         self._seq = 0
         self._rng = random.Random()
+        self._variant_bags = {}
+        self._last_variant = {}
         self._t0 = 0.0                    # 杯子该出现的时刻(settle + WINDUP)
         self._rain_shift = 0.0            # 本局雨的整场前移量(见 RAIN_ANCHOR), expected_sec 要用
         self._last_touch = 0.0            # 最后一颗球**第一次触地**(相对 _t0) —— 揭晓基准
@@ -893,6 +895,19 @@ class WinPileFX(Widget):
             tail = SPAWN_TOP + (n - 1) * iv + FALL_MAX + 0.33
         return WINDUP + tail + hold_for(n) + RESULT_FADE
 
+    def _next_pile_variant(self, count):
+        """每档独立洗牌，12种全用完再洗；跨轮洗牌也避免立即重复。"""
+        bag=self._variant_bags.setdefault(count,[])
+        if not bag:
+            bag.extend(range(_PILE_VARIANTS))
+            self._rng.shuffle(bag)
+        previous=self._last_variant.get(count)
+        if bag[-1]==previous and len(bag)>1:
+            bag[-1],bag[0]=bag[0],bag[-1]
+        variant=bag.pop()
+        self._last_variant[count]=variant
+        return variant
+
     def play_win(self, multiplier, bet, on_done=None, auto_close=False):
         """排定一场中奖演出。返回 False 表示没排上(调用方照常解锁)。
 
@@ -921,7 +936,8 @@ class WinPileFX(Widget):
                 self._seq += 1
                 if auto_close:
                     self._rng = random.Random(BENCH_SEED + 2000 + int(multiplier))
-                self._make_balls(multiplier, self._value, self._seq)
+                variant=self._seq if auto_close else self._next_pile_variant(multiplier)
+                self._make_balls(multiplier, self._value, variant)
             else:
                 normal_rng = self._rng
                 try:

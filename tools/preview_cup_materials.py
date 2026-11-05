@@ -123,6 +123,7 @@ def main():
                 area._restack_overlays()
             fx=area.win_fx
             fx._seq=args.variant-1;fx._rng=random.Random(1234)
+            fx._next_pile_variant=lambda count:args.variant
             if not fx.play_win(count,bet):raise RuntimeError("preview scene failed")
             first=min(fx._balls,key=lambda b:b["i"])
             last=max(fx._balls,key=lambda b:b["t0"]+b["f"])

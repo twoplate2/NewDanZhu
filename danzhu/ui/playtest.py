@@ -65,7 +65,8 @@ class PlaytestMixin:
         self._playtest_original = self.game
         self._playtest_status_before = self.status_lbl.text
         self._playtest_rng_state = random.getstate()
-        self._playtest_fx_state = (fx._seq, fx._rng.getstate())
+        self._playtest_fx_state = (fx._seq, fx._rng.getstate(),
+                                   {n:list(bag) for n,bag in fx._variant_bags.items()},dict(fx._last_variant))
         self._playtest_big_text_start=dict(self.game_area._big_text_stats)
         old = self.game
         simulation = Game(fx=fx, voice_duration=old._voice_duration, save_config=old._save_cfg,
@@ -93,6 +94,7 @@ class PlaytestMixin:
                                       overlay_visible_default=False,overlay_visible=False,overlay_requested=False,
                                       big_result_widget_pool='two_pairs_per_renderer',
                                       cup_draw_updates='changed_properties_only',
+                                      pile_layout='three_bases_four_rotations_shuffle_bag',
                                       current_fps_window_s=10,minimum_fps_window_s=1,
                                       gap_before_refresh_s=.3,gap_after_refresh_s=.3,
                                       stats_execution='worker',number_rendering='glyph_atlas',
@@ -377,6 +379,8 @@ class PlaytestMixin:
         random.setstate(self._playtest_rng_state)
         fx._seq = self._playtest_fx_state[0]
         fx._rng.setstate(self._playtest_fx_state[1])
+        fx._variant_bags={n:list(bag) for n,bag in self._playtest_fx_state[2].items()}
+        fx._last_variant=dict(self._playtest_fx_state[3])
         for effect in list(self.game_area._effects):
             for widget in effect['ws']:
                 self.game_area.remove_widget(widget)

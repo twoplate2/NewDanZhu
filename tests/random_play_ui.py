@@ -24,6 +24,10 @@ def main():
     root._act(old.set_bet,100);root._act(old.set_rtp,3.6)
     initial=(old.balance,old.plays,old.hits,old.bet,old.rtp_target,list(old.multipliers))
     rng=random.getstate()
+    fx=root.game_area.win_fx
+    fx._variant_bags={50:[3,8,1]};fx._last_variant={50:2}
+    original_bags={n:list(bag) for n,bag in fx._variant_bags.items()}
+    original_last=dict(fx._last_variant)
     writes=[]
     def write(cfg,path):
         writes.append(path)
@@ -113,6 +117,7 @@ def main():
             assert root.stats_lbl._rec is not None
             assert initial==(old.balance,old.plays,old.hits,old.bet,old.rtp_target,list(old.multipliers))
             assert random.getstate()==rng
+            assert fx._variant_bags==original_bags and fx._last_variant==original_last
             rows=root._load_playtest_history()
             assert len(rows)==1 and rows[0]['settings']['bet']==100 and rows[0]['settings']['rtp']==3.6
             assert rows[0]['duration_s']>=39.9

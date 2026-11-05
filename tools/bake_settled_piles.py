@@ -127,6 +127,7 @@ def main():
     parser.add_argument('--trial',type=int,default=0)
     parser.add_argument('--output',type=Path,default=ROOT/'tools/output/cup_material_review/settled_trials.json')
     parser.add_argument('--export-module',type=Path)
+    parser.add_argument('--base-trials',default='0,2,4',help='三个独立堆积初始种子；每个生成四个旋转变体')
     args=parser.parse_args();out={}
     for n in map(int,args.counts.split(',')):
         for v in map(int,args.variants.split(',')):
@@ -136,13 +137,24 @@ def main():
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(out,separators=(',',':')),encoding='utf-8')
     if args.export_module:
-        data={};radii={};validation={}
+        data={};radii={};validation={};bases={}
+        trials=list(map(int,args.base_trials.split(',')))
+        if len(trials)!=3 or len(set(trials))!=3:raise ValueError('need three distinct base trials')
         for n in map(int,args.counts.split(',')):
-            entry=out[f'{n}:1']
-            if not entry['validation']['valid']:raise ValueError('cannot export an invalid pile')
-            r=entry['radius'];radii[n]=r
+            entries=[]
+            for trial in trials:
+                if trial==args.trial and f'{n}:1' in out:
+                    entry=out[f'{n}:1']
+                else:
+                    points,r,report=settle(n,1,trial)
+                    entry={'radius':r,'points':points.tolist(),'validation':report}
+                if not entry['validation']['valid']:raise ValueError(f'invalid pile: {n}/{trial}')
+                entries.append(entry);bases[f'{n}:trial{trial}']=entry['validation']
+                print('VALID_BASE',n,trial,entry['validation']['max_height'],flush=True)
+            r=entries[0]['radius'];radii[n]=r
             for variant in range(12):
-                angle=math.radians((variant-1)*137.508)
+                entry=entries[variant%3]
+                angle=math.radians((variant//3)*137.508)
                 c,s=math.cos(angle),math.sin(angle)
                 points=np.array(entry['points'])
                 x,z=points[:,0].copy(),points[:,1].copy()
@@ -150,6 +162,7 @@ def main():
                 points=np.round(points,5)
                 check=validate(points,r)
                 if not check['valid']:raise ValueError(f'rotated pile invalid: {n}/{variant}')
+                check.update(base_trial=trials[variant%3],rotation_degrees=(variant//3)*137.508)
                 data[n,variant]=tuple(tuple(float(x) for x in p) for p in points)
                 validation[f'{n}:{variant}']=check
         content='"""离线生成的自然球堆。使用 tools/bake_settled_piles.py 重建，不手改坐标。"""\n'
@@ -159,8 +172,8 @@ def main():
         args.export_module.write_text(content,encoding='utf-8')
         audit=ROOT/'tools/art/piles/natural_manifest.json';audit.parent.mkdir(parents=True,exist_ok=True)
         audit.write_text(json.dumps({'generator':'tools/bake_settled_piles.py',
-                        'method':'gravity/contact constrained optimization; 12 rigid rotations of one validated base per count',
-                        'trial':args.trial,'radii':radii,'base':{k:v['validation'] for k,v in out.items()},
+                        'method':'gravity/contact constrained optimization; 3 independent bases, 4 rotations each per count',
+                        'base_trials':trials,'radii':radii,'base':bases,
                         'variants':validation},indent=2),encoding='utf-8')
 
 

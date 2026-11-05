@@ -15,6 +15,28 @@ from danzhu.ui import winfx as W
 
 
 class NaturalPileTests(unittest.TestCase):
+    def test_independent_shapes_and_shuffle_bags(self):
+        for count in (50,100):
+            # 绕竖轴旋转不会改变各球高度，至少三个高度集合证明不是只转动同一堆。
+            heights={tuple(sorted(round(h,3) for _,_,h in DATA[count,v])) for v in range(12)}
+            self.assertEqual(len(heights),3)
+            fx=W.WinPileFX(None);fx._rng=random.Random(712)
+            values=[fx._next_pile_variant(count) for _ in range(60)]
+            for start in range(0,60,12):self.assertEqual(set(values[start:start+12]),set(range(12)))
+            self.assertTrue(all(a!=b for a,b in zip(values,values[1:])))
+            self.assertGreater(len({tuple(values[i:i+12]) for i in range(0,60,12)}),1)
+
+    def test_benchmark_keeps_deterministic_variant_and_does_not_consume_bag(self):
+        results=[]
+        for seed in (1,999):
+            fx=W.WinPileFX(None);fx._rng=random.Random(seed);fx._seq=7
+            fx._variant_bags={100:[3,2,1]}
+            with patch.object(fx,'_next_pile_variant',side_effect=AssertionError('benchmark must not shuffle')):
+                self.assertTrue(fx.play_win(100,100,auto_close=True))
+            self.assertEqual(fx._variant_bags,{100:[3,2,1]})
+            results.append([{k:b[k] for k in ('sxf','syf','t0','f','end')} for b in fx._balls])
+        self.assertEqual(results[0],results[1])
+
     def test_geometry_and_nonplanar_layout(self):
         self.assertEqual(set(DATA),{(n,v) for n in (50,100) for v in range(12)})
         for (n,v),points in DATA.items():

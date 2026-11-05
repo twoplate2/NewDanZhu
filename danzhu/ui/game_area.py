@@ -117,6 +117,14 @@ class GameArea(FloatLayout):
     def _py(self, y):
         return self._oyt - y * self._s
 
+    def _slot_text_geometry(self, texture, index):
+        scale=min(1.,max(1.,(SLOT_W-6)*self._s)/max(1,texture.width),
+                  max(1.,(FLOOR_VIEW_Y-SLOT_TOP-5)*self._s)/max(1,texture.height))
+        width,height=texture.width*scale,texture.height*scale
+        cy=(SLOT_TOP+3+FLOOR_VIEW_Y)/2.
+        return dict(pos=(self._px(FIELD_L+(index+.5)*SLOT_W)-width/2.,self._py(cy)-height/2.),
+                    size=(width,height))
+
     def _update_slots(self):
         """只更新倍率槽的颜色与文字, 不清画布、不重建静态指令。
 
@@ -133,8 +141,7 @@ class GameArea(FloatLayout):
         if not ok:
             self._redraw()
             return
-        fs = max(12, int(20 * self._s))
-        cy = (SLOT_TOP + 3 + FLOOR_VIEW_Y) / 2.0
+        fs = max(12, int(24 * self._s))
         for i in range(NUM_SLOTS):
             m = g.multipliers[i]
             try:
@@ -145,9 +152,9 @@ class GameArea(FloatLayout):
                     _tex = slot_text_tex(m, fs)
                     if _tex is not None:
                         _r.texture = _tex
-                        _r.size = _tex.size
-                        _r.pos = (self._px(FIELD_L + (i + 0.5) * SLOT_W) - _tex.width / 2.0,
-                                  self._py(cy) - _tex.height / 2.0)
+                        geometry=self._slot_text_geometry(_tex,i)
+                        _r.size=geometry["size"]
+                        _r.pos=geometry["pos"]
                 else:
                     _r.size = (0, 0)          # 与 `_redraw` 的 size 0 一致
             except Exception:
@@ -224,23 +231,18 @@ class GameArea(FloatLayout):
                 RoundedRectangle(radius=[max(1.0, 6 * s)],
                                  **self._rect(FIELD_L + i * SLOT_W + 2, SLOT_TOP + 3,
                                               FIELD_L + (i + 1) * SLOT_W - 2, FLOOR_VIEW_Y))
-            # 槽倍率文字(走 `slot_text_tex` 的缓存; 逻辑 20px 跟盘面缩放, 手机上≈11sp)
+            # 槽倍率文字按24逻辑像素绘制，长倍率按槽宽/高度等比适配。
             # ⚠️ **9 个槽全都建**(空槽用 size=(0,0) 藏起来, 视觉完全等价) —— 否则倍率的
             #    "哪几个槽有奖"每次重掷都会变, 条数跟着变就没法在原地更新了(见 `_update_slots`)。
             self._slot_txt_cols = []
             self._slot_txt_rects = []
-            fs = max(12, int(20 * s))
-            cx = FIELD_L + 0.5 * SLOT_W
-            cy = (SLOT_TOP + 3 + FLOOR_VIEW_Y) / 2.0
+            fs = max(12, int(24 * s))
             for i in range(NUM_SLOTS):
                 m = g.multipliers[i]
                 self._slot_txt_cols.append(Color(*hex_rgb(slot_txt(m))))
                 if m > 0:
                     tex = slot_text_tex(m, fs)
-                    _r = Rectangle(texture=tex,
-                                   pos=(self._px(FIELD_L + (i + 0.5) * SLOT_W) - tex.width / 2.0,
-                                        self._py(cy) - tex.height / 2.0),
-                                   size=tex.size)
+                    _r = Rectangle(texture=tex, **self._slot_text_geometry(tex,i))
                 else:
                     _r = Rectangle(texture=None, pos=(0, 0), size=(0, 0))
                 self._slot_txt_rects.append(_r)

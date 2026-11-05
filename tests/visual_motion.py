@@ -67,6 +67,21 @@ class MotionTests(unittest.TestCase):
         self.assertEqual(texture.size, (128, 128))
         self.assertIs(T.ball_texture(), texture)
 
+    def test_slot_text_larger_and_fits_all_multipliers(self):
+        game=Game();game.multipliers=[2,3,5,10,20,50,100,0,5]
+        area=GameArea(SimpleNamespace(game=game))
+        for scale in (.5,.7,1.,2.):
+            area.size=(C.CW*scale,C.CH*scale);area._redraw()
+            first=[(tuple(r.pos),tuple(r.size)) for r in area._slot_txt_rects]
+            for m,rect in zip(game.multipliers,area._slot_txt_rects):
+                self.assertLessEqual(rect.size[0],(C.SLOT_W-6)*scale+.01)
+                self.assertLessEqual(rect.size[1],(C.FLOOR_VIEW_Y-C.SLOT_TOP-5)*scale+.01)
+                if m==5 and scale>=.7:
+                    old=T.slot_text_tex(m,max(12,int(20*scale)))
+                    self.assertGreater(rect.size[1],old.height)
+            area._update_slots()
+            self.assertEqual(first,[(tuple(r.pos),tuple(r.size)) for r in area._slot_txt_rects])
+
     def test_settled_ball_slots_and_dividers_share_visible_floor(self):
         game = Game()
         game.ball.y = C.FLOOR - C.BALL_R
