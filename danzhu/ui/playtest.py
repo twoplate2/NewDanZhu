@@ -153,7 +153,7 @@ class PlaytestMixin:
         if record is None or not record.active:
             return False
         values = record.update_live()
-        def fmt(value): return '采样中' if value is None else '%.1f'%value
+        def fmt(value): return '采样中' if value is None else '%.2f'%value
         self._playtest_label.text = ('实玩 %s · 投%d · 返还%.0f%%\n帧率 当前%s / 最低%s / 平均%s\n1%% Low 当前%s / 最低%s / 平均%s' %
             (_duration(time.perf_counter()-record.started),record.settings['bet'],record.settings['rtp']*100,
              fmt(values['current_fps']),fmt(values['minimum_fps']),fmt(values['average_fps']),fmt(values['current_low']),
@@ -201,7 +201,7 @@ class PlaytestMixin:
         metrics = record.metrics(full=True)
         self._playtest_stop_btn.text = '关闭'
         self._playtest_save_btn.text = '保存结果'
-        self._playtest_label.text = ('模拟已停止 · 全程 %d 帧\n平均 %.1f  |  1%% Low %.1f  |  最长 %.1fms' %
+        self._playtest_label.text = ('模拟已停止 · 全程 %d 帧\n平均 %.2f  |  1%% Low %.2f  |  最长 %.1fms' %
             (metrics['frame_count'],metrics['average_fps'],metrics['low_1pct_fps'],metrics['max_ms'])) if metrics else '模拟已停止 · 暂无帧数据'
         self._playtest_result = self._playtest_summary(record)
         self._append_playtest_history(self._playtest_result)
@@ -278,7 +278,7 @@ class PlaytestMixin:
             settings=r.get('settings',{}); m=r.get('metrics') or {}
             return (_hist_stamp(r.get('time')), '%s\n%d / %.0f%%' %
                     (_duration(r.get('duration_s',0)),settings.get('bet',0),settings.get('rtp',0)*100),
-                    '%s / %s\n%s W' % (_number(m.get('average_fps')),_number(m.get('low_1pct_fps')),
+                    '%s / %s\n%s W' % (_number(m.get('average_fps'),2),_number(m.get('low_1pct_fps'),2),
                                       _number(r.get('power',{}).get('average_power_w'),2)))
         return self._show_history_table('随机实玩模拟历史',('时间','时长/投入·返还','平均帧·Low/平均耗电'),
             list(reversed(self._load_playtest_history())),cells,self._show_playtest_detail,
@@ -308,8 +308,8 @@ class PlaytestMixin:
               '帧率为应用提交间隔统计；温度与电池功率同游戏信息面板。') % (
               _duration(result.get('duration_s',0)),result.get('shots',0),reason,
               settings.get('bet',0),settings.get('rtp',0)*100,
-              _number(live.get('current_fps')),_number(live.get('minimum_fps')),_number(m.get('average_fps')),
-              _number(live.get('current_low')),_number(live.get('minimum_low')),_number(m.get('low_1pct_fps')),
+              _number(live.get('current_fps'),2),_number(live.get('minimum_fps'),2),_number(m.get('average_fps'),2),
+              _number(live.get('current_low'),2),_number(live.get('minimum_low'),2),_number(m.get('low_1pct_fps'),2),
               _number(power.get('average_power_w'),2),_number(power.get('average_charge_w'),2),
               _number(result.get('temperature_start')),_number(result.get('temperature_end')),_number(result.get('temperature_max')),
               m.get('frame_count',0),_number(m.get('max_ms')))
