@@ -1,4 +1,4 @@
-"""规范化 imagegen 材质源图，并为旧玻璃前层柔化杯底填充接缝。
+"""规范化球材质，柔化杯壁反光，并把杯沿与杯底厚度烘入现有玻璃层。
 
 python tools/generate_cup_textures.py
 源图和提示词见 tools/art/cup_materials/manifest.json；只输出游戏使用的固定尺寸素材。
@@ -10,6 +10,8 @@ import statistics
 import argparse
 import os
 from PIL import Image
+from cup_glass_edges import GLASS_EDGES
+from cup_satin_material import fragment as satin_fragment
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
@@ -18,12 +20,27 @@ from kivy.core.window import Window
 from kivy.core.image import Image as CoreImage
 from kivy.graphics import Fbo, ClearColor, ClearBuffers, Rectangle, Callback
 from kivy.graphics.opengl import glDisable, glEnable, GL_BLEND
+from kivy.graphics.texture import Texture
 
 HIGHLIGHT_COMPRESSION = 1.5
 
 
-def ball_fragment(base_color, compression=HIGHLIGHT_COMPRESSION):
-    """仅压缩超过底色的白色反光；中间调、暗部和球身轮廓保持不变。"""
+def ball_fragment(base_color, compression=HIGHLIGHT_COMPRESSION, midtone_lift=0.0, target_color=None, body_fill=0.0):
+    """离线校准反光、中间调与历史配色，保留球面光照形状及圆形 alpha。"""
+    palette=""
+    if target_color is not None:
+        peak=max(target_color)
+        normalized=tuple(c/peak for c in target_color)
+        palette="""float v = max(max(pixel.r,pixel.g),pixel.b);
+    // 只补正面受光的主体色；边缘与背光区不做全局曝光抬升。
+    vec2 p = (gl_FragCoord.xy-vec2(128.0))/127.0;
+    float nz = sqrt(max(0.0,1.0-dot(p,p)));
+    float diffuse = max(0.0,dot(vec3(p,nz),normalize(vec3(-0.4,0.5,0.8))));
+    float bodyTarget = %f * (0.22+0.70*diffuse);
+    v += %f * nz*nz * max(0.0,bodyTarget-v);
+    // 弱白反光收敛，保留原高光位置、形状与柔和边缘。
+    float reflection = white*white/(white+0.10);
+    pixel.rgb = v * mix(vec3(%f,%f,%f),vec3(1.0),reflection);""" % (peak,body_fill,*normalized)
     return """$HEADER$
 void main(void) {
     vec4 pixel = texture2D(texture0,tex_coord0);
@@ -36,10 +53,13 @@ void main(void) {
     float excess = max(0.0,white-0.18);
     float removed = excess-excess/(1.0+%f);
     pixel.rgb = max(vec3(0.0),pixel.rgb-removed*peak*(vec3(1.0)-base));
+    float body = max(max(pixel.r,pixel.g),pixel.b);
+    pixel.rgb *= 1.0 + %f * (1.0-smoothstep(0.45,0.92,body));
+    %s
     pixel.a = clamp(127.0-length(gl_FragCoord.xy-vec2(128.0)),0.0,1.0);
     gl_FragColor = frag_color*pixel;
 }
-""" % (*base_color,compression)
+""" % (*base_color,compression,midtone_lift,palette)
 
 
 def render(texture, size, pos, draw_size, path, fragment=None):
@@ -63,15 +83,42 @@ def main():
     parser.add_argument("--manifest", type=Path, default=ROOT/"tools/art/cup_materials/manifest.json")
     parser.add_argument("--output", type=Path, default=ROOT/"assets/balls")
     parser.add_argument("--balls-only", action="store_true")
+    parser.add_argument("--glass-output", type=Path, default=ROOT/"assets/glass")
+    parser.add_argument("--midtone-lift", type=float, default=None)
+    parser.add_argument("--body-fill", type=float, default=None)
+    parser.add_argument("--material-model", choices=("source","satin"),default=None)
+    parser.add_argument("--specular",type=float,default=None)
     args = parser.parse_args()
     source_dir = args.manifest.resolve().parent
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     preparation = manifest.get("sprite_preparation", {})
+    material=args.material_model or preparation.get("material_model","source")
+    if material=="source":
+        preparation={**preparation,**manifest.get("legacy_source_preparation",{})}
+    specular=preparation.get("specular",.18) if args.specular is None else args.specular
+    if not 0<=specular<=.3:raise ValueError("specular outside 0..0.3")
     inset = preparation.get("source_rim_inset_per_side", .015)
     compression = preparation.get("highlight_compression", HIGHLIGHT_COMPRESSION)
+    lift = preparation.get("midtone_lift", 0.0) if args.midtone_lift is None else args.midtone_lift
+    body_fill = preparation.get("body_fill",0.0) if args.body_fill is None else args.body_fill
+    if not 0.0 <= body_fill <= 1.0:
+        raise ValueError("body fill must be between 0 and 1")
+    if not 0.0 <= lift <= .25:
+        raise ValueError("midtone lift must be between 0 and .25")
     target = args.output.resolve()
     target.mkdir(parents=True,exist_ok=True)
+    palette=manifest.get("palette_reference",{}).get("colors",{})
     for bet,name in manifest["sources"].items():
+        color=palette.get(bet)
+        target_color=tuple(int(color[i:i+2],16)/255.0 for i in (1,3,5)) if color else None
+        if material=="satin":
+            if target_color is None:raise ValueError("satin material needs a palette color")
+            blank=Texture.create(size=(1,1),colorfmt="rgba")
+            blank.blit_buffer(bytes((255,255,255,255)),colorfmt="rgba",bufferfmt="ubyte")
+            path=target/("cup_%s.png" % bet)
+            render(blank,(256,256),(0,0),(256,256),path,satin_fragment(target_color,specular))
+            print(path,path.stat().st_size,"bytes")
+            continue
         source = source_dir/name
         with Image.open(source) as image:
             rgba = image.convert("RGBA")
@@ -95,14 +142,14 @@ def main():
         sx,sy = 254/(x1-x0),254/(y1-y0)
         path = target/("cup_%s.png" % bet)
         render(CoreImage(str(source)).texture,(256,256),
-               (1-x0*sx,1-(h-y1)*sy),(w*sx,h*sy),path,ball_fragment(base_color,compression))
+               (1-x0*sx,1-(h-y1)*sy),(w*sx,h*sy),path,ball_fragment(base_color,compression,lift,target_color,body_fill))
         print(path,path.stat().st_size,"bytes")
     if args.balls_only:
         return
     # 保留原玻璃的完整杯壁/边缘，仅让内部填充在原来的硬切口前渐隐。
     source = ROOT / "assets/glass/glass_tumbler_front.png"
     texture = CoreImage(str(source)).texture
-    fragment = """$HEADER$
+    fragment = "$HEADER$\n" + GLASS_EDGES + """
 void main(void) {
     vec4 pixel = texture2D(texture0, tex_coord0);
     float x = tex_coord0.x * 800.0;
@@ -112,12 +159,43 @@ void main(void) {
         float fade = 1.0-smoothstep(360.0,410.0,y);
         pixel.a *= mix(1.0,fade,interior);
     }
+    // 旧前壁左反光横跨球面，像一道划痕；只削弱超出邻近杯壁的反光 alpha。
+    float stripeX = 48.5 + 0.315 * y;
+    float dx = (x-stripeX)/10.0;
+    float stripe = exp(-0.5*dx*dx) * smoothstep(145.0,175.0,y)
+                   * (1.0-smoothstep(335.0,375.0,y));
+    float nearby = min(texture2D(texture0,tex_coord0-vec2(22.0/800.0,0.0)).a,
+                       texture2D(texture0,tex_coord0+vec2(22.0/800.0,0.0)).a);
+    pixel.a = mix(pixel.a,min(pixel.a,nearby),0.65*stripe);
+    pixel = frontEdges(pixel,vec2(x,y));
     gl_FragColor = frag_color * pixel;
 }
 """
-    path = ROOT / "assets/glass/glass_tumbler_front_soft.png"
+    args.glass_output.mkdir(parents=True,exist_ok=True)
+    path = args.glass_output.resolve() / "glass_tumbler_front_soft.png"
     render(texture,texture.size,(0,0),texture.size,path,fragment)
-    print(path.relative_to(ROOT),path.stat().st_size,"bytes")
+    print(path,path.stat().st_size,"bytes")
+    texture = CoreImage(str(ROOT/"assets/glass/glass_tumbler_back.png")).texture
+    fragment = "$HEADER$\n" + GLASS_EDGES + """
+void main(void) {
+    vec2 p = tex_coord0*vec2(800.0,460.0);
+    gl_FragColor = frag_color*backEdges(texture2D(texture0,tex_coord0),p);
+}
+"""
+    path=args.glass_output.resolve()/"glass_tumbler_back_detail.png"
+    render(texture,texture.size,(0,0),texture.size,path,fragment)
+    print(path,path.stat().st_size,"bytes")
+    texture = CoreImage(str(ROOT/"assets/glass/glass_tumbler_over.png")).texture
+    fragment = "$HEADER$\n" + GLASS_EDGES + """
+void main(void) {
+    vec2 p = tex_coord0*vec2(800.0,460.0);
+    vec4 pixel = texture2D(texture0,tex_coord0);
+    gl_FragColor = frag_color*mouthEdges(pixel,p,1.0-smoothstep(79.0,81.0,p.y));
+}
+"""
+    path=args.glass_output.resolve()/"glass_tumbler_over_detail.png"
+    render(texture,texture.size,(0,0),texture.size,path,fragment)
+    print(path,path.stat().st_size,"bytes")
 
 
 if __name__ == "__main__":

@@ -38,6 +38,7 @@ class CupVisualTests(unittest.TestCase):
         self.assertEqual(full["buf"], chunked["buf"])
 
     def test_assets_are_round_transparent_and_skip_runtime_bake(self):
+        import colorsys
         from PIL import Image
         from unittest.mock import patch
         for bet in W.BET_COLORS:
@@ -60,6 +61,17 @@ class CupVisualTests(unittest.TestCase):
                 elif bet==10:self.assertGreater(b,r)
                 elif bet==50:self.assertGreater(r,b)
                 else:self.assertGreater(min(r,b),g)
+                # 仅判断 r>b 会漏过酒红/紫红；必须与历史投注色板的色相一致。
+                target=W.hex_rgb(W.BET_COLORS[bet])
+                target_hue=colorsys.rgb_to_hsv(*target)[0]
+                target_sat=colorsys.rgb_to_hsv(*target)[1]
+                center_sat=colorsys.rgb_to_hsv(r/255,g/255,b/255)[1]
+                self.assertLess(abs(center_sat-target_sat),.06)
+                for xy in ((128,128),(64,70),(179,160)):
+                    rgb=image.getpixel(xy)[:3]
+                    hue=colorsys.rgb_to_hsv(*(c/255 for c in rgb))[0]
+                    delta=abs(hue-target_hue)
+                    self.assertLess(min(delta,1-delta),.015)
             W._CUP_BALL_TEX.pop(bet,None)
             with patch.object(W,"_bake_begin",side_effect=AssertionError("runtime bake")):
                 self.assertIsNotNone(W._ball_texture(bet))
@@ -71,8 +83,14 @@ class CupVisualTests(unittest.TestCase):
             self.assertEqual(new.size,old.size)
             self.assertLess(new.getpixel((800,816))[3],3)
             self.assertGreater(old.getpixel((800,816))[3],15)
-            for xy in [(800,305),(800,915),(240,780)]:
-                self.assertLessEqual(abs(new.getpixel(xy)[3]-old.getpixel(xy)[3]),1)
+            # 中央杯沿减弱、侧边局部反光保留，不再叠加均匀双描边。
+            self.assertGreater(new.getpixel((800,305))[3],5)
+            self.assertLess(new.getpixel((800,305))[3],old.getpixel((800,305))[3])
+            self.assertGreater(new.getpixel((320,274))[3],new.getpixel((800,305))[3]*2)
+            self.assertLessEqual(abs(new.getpixel((240,780))[3]-old.getpixel((240,780))[3]),1)
+            self.assertGreater(new.getpixel((800,900))[3],old.getpixel((800,900))[3])
+            for xy in ((600,460),(800,460),(1000,460)):
+                self.assertEqual(new.getpixel(xy)[3],old.getpixel(xy)[3])
 
     def test_two_visible_bounces_and_consistent_final_floor(self):
         fx = scene()

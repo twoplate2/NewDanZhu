@@ -23,6 +23,14 @@ def main():
     parser.add_argument("--bets",default="100")
     parser.add_argument("--phases",default="rest")
     parser.add_argument("--background",choices=("board","light","checker"),default="board")
+    parser.add_argument("--glass",choices=("full","back","none"),default="full")
+    parser.add_argument("--front-texture",type=Path)
+    parser.add_argument("--back-texture",type=Path)
+    parser.add_argument("--over-texture",type=Path)
+    parser.add_argument("--pile-json",type=Path)
+    parser.add_argument("--size",default=None,help="window width,height")
+    parser.add_argument("--variant",type=int,default=1)
+    parser.add_argument("--no-occlusion",action="store_true")
     parser.add_argument("--output",type=Path,default=ROOT/"tools/output/cup_material_review")
     args=parser.parse_args()
     import main as entry
@@ -36,6 +44,30 @@ def main():
     from danzhu.ui.app import PlinkoApp
     from danzhu.ui.root import RootWidget
     C.SOUND_ENABLED=False
+    if args.pile_json:
+        piles=json.loads(args.pile_json.read_text(encoding="utf-8"))
+        baked=W._beads_from_baked
+        def preview_pile(count,variant):
+            pile_entry=piles.get(f"{count}:{variant}")
+            if pile_entry is None:return baked(count,variant)
+            if not pile_entry["validation"]["valid"]:raise ValueError("unvalidated preview pile")
+            return [dict(x=x,z=z,h=h,r=pile_entry["radius"],layer=0,natural=True) for x,z,h in pile_entry["points"]]
+        W._beads_from_baked=preview_pile
+        W._PILE_CACHE.clear();W._PILE_ORDER.clear()
+    if args.front_texture:
+        back,_,fallback=W._glass_textures()
+        front=CoreImage(str(args.front_texture),mipmap=True).texture
+        front.mag_filter="linear";front.min_filter="linear_mipmap_linear"
+        W._GLASS_TEX=(back,front,fallback)
+    if args.over_texture:
+        over=CoreImage(str(args.over_texture),mipmap=True).texture
+        over.mag_filter="linear";over.min_filter="linear_mipmap_linear"
+        W._GLASS_OVER[:]=[over,True]
+    if args.back_texture:
+        _,front,fallback=W._glass_textures()
+        back=CoreImage(str(args.back_texture),mipmap=True).texture
+        back.mag_filter="linear";back.min_filter="linear_mipmap_linear"
+        W._GLASS_TEX=(back,front,fallback)
     output=args.output/args.label
     output.mkdir(parents=True,exist_ok=True)
     textures={}
@@ -45,15 +77,21 @@ def main():
         textures[bet]=tex
     original_texture=W._ball_texture
     W._ball_texture=lambda bet,rows=None: textures[bet] if bet in textures else original_texture(bet,rows)
+    if args.no_occlusion:
+        W.WinPileFX._ball_exposure=lambda self,ball: 1.0
     cases=[(bet,count,phase) for bet in textures for count in map(int,args.counts.split(","))
            for phase in args.phases.split(",")]
     records=[]
 
     class Preview(PlinkoApp):
         def on_start(self):
+            if args.size:
+                Window.size=tuple(map(int,args.size.split(',')))
             Clock.schedule_once(self.prepare,1.0)
 
         def prepare(self,_dt):
+            if args.size and tuple(Window.size)!=tuple(map(int,args.size.split(','))):
+                raise RuntimeError("preview window size differs from requested size")
             Clock.unschedule(self.rootw._frame_timed)
             self.rootw.game.multipliers=[5,2,2,3,2,20,2,2,5]
             self.next_case(0)
@@ -74,19 +112,35 @@ def main():
                             Rectangle(pos=(area.x+x,area.y+y),size=(cell,cell))
                 area._restack_overlays()
             fx=area.win_fx
-            fx._seq=0;fx._rng=random.Random(1234)
+            fx._seq=args.variant-1;fx._rng=random.Random(1234)
             if not fx.play_win(count,bet):raise RuntimeError("preview scene failed")
             first=min(fx._balls,key=lambda b:b["i"])
+            last=max(fx._balls,key=lambda b:b["t0"]+b["f"])
             moments={"fall":first["t0"]+first["f_enter"]+.6*(first["f"]-first["f_enter"]),
                      "touch":first["t0"]+first["f"]+.005,
                      "bounce":first["t0"]+first["f"]+first["t1"]*.5,
+                     "late_fall":last["t0"]+last["f"]-.12,
+                     "last_touch":last["t0"]+last["f"],
+                     "last_bounce":last["t0"]+last["f"]+last["t1"]*.5,
                      "rest":fx._last_settle+.1}
             moment=moments[phase]
             fx._t0=time.time()-moment;fx.mode="win"
             fx._advance_balls(moment);fx._redraw();self.rootw._sync_hud_dim()
+            if args.glass!="full":
+                for _,color,*_ in fx._fx_post:
+                    color.a=0
+            if args.glass=="none":
+                for kind,color,*_ in fx._fx_pre:
+                    if kind in ("under","oseam","rim"):
+                        color.a=0
             layout=[(b["i"],b["sxf"],b["syf"],b["z"],b["r_d"],b["t0"],b["f"],b["end"]) for b in fx._balls]
             nearest=fx._ball_screen(fx._balls[-1])
             self.record=dict(bet=bet,count=count,phase=phase,background=args.background,
+                             glass=args.glass,occlusion=not args.no_occlusion,
+                             moment=moment,
+                             variant=args.variant,
+                             last_settle=fx._last_settle,
+                             deadline_safe=W.WINDUP+fx._last_settle+W.HOLD_BASE<W.FX_MAX_SEC,
                              scene_sha256=hashlib.sha256(json.dumps(layout).encode()).hexdigest(),
                              nearest_ball=nearest,window=list(Window.size))
             Clock.schedule_once(self.capture,.08)

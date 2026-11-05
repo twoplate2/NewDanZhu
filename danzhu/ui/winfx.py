@@ -495,7 +495,10 @@ def _glass_over():
     _GLASS_OVER[1] = True
     try:
         _a = _ASSET_GLASS
-        _t = _CoreImage(os.path.join(_a, "glass_tumbler_over.png"), mipmap=True).texture
+        _path = os.path.join(_a, "glass_tumbler_over_detail.png")
+        if not os.path.exists(_path):
+            _path = os.path.join(_a, "glass_tumbler_over.png")
+        _t = _CoreImage(_path, mipmap=True).texture
         _t.mag_filter = "linear"
         _t.min_filter = "linear_mipmap_linear"
         _GLASS_OVER[0] = _t
@@ -515,7 +518,10 @@ def _glass_textures():
         return _GLASS_TEX
     assets = _ASSET_GLASS
     try:
-        back = _CoreImage(os.path.join(assets, "glass_tumbler_back.png"), mipmap=True).texture
+        back_path = os.path.join(assets, "glass_tumbler_back_detail.png")
+        if not os.path.exists(back_path):
+            back_path = os.path.join(assets, "glass_tumbler_back.png")
+        back = _CoreImage(back_path, mipmap=True).texture
         front_path = os.path.join(assets, "glass_tumbler_front_soft.png")
         if not os.path.exists(front_path):
             front_path = os.path.join(assets, "glass_tumbler_front.png")
@@ -544,6 +550,19 @@ def _beads_from_baked(count, v):
     ⚠️ 表里存的是**球心坐标**, 不是投影结果 —— 投影仍走 project_pile, 这样改 K2/CX/FLOOR_Y
        不用重烘。
     """
+    if count in (50,100):
+        try:
+            from ..fx.natural_pile_data import DATA,RADII
+            points=DATA[count,v]
+            radius=RADII[count]
+            if len(points)==count and radius==_PILE_BAKED_R[count]:
+                out=[dict(x=x,z=z,h=h,layer=0,r=radius,natural=True) for x,z,h in points]
+                if (all(math.isfinite(b[k]) for b in out for k in ("x","z","h"))
+                        and all(radius-.1<=b["h"]<=FLOOR_Y-RIM_Y+4
+                                and math.hypot(b["x"],b["z"])<=halfwidth(b["h"])-radius+.5 for b in out)):
+                    return out
+        except (ImportError,KeyError,TypeError,ValueError):
+            pass  # 新表缺失或损坏时保留原表/程序化生成的回退。
     s = _PILE_BAKED.get((count, v))
     r = _PILE_BAKED_R.get(count)
     if not s or r is None:
@@ -588,7 +607,7 @@ def _support_map(proj, r):
     return out
 
 def _topo_deal(proj, rng):
-    """随机拓扑序: 每次从"支撑已全部发牌"的球里**均匀随机**挑一颗, 返回 proj 下标排列。
+    """交错拓扑序：旧布局均匀随机；自然堆优先启动长承托链，并带随机扰动。
 
     ⚠️ 不能改成"按层发牌": 层的先后只是这个偏序的保守特例, 屏幕上会出现"一层一块"的施工缝。
     """
@@ -601,16 +620,26 @@ def _topo_deal(proj, rng):
     succ = [[] for _ in range(n)]
     for m in ms:
         t = pos[m]
-        for i in (proj[m].get("sup") or ()):   # 前驱(更低的球)必须先发
+        for i in tuple(proj[m].get("sup") or ()) + tuple(proj[m].get("side") or ()):
             ti = pos.get(i)
             if ti is None:
                 continue
             succ[ti].append(t)
             indeg[t] += 1
     ready = [t for t in range(n) if indeg[t] == 0]
+    priority=None
+    if any(proj[m].get("side") for m in ms):
+        # 自然堆先发长承托链的根，避免随机把关键底球留到末尾而拖长整场演出。
+        # 就绪集合仍跨高度取球，随机扰动保留交错，不变成逐层整批下落。
+        priority=[0.0]*n
+        order=sorted(range(n),key=lambda t:FLOOR_Y-proj[ms[t]]["sy"]-K2*proj[ms[t]]["z"],reverse=True)
+        for t in order:
+            priority[t]=max((priority[u]+(.06 if ms[t] in proj[ms[u]].get("side",()) else .35)
+                             for u in succ[t]),default=0.0)
     out = []
     while ready:
-        k = rng.randrange(len(ready))          # 均匀随机挑一颗 -> 随机性全在这里
+        k = (rng.randrange(len(ready)) if priority is None else
+             max(range(len(ready)),key=lambda index:priority[ready[index]]+rng.uniform(0,.35)))
         t = ready[k]
         ready[k] = ready[-1]                   # 交换删除, O(1)
         ready.pop()
@@ -681,6 +710,13 @@ def _pile_projected(count, seed):
                 for _k, _pre in _support_map(proj, _r0).items():
                     proj[_k]["sup"] = _pre
         _attach_light_links(proj)
+        if beads and beads[0].get("natural"):
+            # 不规则堆中的近等高接触是侧向邻居，先触地即可；下方承托仍等回弹停稳。
+            # 保留全部先后依赖，不能删除侧向边后让两颗球抢同一位置。
+            heights=[FLOOR_Y-p["sy"]-K2*p["z"] for p in proj]
+            for i,p in enumerate(proj):
+                p["side"]=tuple(j for j in p.get("sup",()) if heights[i]-heights[j]<.3*p["r"])
+                p["sup"]=tuple(j for j in p.get("sup",()) if j not in p["side"])
         _PILE_CACHE[key] = proj
         _PILE_ORDER.append(key)
         while len(_PILE_ORDER) > _PILE_CACHE_MAX:
@@ -1059,6 +1095,11 @@ class WinPileFX(Widget):
                 b["t0"] = max(b["t0"], lower["t0"] + .012,
                               lower["end"] + .02 - b["f"],
                               lower["t0"]+lower["f_enter"]+ENTRY_GAP-b["f_enter"])
+            for side_index in proj[b["pile_index"]].get("side", ()):
+                side=self._balls[by_pile[side_index]]
+                b["t0"]=max(b["t0"],side["t0"]+.012,
+                            side["t0"]+side["f"]+.02-b["f"],
+                            side["t0"]+side["f_enter"]+ENTRY_GAP-b["f_enter"])
             # 支撑等待会把不同球挤到同一时刻；按可见入画时间预约独立时隙。
             entry_slot = math.ceil((b["t0"]+b["f_enter"])/ENTRY_GAP-1e-9)
             while entry_slot in occupied_entries:

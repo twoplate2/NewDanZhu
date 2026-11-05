@@ -1,5 +1,19 @@
 {
-  "tool": "built-in image_gen",
+  "tool": "Kivy offline FBO shader (runtime sprites); built-in image_gen (archived v1/v2 sources)",
+  "runtime_material": "procedural offline opaque satin; historical palette in linear-light shading; archived imagegen sources retained for comparison only",
+  "palette_reference": {
+    "commit": "da3f8be",
+    "version": "0.8.132",
+    "date": "2026-10-13",
+    "source": "danzhu/ui/winfx.py:BET_COLORS",
+    "colors": {
+      "1": "#39c98a",
+      "10": "#4da8ff",
+      "50": "#e0533b",
+      "100": "#a335ee"
+    },
+    "method": "one shared opaque-satin lighting model for all four historical pigment colors; diffuse and compact soft specular calculated in linear light, then encoded to sRGB; fixed light, opaque circular body, 1px antialias edge; no source-image exposure stacking"
+  },
   "sources": {
     "1": "v2/source_1.png",
     "10": "v2/source_10.png",
@@ -24,15 +38,22 @@
     }
   ],
   "sprite_preparation": {
+    "material_model": "satin",
+    "specular": 0.2,
     "output_size": [
       256,
       256
     ],
-    "source_rim_inset_per_side": 0.003,
     "body_alpha": "opaque",
     "edge_feather_pixels": 1,
     "runtime_size_unchanged": true,
+    "purpose": "shared linear-light diffuse and compact soft specular; historical pigments, no source-image tint/exposure stack or artificial contour",
+    "lighting_source": "tools/cup_satin_material.py"
+  },
+  "legacy_source_preparation": {
+    "source_rim_inset_per_side": 0.003,
     "highlight_compression": 0,
-    "purpose": "preserve prepainted satin shading; trim only alpha-fringe contamination at source boundary"
+    "midtone_lift": 0.12,
+    "body_fill": 0.65
   }
 }
