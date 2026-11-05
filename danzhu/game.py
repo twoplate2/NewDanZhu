@@ -1684,7 +1684,7 @@ class Game(object):
             # ⚠️ 兜底**与老版逐字相同**: 非原子写。原子性由工作线程那一支负责
             #    (临时文件 + os.replace), 兜底支不负责 —— 老版那条路就是 `open(path,"w")`。
             with open(path, "w") as f:
-                json.dump(cfg, f)
+                f.write(json.dumps(cfg))
         except Exception:
             pass
 
@@ -1704,6 +1704,6 @@ class Game(object):
             return
         try:
             with open(self._history_path(), "w") as f:
-                json.dump(self.round_history[-100:], f)
+                f.write(json.dumps(self.round_history[-100:]))
         except Exception:
             pass

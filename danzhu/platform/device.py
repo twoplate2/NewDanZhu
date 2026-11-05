@@ -810,7 +810,7 @@ def _cfg_worker():
         try:
             tmp = path + ".tmp"
             with open(tmp, "w") as f:
-                json.dump(cfg, f)
+                f.write(json.dumps(cfg))
             os.replace(tmp, path)
         except Exception:
             pass

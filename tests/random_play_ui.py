@@ -45,6 +45,8 @@ def main():
             root._start_playtest()
             assert awake==[True]
             assert root._playtest_display is None
+            assert not root._playtest_show_info and not root._playtest_info_built
+            assert root._playtest_label is None
             record=root._playtest
             assert root.game is not old and root.game_area.model is root.game
             assert not root.game._bench_running and not getattr(root.game,'_low_no_save',False)
@@ -56,7 +58,7 @@ def main():
                 Clock.tick()
                 root._frame_timed(1/120)
                 root._playtest_flip(Window)
-                texts=(root._playtest_label.text,root._playtest_sensor.text,
+                texts=(getattr(root._playtest_label,'text',None),getattr(root._playtest_sensor,'text',None),
                        tuple(c.text for row in root._playtest_stat_cells for c in row))
                 if root.game.state=='flying':
                     if flight_text is not None:assert texts==flight_text
@@ -77,6 +79,19 @@ def main():
                     assert gap['refresh_begin_s']-gap['begin_s']>=.3-1e-6
                     assert gap['end_s']-gap['refresh_end_s']>=.3-1e-6
             assert 7 in record.frames[3::4]
+            assert not root._playtest_info_built,'hidden mode must not construct metric widgets'
+            root._toggle_playtest_info()
+            assert not root._playtest_info_built,'show request waits for a shot gap'
+            for _ in range(2400):
+                clock.t+=1/120;Clock.tick();root._frame_timed(1/120);root._playtest_flip(Window)
+                if root._playtest_info_built:break
+            assert root._playtest_info_built and root._playtest_info_box.parent is root._playtest_panel
+            root._toggle_playtest_info()
+            assert root._playtest_info_box.parent is None
+            frozen=(root._playtest_label.text,root._playtest_sensor.text)
+            for _ in range(240):
+                clock.t+=1/120;Clock.tick();root._frame_timed(1/120);root._playtest_flip(Window)
+            assert frozen==(root._playtest_label.text,root._playtest_sensor.text)
             assert writes and all('random_play_sandbox' in p for p in writes)
             root._stop_playtest()
             assert awake==[True,False]
@@ -104,6 +119,9 @@ def main():
             assert report['summary']['duration_s']==record.duration_s
             assert report['diagnostics']['core_frame_count']==report['metrics']['frame_count']
             assert report['diagnostics']['cases']
+            assert report['settings']['overlay_visible_default'] is False
+            assert [e['visible'] for e in report['display_events'] if e['event']=='request']==[True,False]
+            assert [e['visible'] for e in report['display_events'] if e['event']=='display']==[True,False]
             assert report['low_0_1pct_groups']
             assert report['metrics']['low_0_1pct_count']==max(1,(report['metrics']['frame_count']+999)//1000)
             assert len(root._load_playtest_history())==1,'save must not duplicate history'

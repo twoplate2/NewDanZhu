@@ -1,4 +1,4 @@
-"""按正常游戏输入驱动随机实玩，不设置 benchmark 标志，不固定盘面或锁核。"""
+"""按正常游戏输入驱动帧率测试，不设置 benchmark 标志，不固定盘面或锁核。"""
 import os
 import json
 import random
@@ -55,7 +55,7 @@ class PlaytestMixin:
             return
         fx = self.game_area.win_fx
         if self.game.state != 'ready' or fx.mode != 'idle':
-            self._status_message('请在本次落珠结束后开始随机实玩模拟')
+            self._status_message('请在本次落珠结束后开始帧率测试')
             return
         directory = os.path.join(App.get_running_app().user_data_dir, 'random_play_sandbox')
         os.makedirs(directory, exist_ok=True)
@@ -63,6 +63,7 @@ class PlaytestMixin:
         self._playtest_status_before = self.status_lbl.text
         self._playtest_rng_state = random.getstate()
         self._playtest_fx_state = (fx._seq, fx._rng.getstate())
+        self._playtest_big_text_start=dict(self.game_area._big_text_stats)
         old = self.game
         simulation = Game(fx=fx, voice_duration=old._voice_duration, save_config=old._save_cfg,
                           sound_gate=old._sound_gate, on_easter_popup=old._on_easter_popup,
@@ -84,6 +85,8 @@ class PlaytestMixin:
         self._playtest.settings = dict(bet=simulation.bet, rtp=simulation.rtp_target,
                                       fps_cap=simulation.fps_cap_setting, sensor_interval_s=None,
                                       sensor_policy='between_shots',ui_refresh_policy='between_shots',
+                                      overlay_visible_default=False,overlay_visible=False,overlay_requested=False,
+                                      big_result_widget_pool='two_pairs_per_renderer',
                                       current_fps_window_s=10,minimum_fps_window_s=1,
                                       gap_before_refresh_s=.3,gap_after_refresh_s=.3,
                                       stats_execution='worker',number_rendering='glyph_atlas',
@@ -116,7 +119,32 @@ class PlaytestMixin:
             Color(.055,.065,.085,.98)
             bg = Rectangle()
         panel.bind(pos=lambda w,v:setattr(bg,'pos',v), size=lambda w,v:setattr(bg,'size',v))
-        self._playtest_label = Label(text='随机实玩模拟 · 正在开始', halign='left', valign='middle',markup=True,
+        self._playtest_show_info=False
+        self._playtest_info_built=False
+        self._playtest_info_box=None
+        self._playtest_label=self._playtest_sensor=None
+        self._playtest_stat_cells=[]
+        self._playtest_low01_cells=[]
+        row = BoxLayout(size_hint_y=None, height=dp(34), spacing=dp(8))
+        stop = Button(text='停止', font_size=sp(14))
+        save = Button(text='停止并保存', font_size=sp(14))
+        stop.bind(on_release=lambda *_: self._stop_playtest() if self._playtest.active else self._close_playtest())
+        save.bind(on_release=lambda *_: self._save_playtest())
+        toggle=Button(text='显示信息',font_size=sp(14))
+        toggle.bind(on_release=self._toggle_playtest_info)
+        self._playtest_toggle_btn=toggle
+        row.add_widget(toggle);row.add_widget(stop); row.add_widget(save); panel.add_widget(row)
+        self._playtest_panel, self._playtest_stop_btn, self._playtest_save_btn = panel, stop, save
+        panel.bind(minimum_height=lambda w,v:setattr(w,'height',v),height=self._playtest_layout)
+        Window.add_widget(panel)
+        Window.bind(size=self._playtest_layout)
+        self._playtest_layout()
+
+    def _playtest_build_info(self):
+        if self._playtest_info_built:return
+        panel=BoxLayout(orientation='vertical',size_hint_y=None,spacing=dp(2))
+        panel.bind(minimum_height=panel.setter('height'))
+        self._playtest_label = Label(text='帧率测试 · 正在开始', halign='left', valign='middle',markup=True,
                                     size_hint_y=None,height=dp(82))
         self._playtest_sensor = Label(text='', markup=True, halign='left', valign='middle',
                                      size_hint_y=None,height=dp(24))
@@ -153,22 +181,28 @@ class PlaytestMixin:
             low_row.add_widget(cell)
             cell.bind(texture_size=lambda _w,_v,row=low_row:setattr(row,'height',max(c.texture_size[1] for c in row.children)))
         self._playtest_low01_row=low_row;panel.add_widget(low_row)
-        row = BoxLayout(size_hint_y=None, height=dp(34), spacing=dp(8))
-        stop = Button(text='停止', font_size=sp(14))
-        save = Button(text='停止并保存', font_size=sp(14))
-        stop.bind(on_release=lambda *_: self._stop_playtest() if self._playtest.active else self._close_playtest())
-        save.bind(on_release=lambda *_: self._save_playtest())
-        row.add_widget(stop); row.add_widget(save); panel.add_widget(row)
-        self._playtest_panel, self._playtest_stop_btn, self._playtest_save_btn = panel, stop, save
-        panel.bind(minimum_height=lambda w,v:setattr(w,'height',v),height=self._playtest_layout)
-        Window.add_widget(panel)
-        Window.bind(size=self._playtest_layout)
-        self._playtest_layout()
+        self._playtest_info_box=panel
+        self._playtest_info_built=True
+
+    def _toggle_playtest_info(self, *_):
+        if self._playtest is None or not self._playtest.active:return
+        self._playtest_show_info=not self._playtest_show_info
+        self._playtest.settings['overlay_requested']=self._playtest_show_info
+        self._playtest.display_events.append(dict(elapsed_s=self._playtest.clock()-self._playtest.started,
+                                                 event='request',visible=self._playtest_show_info))
+        self._playtest_toggle_btn.text='隐藏信息' if self._playtest_show_info else '显示信息'
+        if not self._playtest_show_info and self._playtest_info_box is not None:
+            self._playtest_panel.remove_widget(self._playtest_info_box)
+            self._playtest.settings['overlay_visible']=False
+            self._playtest.display_events.append(dict(elapsed_s=self._playtest.clock()-self._playtest.started,
+                                                     event='display',visible=False))
+        # 显示请求在下个发射间隔兑现；飞行期间不新建控件或重建统计文字。
 
     def _playtest_layout(self, *_):
         panel = self._playtest_panel
         panel.width = min(Window.width, dp(620))
         panel.pos = ((Window.width-panel.width)/2, Window.height-panel.height)
+        if not self._playtest_info_built or not self._playtest_show_info:return
         self._playtest_label.font_size=sp(max(13,min(17,Window.width/dp(27))))
         self._playtest_label.text_size=(panel.width-dp(10),None)
         font=self._playtest_label.font_size
@@ -270,6 +304,16 @@ class PlaytestMixin:
         if record is None or not record.active:
             return False
         values = record.update_live() if values is None else values
+        sample = _live_power_snapshot() if sample is None else sample
+        sample['fps'] = dict(values)
+        record.sensor(sample)
+        if not self._playtest_show_info:return True
+        self._playtest_build_info()
+        if self._playtest_info_box.parent is None:
+            self._playtest_panel.add_widget(self._playtest_info_box,index=1)
+            record.settings['overlay_visible']=True
+            record.display_events.append(dict(elapsed_s=record.clock()-record.started,event='display',visible=True))
+        self._playtest_layout()
         def fmt(value): return '采样中' if value is None else '%.2f'%value
         self._playtest_label.text = '更新 %s · 投%d · 返还%.0f%%' % (
             _duration(values.get('sample_elapsed_s',time.perf_counter()-record.started)),record.settings['bet'],record.settings['rtp']*100)
@@ -279,10 +323,6 @@ class PlaytestMixin:
                 cell.text=fmt(values[key])
         for cell,key in zip(self._playtest_low01_cells,('average_low_0_1pct','minimum_low_0_1pct')):
             cell.text=fmt(values[key])
-        # 复用读取器，但只在发射间隔读取，避免飞行中JNI和文字重建的尖峰。
-        sample = _live_power_snapshot() if sample is None else sample
-        sample['fps'] = dict(values)
-        record.sensor(sample)
         fields=[];plain=[]
         for value,unit in ((sample.get('temp'),'度'),(sample.get('watts'),'W')):
             if value is not None:
@@ -335,13 +375,15 @@ class PlaytestMixin:
         self.game_area._update_slots()
         self.game_area.tick_draw()
         metrics = record.metrics(full=True)
-        self._playtest_panel.remove_widget(self._playtest_stats)
-        for cell,key in zip(self._playtest_low01_cells,('average_low_0_1pct','minimum_low_0_1pct')):
-            cell.text='采样中' if record.live.get(key) is None else '%.2f'%record.live[key]
         self._playtest_stop_btn.text = '关闭'
         self._playtest_save_btn.text = '保存结果'
-        self._playtest_label.text = ('模拟已停止 · 全程 %d 帧\n平均 %.2f  |  1%% Low %.2f  |  最长 %.1fms' %
-            (metrics['frame_count'],metrics['average_fps'],metrics['low_1pct_fps'],metrics['max_ms'])) if metrics else '模拟已停止 · 暂无帧数据'
+        self._playtest_toggle_btn.disabled=True
+        if self._playtest_info_built:
+            if self._playtest_stats.parent is not None:self._playtest_stats.parent.remove_widget(self._playtest_stats)
+            for cell,key in zip(self._playtest_low01_cells,('average_low_0_1pct','minimum_low_0_1pct')):
+                cell.text='采样中' if record.live.get(key) is None else '%.2f'%record.live[key]
+            self._playtest_label.text = ('测试已停止 · 全程 %d 帧\n平均 %.2f  |  1%% Low %.2f  |  最长 %.1fms' %
+                (metrics['frame_count'],metrics['average_fps'],metrics['low_1pct_fps'],metrics['max_ms'])) if metrics else '测试已停止 · 暂无帧数据'
         self._playtest_result = self._playtest_summary(record)
         self._append_playtest_history(self._playtest_result)
         if show_summary and reason not in ('paused','stopped'):
@@ -363,8 +405,9 @@ class PlaytestMixin:
                 message = '保存失败：'+str(exc)
             def done(_dt):
                 if self._playtest is record:
-                    self._playtest_sensor.text = ''
-                    self._playtest_label.text = message
+                    if self._playtest_info_built:
+                        self._playtest_sensor.text = ''
+                        self._playtest_label.text = message
                     status=getattr(self,'_playtest_detail_status',None)
                     if status is not None: status.text=message
                     self._playtest_save_btn.disabled = False
@@ -384,6 +427,8 @@ class PlaytestMixin:
                     reason=record.reason, settings=dict(record.settings), shots=len(record.events),
                     metrics=record.metrics(full=True),live=dict(record.live),
                     temperature_start=temps[0] if temps else None,
+                    big_text_pool={key:value-self._playtest_big_text_start.get(key,0)
+                                   for key,value in self.game_area._big_text_stats.items()},
                     temperature_end=temps[-1] if temps else None,
                     temperature_max=max(temps) if temps else None)
 
@@ -410,7 +455,7 @@ class PlaytestMixin:
                 json.dump(data,stream,ensure_ascii=False)
             os.replace(path+'.tmp',path)
         except OSError as exc:
-            self._status_message('模拟历史保存失败：'+str(exc),important=True)
+            self._status_message('帧率测试历史保存失败：'+str(exc),important=True)
 
     def _show_playtest_history(self):
         def cells(r):
@@ -418,18 +463,18 @@ class PlaytestMixin:
             return (_hist_stamp(r.get('time')), '%s\n%d / %.0f%%' %
                     (_duration(r.get('duration_s',0)),settings.get('bet',0),settings.get('rtp',0)*100),
                     '%s / %s' % (_number(m.get('average_fps'),2),_number(m.get('low_1pct_fps'),2)))
-        return self._show_history_table('随机实玩模拟历史',('时间','时长/投入·返还','平均帧/1%Low'),
+        return self._show_history_table('帧率测试历史',('时间','时长/投入·返还','平均帧/1%Low'),
             list(reversed(self._load_playtest_history())),cells,self._show_playtest_detail,
             self._clear_playtest_history,'时长：分:秒；档位：每发投入 / 期望返还\n1% Low：全程最慢 1% 帧计算',
-            '暂无随机实玩模拟记录')
+            '暂无帧率测试记录')
 
     def _clear_playtest_history(self):
         content=BoxLayout(orientation='vertical',spacing=dp(8),padding=dp(12))
-        content.add_widget(Label(text='清空全部随机实玩模拟历史？\n不可恢复。'))
+        content.add_widget(Label(text='清空全部帧率测试历史？\n不可恢复。'))
         row=BoxLayout(size_hint_y=None,height=dp(46),spacing=dp(8))
         cancel=Button(text='取消'); confirm=Button(text='确定清空')
         row.add_widget(cancel);row.add_widget(confirm);content.add_widget(row)
-        popup=self._popup(.9,220,title='清空模拟历史',content=content)
+        popup=self._popup(.9,220,title='清空帧率测试历史',content=content)
         cancel.bind(on_release=popup.dismiss)
         confirm.bind(on_release=lambda *_:(self._write_playtest_history([]),popup.dismiss(),self._show_playtest_history()))
         popup.open()
@@ -464,7 +509,7 @@ class PlaytestMixin:
         row=BoxLayout(size_hint_y=None,height=dp(48),spacing=dp(8))
         save=Button(text='保存报告');close=Button(text='关闭')
         row.add_widget(save);row.add_widget(close);content.add_widget(row)
-        popup=self._popup(.94,min(dp(720),Window.height*.9),title='随机实玩模拟总结',content=content,
+        popup=self._popup(.94,min(dp(720),Window.height*.9),title='帧率测试总结',content=content,
                           title_align='center',title_size=sp(21),separator_height=0)
         def save_report(*_):
             if result is getattr(self,'_playtest_result',None) and getattr(self,'_playtest',None) is not None:

@@ -68,6 +68,8 @@ class GameArea(FloatLayout):
         self._spring_bar_col = None
         self._pulse = None
         self._effects = []
+        self._big_text_pool={'glyph':[],'label':[]}
+        self._big_text_stats={'created_pairs':0,'reused_pairs':0}
         self._last_size = None        # 尺寸变了才清特效
         # ⚠️ WinPileFX **必须最先 `add_widget`**: Kivy 按 children 逆序绘制(后加的画在上面),
         #    而中奖大字是 settle 时才 add 的 Label ⇒ 大字天然盖在杯层之上, 杯子压暗盖不住它。
@@ -306,11 +308,25 @@ class GameArea(FloatLayout):
         #    `_glyph_quads` 对 `未中` / 含空格或斜杠的串返回 None 是**硬边界**(静默拼出来
         #    会字距错、宽度错, 而画面"看着差不多")。
         _grec = _glyph_rec(size, True)
-        if _grec is not None and _glyph_quads(_grec, text) is not None:
-            main = GlyphLabel(text=text, font_size=size, bold=True,
-                              color=hex_rgb(hexcolor) + (1,), size_hint=(None, None))
-            shadow = GlyphLabel(text=text, font_size=size, bold=True,
-                                color=(0, 0, 0, 0.6), size_hint=(None, None))
+        glyph=_grec is not None and _glyph_quads(_grec,text) is not None
+        pool=self._big_text_pool['glyph' if glyph else 'label']
+        if glyph:
+            pool[:]=[pair for pair in pool if any(w.parent is not None for w in pair) or all(w._fb is None for w in pair)]
+        pair=next((pair for pair in pool if all(w.parent is None for w in pair)
+                   and (not glyph or all(w._fb is None for w in pair))),None)
+        created=pair is None
+        if pair is not None:
+            main,shadow=pair
+            self._big_text_stats['reused_pairs']+=1
+            for widget,rgba in ((main,hex_rgb(hexcolor)+(1,)),(shadow,(0,0,0,.6))):
+                if glyph:
+                    widget._rgba0=rgba;widget._glyph_alpha0=rgba[3]
+                else:widget.color=rgba
+                widget.font_size=size;widget.text=text
+                if glyph:widget._glyph_sync()
+        elif glyph:
+            main=GlyphLabel(text=text,font_size=size,bold=True,color=hex_rgb(hexcolor)+(1,),size_hint=(None,None))
+            shadow=GlyphLabel(text=text,font_size=size,bold=True,color=(0,0,0,.6),size_hint=(None,None))
         else:
             main = Label(text=text, font_size=size, bold=True,
                          color=hex_rgb(hexcolor) + (1,), size_hint=(None, None))
@@ -324,18 +340,23 @@ class GameArea(FloatLayout):
         #    `_font_properties`, 每次赋值都会重新测量字形 + 重新光栅化 + 重建并上传纹理。
         #    `Scale` 只是乘进 modelview 矩阵, 纹理一次生成。基准纹理仍按 `size` 光栅化,
         #    不做"按峰值预放大"(放大 1.2 倍线性插值只是极轻微发虚, 缩小没 mipmap 会闪)。
+        if created:
+            self._big_text_stats['created_pairs']+=1
+            if len(pool)<2:pool.append((main,shadow))
         for _lb in (main, shadow):
-            with _lb.canvas.before:
-                PushMatrix()
-                _lb._pop_sc = Scale(origin=_lb.center, x=1.0, y=1.0)
+            if created:
+                with _lb.canvas.before:
+                    PushMatrix()
+                    _lb._pop_sc = Scale(origin=_lb.center, x=1.0, y=1.0)
             # ⚠️⚠️ **PopMatrix 绝不能省**: Kivy 的 `Scale`/`Rotate` 是**持久变换**, 一进画布
             #    指令流就管到"下一次被改"为止, 不会自动弹栈。而本项目的子控件画布是**绝对
             #    (窗口)坐标、父级不做平移** ⇒ 挂在 `canvas.before` 上的 Scale 会**泄漏给它
             #    之后画的每一个控件**(也就是 HUD 五行), 大字活着的那 1.8s 里底部两行被按
             #    sc 缩放位移(峰值 1.2 时下推 ~80px), **整块推出窗口**。
             #    Label 没有子控件, 所以 `canvas.after` 正好落在它画完的那一刻。
-            with _lb.canvas.after:
-                PopMatrix()
+                with _lb.canvas.after:
+                    PopMatrix()
+            _lb._pop_sc.x=_lb._pop_sc.y=1.
         self.add_widget(shadow)
         self.add_widget(main)
         # 中奖时大字上移到杯顶之上(逻辑 cy = TEXT_CY_WIN; 杯子占逻辑 y ≈264.6~578,
@@ -346,6 +367,11 @@ class GameArea(FloatLayout):
         #    没人发现; **横屏反旋转时 x=370**(1740x1000), 大字就偏左 370px。
         #    纵向的 `- self.y` 是历史遗留(竖屏 y=122, 被眼睛调过的既成观感), 本轮不动。
         _cc = [_lbl_canvas_color(main), _lbl_canvas_color(shadow)]
+        cx,cy=self._px(CW/2.),self._py(cy_logical)-self.y
+        main.center=(cx,cy);shadow.center=(cx+2,cy-2)
+        for widget,col in zip((main,shadow),_cc):
+            widget._pop_sc.origin=widget.center
+            _fx_fade_set(widget,col,1.)
         self._effects.append({"kind": "big", "ws": [main, shadow], "cols": _cc,
                               "born": time.time(),
                               "life": BIG_TEXT_LIFE, "size": size, "rgb": hex_rgb(hexcolor),

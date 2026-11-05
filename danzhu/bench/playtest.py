@@ -1,4 +1,4 @@
-"""随机实玩数据：逐帧紧凑记录，实时显示最近十秒；停止后统计全程。"""
+"""帧率测试数据：逐帧紧凑记录，实时显示最近十秒；停止后统计全程。"""
 from array import array
 from collections import deque
 from bisect import insort
@@ -18,6 +18,7 @@ class PlaytestRecord:
         self.frames = array('d')
         self.recent = deque()
         self.events, self.sensors, self.gaps = [], [], []
+        self.display_events=[]
         self.idle_gc_events=[]
         self.wall_ms = 0.
         self.active = True
@@ -216,6 +217,7 @@ class PlaytestRecord:
                     frame_indices=selected,
                     frames=[list(self.frames[i*4:i*4+4]) for i in selected],
                     events=list(self.events), sensors=list(self.sensors),test_gaps=list(self.gaps),
+                    display_events=list(self.display_events),
                     idle_gc_events=list(self.idle_gc_events),
                     sensor_interval_s=self.settings.get('sensor_interval_s',.5), live_metrics_window_s=10)
 
@@ -227,7 +229,7 @@ def format_report(document):
     phases=('待机','蓄力','飞行','哑火','落袋','结算','装杯','测试间隔')
     m=document.get('metrics') or {}; settings=document.get('settings',{})
     diag=document.get('diagnostics',{})
-    lines=['随机实玩诊断报告',
+    lines=['帧率测试诊断报告',
            '版本：%s；时长：%.2f 秒；结束原因：%s'%(document.get('version','未知'),document.get('duration_s',0),document.get('reason')),
            '投入：%s；返还率：%.0f%%；屏幕：%s Hz；Kivy 上限：%s'%(
                settings.get('bet'),settings.get('rtp',0)*100,settings.get('display_hz'),settings.get('kivy_cap')),
@@ -237,6 +239,9 @@ def format_report(document):
                number(document.get('live',{}).get('average_low_0_1pct')),
                number(document.get('live',{}).get('minimum_low_0_1pct')),number(m.get('low_0_1pct_fps'))),
            '最差单帧：%s ms，等效 %s FPS'%(number(m.get('max_ms')),number(m.get('worst_frame_fps'))),
+           '屏幕信息：默认%s；开关操作%d次（逐帧统计始终继续）'%(
+               '显示' if settings.get('overlay_visible_default',True) else '隐藏',
+               sum(e.get('event')=='request' for e in document.get('display_events',[]))),
            '', '一、最慢 1% 帧分布（与全程 1% Low 使用同一批帧）']
     for phase,row in sorted(document.get('low_1pct_by_phase',{}).items(),key=lambda item:int(item[0])):
         lines.append('%s：最慢1%% %d帧；最慢0.1%% %d帧；共%d帧'%(phases[int(phase)],row['slowest_1pct_frames'],row.get('slowest_0_1pct_frames',0),row['frames']))

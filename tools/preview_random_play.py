@@ -24,7 +24,7 @@ OUT.mkdir(parents=True,exist_ok=True)
 class Probe(PlinkoApp):
     def on_start(self):
         self.cases=iter([(kind,w,h) for w,h in ((360,640),(540,960),(720,1280))
-                         for kind in ('live','summary','history')])
+                         for kind in ('hidden','live','summary','history')])
         self.popup=None
         Clock.schedule_once(self.prepare,2.5)
 
@@ -58,9 +58,10 @@ class Probe(PlinkoApp):
         root._playtest=r
         UI._live_power_snapshot=lambda:dict(temp=36.,mv=4000,current_raw=600000,current_source='preview',
                                           current_unit='ua',watts=2.4,plugged=0)
-        root._playtest_live(0)
         kind,_,_=self.case
-        if kind!='live':
+        if kind!='hidden':root._toggle_playtest_info()
+        root._playtest_live(0)
+        if kind not in ('live','hidden'):
             root._stop_playtest(show_summary=False)
             record=root._playtest_result
             if kind=='summary':self.popup=root._show_playtest_detail(record)
@@ -78,6 +79,9 @@ class Probe(PlinkoApp):
                     label.texture_update()
                     assert label.texture_size[0]<=label.width+1,(label.text,label.texture_size,label.size)
                     assert label.texture_size[1]<=label.height+1,(label.text,label.texture_size,label.size)
+        elif kind=='hidden':
+            assert not self.rootw._playtest_info_built
+            assert len(self.rootw._playtest_panel.children)==1
         elif kind=='live':
             for label in (self.rootw._playtest_label,self.rootw._playtest_sensor):
                 label.texture_update()
