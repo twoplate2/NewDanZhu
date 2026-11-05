@@ -242,6 +242,7 @@ def format_report(document):
            '屏幕信息：默认%s；开关操作%d次（逐帧统计始终继续）'%(
                '显示' if settings.get('overlay_visible_default',True) else '隐藏',
                sum(e.get('event')=='request' for e in document.get('display_events',[]))),
+           'GC设置：'+('关闭（自动循环GC及主动回收均禁用；引用计数照常）' if settings.get('gc_policy')=='disabled' else '手动（落杯关闭后0.3秒、间隔至少60秒、画面稳定后回收）' if settings.get('gc_policy')=='manual_close_after_interval' else '开启（画面稳定后按代回收）'),
            '', '一、最慢 1% 帧分布（与全程 1% Low 使用同一批帧）']
     for phase,row in sorted(document.get('low_1pct_by_phase',{}).items(),key=lambda item:int(item[0])):
         lines.append('%s：最慢1%% %d帧；最慢0.1%% %d帧；共%d帧'%(phases[int(phase)],row['slowest_1pct_frames'],row.get('slowest_0_1pct_frames',0),row['frames']))

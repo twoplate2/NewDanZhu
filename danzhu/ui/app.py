@@ -281,7 +281,7 @@ class PlinkoApp(App):
 
     # ---- Android 生命周期 ----
     def on_pause(self):
-        if getattr(self.rootw,'_idle_gc',None) is not None:self.rootw._idle_gc.stop()
+        if getattr(self.rootw,'_idle_gc',None) is not None:self.rootw._idle_gc.stop(restore=False)
         self.rootw._stop_playtest('paused')
         self.rootw._low_interrupt("paused")
         try:
@@ -315,7 +315,7 @@ class PlinkoApp(App):
     def on_stop(self):
         if getattr(self.rootw,'_round_end_prepare_event',None) is not None:self.rootw._round_end_prepare_event.cancel()
         if getattr(self.rootw,'_round_end_view',None) is not None:self.rootw._round_end_view.dispose()
-        if getattr(self.rootw,'_idle_gc',None) is not None:self.rootw._idle_gc.stop()
+        if getattr(self.rootw,'_idle_gc',None) is not None:self.rootw._idle_gc.stop(restore=False)
         if getattr(self.rootw,'_idle_gc_event',None) is not None:self.rootw._idle_gc_event.cancel()
         self.rootw._close_playtest()
         self.rootw._low_interrupt("stopped")

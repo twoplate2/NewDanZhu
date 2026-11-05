@@ -71,7 +71,7 @@ class PlaytestMixin:
         simulation.take_events()
         simulation._config_path = lambda: os.path.join(directory, 'config.json')
         simulation._history_path = lambda: os.path.join(directory, 'history.json')
-        for field in ('bet','rtp_target','max_plays','sound_mode','sfx_enabled','fps_cap_setting','power_grain'):
+        for field in ('bet','rtp_target','max_plays','sound_mode','sfx_enabled','fps_cap_setting','power_grain','gc_enabled','gc_manual_only'):
             setattr(simulation, field, getattr(old, field))
         simulation.rtp_btns = dict(old.rtp_btns)
         simulation.multipliers = simulation._boards[simulation.rtp_target]
@@ -93,7 +93,11 @@ class PlaytestMixin:
                                       round_end_popup='cached_prewarmed_static_and_atlas_numbers',
                                       text_measurement='single_line_extents_without_texture',
                                       display_request='cached_classes_and_argument_queue',
-                                      gc_policy='generational_collect_when_visually_quiet',
+                                      gc_enabled=simulation.gc_enabled,gc_manual_only=simulation.gc_manual_only,
+                                      gc_manual_interval_s=60,
+                                      gc_policy=('disabled' if not simulation.gc_enabled else
+                                                 'manual_close_after_interval' if simulation.gc_manual_only else
+                                                 'generational_collect_when_visually_quiet'),
                                       low_0_1pct_window_s=10,low_0_1pct_rounding='ceil',
                                       low_0_1pct_aggregation='mean_and_minimum_of_complete_10s_groups',
                                       display_hz=_screen_hz(),kivy_cap=getattr(Clock,'_max_fps',None),

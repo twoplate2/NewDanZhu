@@ -1162,6 +1162,9 @@ class WinPileFX(Widget):
             if self._closing_at and now >= self._closing_at + RESULT_FADE:
                 self.mode = "idle"
                 self._balls = []
+                # 玩家点击与benchmark/帧率测试自动关闭共用同一退场完成点。
+                policy=getattr(getattr(self.area,"game",None),"_idle_gc",None)
+                if policy is not None:policy.request_manual()
         # ⚠️ 揭晓判定必须在**所有 mode 迁移之后**, 且**不能只认 win 分支**(血泪实修):
         #    揭晓时刻(触地 + REVEAL_DELAY=0.3)通常**晚于** win->result 的切换点(触地 + 0.185~0.323)
         #    ⇒ mode 先跳走, 一次性事件再也没人判 —— 实测 86% 的中奖局回调挂到**下一局**才被
@@ -1866,24 +1869,26 @@ class WinPileFX(Widget):
         except Exception as _e:
             _PIN_ORDER[0] = None
             _PIN_WHERE[0] = "**定位抛异常** %r" % (_e,)
-        try:
-            import gc as _gc
-            _gc.collect()                 # 先把垃圾收干净, 免得把垃圾也一起冻结
-            # 冻结**前**强制一次 gen-2 全量回收并计时 —— 这就是"真机上一次全量回收要多久"的直接读数。
-            _t0 = time.perf_counter()
-            _gc.collect(2)
-            _t1 = time.perf_counter()
-            # 若玩家已经开始游戏，不把动态弹珠/诊断对象永久冻结。
-            _host=getattr(self.area,'game',None)
-            if (_host is None or (getattr(_host.game,'plays',0)==0 and getattr(_host,'_playtest',None) is None)):
-                _gc.freeze()
-            _t2 = time.perf_counter()
-            _gc.collect(2)                # 冻结后再来一次: 这次扫不到东西
-            _t3 = time.perf_counter()
-            _GC_FROZEN[0] = _gc.get_freeze_count()
-            _GC_FROZEN[1] = (_t1 - _t0) * 1000.0
-            _GC_FROZEN[2] = (_t3 - _t2) * 1000.0
-        except Exception:
-            pass
+        # 设备关闭GC时，启动尾部也不主动收集或冻结。
+        if host is None or (getattr(host.game,'gc_enabled',False) and not getattr(host.game,'gc_manual_only',False)):
+            try:
+                import gc as _gc
+                _gc.collect()                 # 先把垃圾收干净, 免得把垃圾也一起冻结
+                # 冻结**前**强制一次 gen-2 全量回收并计时 —— 这就是"真机上一次全量回收要多久"的直接读数。
+                _t0 = time.perf_counter()
+                _gc.collect(2)
+                _t1 = time.perf_counter()
+                # 若玩家已经开始游戏，不把动态弹珠/诊断对象永久冻结。
+                _host=getattr(self.area,'game',None)
+                if (_host is None or (getattr(_host.game,'plays',0)==0 and getattr(_host,'_playtest',None) is None)):
+                    _gc.freeze()
+                _t2 = time.perf_counter()
+                _gc.collect(2)                # 冻结后再来一次: 这次扫不到东西
+                _t3 = time.perf_counter()
+                _GC_FROZEN[0] = _gc.get_freeze_count()
+                _GC_FROZEN[1] = (_t1 - _t0) * 1000.0
+                _GC_FROZEN[2] = (_t3 - _t2) * 1000.0
+            except Exception:
+                pass
         # 预热链到此结束 —— 跑分要等这个标。
         _PREBAKE_DONE[0] = True

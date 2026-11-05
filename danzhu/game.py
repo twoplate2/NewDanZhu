@@ -368,6 +368,8 @@ class Game(object):
         #    它单独存一份是为了 `impact_sound` 的第一道闸 —— 见那里的说明。
         self.sfx_enabled = True
         self.fps_cap_setting = FPS_CAP_DEFAULT
+        self.gc_enabled = False
+        self.gc_manual_only = False
         self.power_grain = POWER_GRAIN_DEFAULT
         self._bench_running = False  # 跑分开关(普通玩法恒 False; 跑分链自己置位)
         self._bench_ball_i = 0
@@ -1560,6 +1562,15 @@ class Game(object):
         self._emit("sfx_enabled", {"enabled": bool(on)})
 
     # ---- 帧率上限设定 ----
+    def set_gc_enabled(self, enabled, manual_only=None):
+        if not isinstance(enabled, bool):return False
+        if manual_only is not None and not isinstance(manual_only,bool):return False
+        self.gc_enabled = enabled
+        if manual_only is not None:self.gc_manual_only=manual_only
+        self._emit("gc_policy", {"enabled": enabled, "manual_only": self.gc_manual_only})
+        self._save_config()
+        return True
+
     def set_fps_cap_setting(self, cap):
         """写入用户帧率档位, 并立即按三重上限重算实际目标。返回是否受理。
 
@@ -1622,6 +1633,10 @@ class Game(object):
                         self.plays = cfg["plays"]
                     if isinstance(cfg.get("hits"), int) and cfg["hits"] >= 0:
                         self.hits = cfg["hits"]
+                    if isinstance(cfg.get("gc_manual_only"), bool):
+                        self.gc_manual_only = cfg["gc_manual_only"]
+                    if isinstance(cfg.get("gc_enabled"), bool):
+                        self.gc_enabled = cfg["gc_enabled"]
                     if (isinstance(cfg.get("fps_cap_setting"), int)
                             and cfg["fps_cap_setting"] in FPS_CAP_OPTIONS):
                         self.fps_cap_setting = cfg["fps_cap_setting"]
@@ -1676,6 +1691,8 @@ class Game(object):
                 "plays": self.plays,
                 "hits": self.hits,
                 "fps_cap_setting": int(self.fps_cap_setting),
+                "gc_enabled": self.gc_enabled,
+                "gc_manual_only": self.gc_manual_only,
                 "power_grain": self.power_grain,
             }
             path = self._config_path()      # 路径在主线程算好(工作线程问不到 App)

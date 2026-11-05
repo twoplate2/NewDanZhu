@@ -85,6 +85,8 @@ class PlayMixin(object):
 
     def _idle_gc_tick(self,_dt):
         from .winfx import _PREBAKE_DONE
+        if self.game.state in ("charging","flying","misfire"):
+            self._idle_gc.manual_pending=False
         quiet=self._idle_gc_quiet() and _PREBAKE_DONE[0] and not getattr(self,'_hp_running',False)
         event=self._idle_gc.tick(quiet)
         if event:
@@ -533,6 +535,8 @@ class PlayMixin(object):
                 self._refresh_mute_btn()
             elif kind == "sfx_enabled":
                 self.sfx.set_enabled(ev.data["enabled"])
+            elif kind == "gc_policy":
+                self._idle_gc.set_enabled(ev.data["enabled"],ev.data["manual_only"])
             elif kind == "fps_cap":
                 _FPS_USER_CAP[0] = ev.data["cap"]
                 try:
@@ -898,6 +902,7 @@ class PlayMixin(object):
     def _show_fps_cap_settings(self):
         """帧率上限设定：拖动滑条选档，确认后持久化并立即重申 Android 高刷请求。"""
         from kivy.uix.slider import Slider
+        from kivy.uix.switch import Switch
 
         values = FPS_CAP_OPTIONS
         current = (self.game.fps_cap_setting if self.game.fps_cap_setting in values
@@ -933,6 +938,18 @@ class PlayMixin(object):
                      color=hex_rgb(COL_SUB) + (1,), size_hint_y=None, height=dp(24))
         hint.bind(size=lambda w, *_: setattr(w, 'text_size', w.size))
         content.add_widget(hint)
+        gc_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+        gc_row.add_widget(Label(text="开启GC", font_size="16sp"))
+        gc_switch = Switch(active=self.game.gc_enabled, size_hint_x=None, width=dp(72))
+        gc_row.add_widget(gc_switch)
+        content.add_widget(gc_row)
+        manual_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+        manual_row.add_widget(Label(text="手动GC\n落杯关闭后0.3秒 / 间隔60秒", font_size="13sp"))
+        manual_switch = Switch(active=self.game.gc_manual_only, size_hint_x=None, width=dp(72),
+                               disabled=not gc_switch.active)
+        gc_switch.bind(active=lambda w,v:setattr(manual_switch,'disabled',not v))
+        manual_row.add_widget(manual_switch)
+        content.add_widget(manual_row)
         actions = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
         cancel = Button(text='取消', font_size='16sp', bold=True, background_normal='',
                         background_color=hex_rgb(COL_BTN_OFF) + (1,))
@@ -942,7 +959,7 @@ class PlayMixin(object):
         actions.add_widget(confirm)
         content.add_widget(actions)
         # ⚠️ 0.96 是配合上面那行文案算的: 11sp 要 271dp 而 0.88 的可用宽只有 261dp。
-        popup = self._popup(0.96, 310, title='', content=content,
+        popup = self._popup(0.96, 418, title='', content=content,
                             auto_dismiss=True, separator_height=0)
 
         def _pick(_slider, value):
@@ -954,6 +971,7 @@ class PlayMixin(object):
             # `_FPS_USER_CAP[0]` + `_apply_fps_cap()` 由 `fps_cap` 事件做。
             # ⚠️ 当拍(`_act`): 老版 `_set_fps_cap_setting` 就是在这句里同步重申高刷请求的
             #    (main.py:20706), 直调会让新上限晚一帧才生效。
+            self._act(self.game.set_gc_enabled, bool(gc_switch.active), bool(manual_switch.active))
             if self._act(self.game.set_fps_cap_setting, picked[0]):
                 self.game_area.center_toast('帧率上限已设为 %d Hz' % picked[0],
                                             hexcolor=COL_GREEN, size=20, life=1.3)

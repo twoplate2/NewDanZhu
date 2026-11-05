@@ -11,7 +11,7 @@
 * `tests/fx_gates.py` 只做静态源码比对；
 * `tests/bench_smoke.py` 跑的是入口。
 
-⇒ 于是「写下去的是不是那 9 个键」「读回来时**白名单**拦不拦得住坏值」这两件事
+⇒ 于是「写下去的是不是那 11 个键」「读回来时**白名单**拦不拦得住坏值」这两件事
 **一条断言都没有**。而白名单正是老版踩过的坑：读档不设白名单 ⇒ 一个坏 config
 就能把 `rtp_target` 写成隐藏档、把 `round_plays` 写得比 `max_plays` 还大。
 
@@ -49,7 +49,7 @@ def check(ok, name, detail=""):
 
 
 CFG_KEYS = ("max_plays", "rtp_target", "bet", "balance", "round_plays",
-            "plays", "hits", "fps_cap_setting", "power_grain")
+            "plays", "hits", "fps_cap_setting", "power_grain", "gc_enabled", "gc_manual_only")
 
 
 def _game(path, **kw):
@@ -63,7 +63,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="danzhu_persist_")
     path = os.path.join(tmp, "plinko_config.json")
 
-    print("== 一、写下去的是不是那 9 个键 ==")
+    print("== 一、写下去的是不是那 11 个键 ==")
     g = _game(path)
     g.max_plays = 100
     g.rtp_target = 2.0
@@ -79,7 +79,7 @@ def main():
     with io.open(path, encoding="utf-8") as f:
         cfg = json.load(f)
     check(set(cfg) == set(CFG_KEYS),
-          "键集合**恰好**是那 9 个(多一个少一个都算脱钩)",
+          "键集合**恰好**是那 11 个(多一个少一个都算脱钩)",
           "实得 %s" % sorted(cfg))
     check(cfg.get("balance") == 4321 and cfg.get("bet") == 50
           and cfg.get("power_grain") == "每5秒",
@@ -89,7 +89,7 @@ def main():
     print("\n== 二、读回来逐字段复原 ==")
     g2 = _game(path)
     got = {k: getattr(g2, k) for k in CFG_KEYS}
-    want = dict(zip(CFG_KEYS, (100, 2.0, 50, 4321, 7, 21, 9, 90, "每5秒")))
+    want = dict(zip(CFG_KEYS, (100, 2.0, 50, 4321, 7, 21, 9, 90, "每5秒", False, False)))
     bad = {k: (want[k], got[k]) for k in CFG_KEYS if got[k] != want[k]}
     check(not bad, "9 个字段逐个复原", "" if not bad else repr(bad))
     check(g2.display_balance == 4321.0 and g2._anim_target_balance == 4321.0,

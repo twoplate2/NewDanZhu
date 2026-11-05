@@ -50,6 +50,38 @@ class GCTests(unittest.TestCase):
         self.assertEqual(backend.generations.count(1),6)
         self.assertEqual(backend.generations.count(2),0)
 
+    def test_disabled_skips_all_generations_and_reenable_waits(self):
+        t=[0.];backend=FakeGC();p=IdleGC(backend,lambda:t[0])
+        backend.older=[100,100];p.set_enabled(False);p.start()
+        for i in range(100):
+            t[0]=i;self.assertIsNone(p.tick(True))
+        self.assertEqual(backend.collections,0)
+        self.assertFalse(backend.enabled)
+        p.stop();p.start()
+        self.assertFalse(p.collection_enabled)
+        self.assertIsNone(p.tick(True))
+        p.set_enabled(True);self.assertIsNone(p.tick(True))
+        t[0]+=.31;self.assertIsNotNone(p.tick(True))
+        p.stop();self.assertTrue(backend.enabled)
+
+    def test_manual_close_cooldown_and_quiet_gate(self):
+        t=[0.];backend=FakeGC();p=IdleGC(backend,lambda:t[0])
+        p.set_enabled(True,True);p.start()
+        for i in range(60):
+            t[0]=i;self.assertFalse(p.request_manual());self.assertIsNone(p.tick(True))
+        t[0]=60;self.assertTrue(p.request_manual())
+        self.assertIsNone(p.tick(False))
+        t[0]=60.5;self.assertIsNone(p.tick(True))
+        t[0]=60.81;self.assertIsNotNone(p.tick(True))
+        self.assertFalse(p.request_manual())
+        t[0]=180;self.assertIsNone(p.tick(True))
+        self.assertTrue(p.request_manual());p.tick(True)
+        t[0]+=.31;self.assertIsNotNone(p.tick(True))
+        self.assertEqual(backend.collections,2)
+        p.stop(restore=False);self.assertFalse(backend.enabled)
+        p.start();p.set_enabled(False,True)
+        t[0]+=120;self.assertFalse(p.request_manual());self.assertIsNone(p.tick(True))
+
     def test_old_generation_requires_its_own_threshold(self):
         t=[0.];backend=FakeGC();p=IdleGC(backend,lambda:t[0]);p.start();p.tick(True)
         for i in range(111):

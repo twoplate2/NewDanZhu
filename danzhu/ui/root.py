@@ -154,6 +154,7 @@ class RootWidget(PlaytestMixin, BenchMixin, PlayMixin, UiMixin, BoxLayout):
         Clock.schedule_interval(self._frame_timed, FRAME_TICK_DT)
         from ..idle_gc import IdleGC
         self._idle_gc=IdleGC()
+        self._idle_gc.set_enabled(self.game.gc_enabled,self.game.gc_manual_only)
         self._idle_gc.start()
         self._idle_gc_event=Clock.schedule_interval(self._idle_gc_tick,.1)
         self._round_end_prepare_event=Clock.schedule_once(self._prepare_round_end,.1)
