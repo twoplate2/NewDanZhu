@@ -17,7 +17,7 @@ class PlaytestRecord:
         self.previous = None
         self.frames = array('d')
         self.recent = deque()
-        self.events, self.sensors = [], []
+        self.events, self.sensors, self.gaps = [], [], []
         self.wall_ms = 0.
         self.active = True
         self.reason = None
@@ -28,6 +28,9 @@ class PlaytestRecord:
         self.live = {}
         self.settings = {}
         self.diagnostics=DiagnosticFrames()
+        self._stats_cursor=0
+        self._stats_window=deque()
+        self._next_stats_at=.5
 
     def frame(self, ms):
         self.wall_ms += ms
@@ -56,16 +59,38 @@ class PlaytestRecord:
         self.duration_s = now-self.started
         return self.duration_s < 6000
 
-    def update_live(self):
-        now = self.clock()
-        one = [v for t,v in self.recent if t>now-1]
-        ten = [v for t,v in self.recent if t>now-10]
-        fps = 1000*len(one)/math.fsum(one) if one and now-self.started>=1 else None
-        low = compute_metrics(ten)['low_1pct_fps'] if ten and now-self.started>=10 else None
-        if fps is not None:
-            self.minimum_fps = min(self.minimum_fps if self.minimum_fps is not None else fps, fps)
-        if low is not None:
+    def _window_values(self, at, track=True):
+        while self._stats_window and self._stats_window[0][0]<=at-10:
+            self._stats_window.popleft()
+        one=[v for t,v in self._stats_window if t>at-1]
+        ten=[v for _,v in self._stats_window]
+        one_fps=1000*len(one)/math.fsum(one) if one and at>=1 else None
+        fps=1000*len(ten)/math.fsum(ten) if ten and at>=10 else None
+        k=max(1,len(ten)//100)
+        low=1000*k/math.fsum(sorted(ten)[-k:]) if ten and at>=10 else None
+        if one_fps is not None and track:
+            self.minimum_fps = min(self.minimum_fps if self.minimum_fps is not None else one_fps, one_fps)
+        if low is not None and track:
             self.minimum_low = min(self.minimum_low if self.minimum_low is not None else low, low)
+        return fps,low
+
+    def update_live(self):
+        # 只在发射间隔/结束时做统计；按历史0.5秒窗口补算，不能因少刷新而漏掉最低值。
+        now=self.clock()-self.started
+        n=len(self.frames)//4
+        for index in range(self._stats_cursor,n):
+            elapsed,interval=self.frames[index*4:index*4+2]
+            while self._next_stats_at<elapsed:
+                self._window_values(self._next_stats_at)
+                self._next_stats_at+=.5
+            self._stats_window.append((elapsed,interval))
+            while self._stats_window and self._stats_window[0][0]<=elapsed-10:
+                self._stats_window.popleft()
+        self._stats_cursor=n
+        while self._next_stats_at<=now:
+            self._window_values(self._next_stats_at)
+            self._next_stats_at+=.5
+        fps,low=self._window_values(now,track=False)
         n = len(self.frames)//4
         k = max(1,n//100)
         average_low = 1000*k/math.fsum(self.tail[-k:]) if n and k<=len(self.tail) else None
@@ -113,20 +138,20 @@ class PlaytestRecord:
                     reason=self.reason, metrics=self.metrics(full=True),
                     duration_s=self.duration_s, settings=dict(self.settings), live=dict(self.live),
                     columns=['elapsed_s', 'interval_ms', 'frame_wall_ms', 'phase'],
-                    phases=['ready', 'charging', 'flying', 'misfire', 'landing', 'landed', 'cup'],
+                    phases=['ready', 'charging', 'flying', 'misfire', 'landing', 'landed', 'cup','test_gap'],
                     frame_scope='worst_200_intervals_with_2_neighbors',
                     low_1pct_by_phase=phases,diagnostics=self.diagnostics.document(low),
                     frame_indices=selected,
                     frames=[list(self.frames[i*4:i*4+4]) for i in selected],
-                    events=list(self.events), sensors=list(self.sensors),
-                    sensor_interval_s=.5, live_metrics_window_s=10)
+                    events=list(self.events), sensors=list(self.sensors),test_gaps=list(self.gaps),
+                    sensor_interval_s=self.settings.get('sensor_interval_s',.5), live_metrics_window_s=10)
 
 
 def format_report(document):
     """TXT 前半为人读摘要，JSON 部分保留完整可复算记录。仅停止后调用。"""
     import json
     def number(value):return '未采到' if value is None else '%.3f'%value
-    phases=('待机','蓄力','飞行','哑火','落袋','结算','装杯')
+    phases=('待机','蓄力','飞行','哑火','落袋','结算','装杯','测试间隔')
     m=document.get('metrics') or {}; settings=document.get('settings',{})
     diag=document.get('diagnostics',{})
     lines=['随机实玩诊断报告',
@@ -158,6 +183,7 @@ def format_report(document):
                   'CPU 较低只说明可能存在等待，不能直接判定为 GPU、系统调度或温控。',
                   '最慢案例最多128组，每组前8帧、后4帧；结束附近可能缺少后续帧，following_left 明示缺口。',
                   '原始帧片段仅含最慢200帧及邻帧；全程指标、阶段分布和核心计时均使用全部帧。',
-                  '温度与电池功率每0.5秒读取；缺失读数不编造，不提供平均耗电。',
+                  '温度与电池功率读取策略：%s；缺失读数不编造，不提供平均耗电。'%settings.get('sensor_policy','periodic_0.5s'),
+                  '测试间隔单独标记；全程指标仍包含间隔帧，不删除刷新产生的慢帧。',
                   '', '=== DATA JSON ===',json.dumps(document,ensure_ascii=False,allow_nan=False)])
     return '\n'.join(lines)

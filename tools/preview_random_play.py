@@ -45,9 +45,10 @@ class Probe(PlinkoApp):
     def open_case(self,_dt):
         root=self.rootw
         root._start_playtest()
-        root._playtest_driver.cancel();root._playtest_display.cancel()
+        root._playtest_driver.cancel()
+        if root._playtest_display is not None:root._playtest_display.cancel()
         t=[time.perf_counter()-13]
-        r=PlaytestRecord(clock=lambda:t[0]);r.settings=dict(bet=100,rtp=3.6)
+        r=PlaytestRecord(clock=lambda:t[0]);r.settings=dict(root._playtest.settings)
         r.flip(0)
         for i in range(2100):
             t[0]+=.018 if i%180==0 else .006

@@ -70,18 +70,22 @@ class PlaytestMixin:
         self._playtest = PlaytestRecord(clock=time.perf_counter)
         self._playtest_probe=PlayProbe()
         self._playtest.settings = dict(bet=simulation.bet, rtp=simulation.rtp_target,
-                                      fps_cap=simulation.fps_cap_setting, sensor_interval_s=.5,
+                                      fps_cap=simulation.fps_cap_setting, sensor_interval_s=None,
+                                      sensor_policy='between_shots',ui_refresh_policy='between_shots',
+                                      current_fps_window_s=10,minimum_fps_window_s=1,
+                                      gap_before_refresh_s=.3,gap_after_refresh_s=.3,
                                       display_hz=_screen_hz(),kivy_cap=getattr(Clock,'_max_fps',None),
                                       random_power_range=[MISFIRE_POWER,1.0],
                                       diagnostic_probe='scoped_steps_gc_thread_cpu_draw_swap_v1')
         self._playtest_rng = random.Random()
         self._playtest_next = time.perf_counter()+.7
         self._playtest_target = None
+        self._playtest_gap = None
         self._playtest_result = None
         self._playtest_make_panel()
         Window.bind(on_flip=self._playtest_flip)
         self._playtest_driver = Clock.schedule_interval(self._playtest_tick, .05)
-        self._playtest_display = Clock.schedule_interval(self._playtest_live, .5)
+        self._playtest_display = None
         self._playtest_probe.start()
         _set_keep_awake(True)
 
@@ -105,7 +109,7 @@ class PlaytestMixin:
         for caption in ('帧率：','1%low：'):
             stat_row=BoxLayout(size_hint_y=None,height=dp(22),spacing=0)
             cells=[]
-            for text in (caption,'当前采样中','/ 最低采样中','/ 平均采样中'):
+            for text in (caption,'当前采样中','最低采样中','平均采样中'):
                 cell=Label(text=text,markup=True,halign='left',valign='middle',size_hint_x=None)
                 cell._playtest_probe_tag='面板文字'
                 cells.append(cell);stat_row.add_widget(cell)
@@ -149,6 +153,7 @@ class PlaytestMixin:
             return
         phase = 6 if self.game_area.win_fx.mode != 'idle' else {
             'ready':0,'charging':1,'flying':2,'misfire':3,'landing':4,'landed':5}.get(self.game.state,0)
+        if self._playtest_gap is not None:phase=7
         diagnostic=self._playtest_probe.take()
         ball=self.game.ball
         diagnostic['context']=dict(shot_id=len(record.events),state=self.game.state,
@@ -178,10 +183,27 @@ class PlaytestMixin:
             fx.request_close()
             self._playtest_next = now+self._playtest_rng.uniform(.5,1.5)
         elif game.state == 'ready' and fx.mode == 'idle':
-            if game.balance < game.bet:
-                self._act(game.reset_balance)
-            self._playtest_target = self._playtest_rng.uniform(MISFIRE_POWER,1.0)
-            self._act(game.start_charge)
+            quiet=(not game._anim_pending and game.now>=game._anim_start_time+game._anim_dur and
+                   not any(e.get('kind')=='big' for e in self.game_area._effects))
+            if not quiet:return True
+            gap=self._playtest_gap
+            if gap is None:
+                if game.balance < game.bet:self._act(game.reset_balance)
+                gap=dict(begin_s=now-self._playtest.started,stage='before_refresh')
+                self._playtest.gaps.append(gap);self._playtest_gap=gap
+                self._playtest_next=now+.3
+            elif gap['stage']=='before_refresh':
+                gap['refresh_begin_s']=now-self._playtest.started
+                self._playtest_live(0)
+                finished=time.perf_counter()
+                gap['refresh_end_s']=finished-self._playtest.started
+                gap['stage']='after_refresh'
+                self._playtest_next=finished+.3
+            else:
+                gap.update(end_s=now-self._playtest.started,stage='complete')
+                self._playtest_gap=None
+                self._playtest_target = self._playtest_rng.uniform(MISFIRE_POWER,1.0)
+                self._act(game.start_charge)
         elif game.state == 'charging' and self._playtest_target is not None and game.power >= self._playtest_target:
             power = game.power
             self._act(game.launch)
@@ -197,13 +219,13 @@ class PlaytestMixin:
             return False
         values = record.update_live()
         def fmt(value): return '采样中' if value is None else '[color=%s]%.2f[/color]'%(COL_BALL.lstrip('#'),value)
-        self._playtest_label.text = '实玩 %s · 投%d · 返还%.0f%%' % (
+        self._playtest_label.text = '更新 %s · 投%d · 返还%.0f%%' % (
             _duration(time.perf_counter()-record.started),record.settings['bet'],record.settings['rtp']*100)
         for cells,keys in zip(self._playtest_stat_cells,(('current_fps','minimum_fps','average_fps'),
                                                        ('current_low','minimum_low','average_low'))):
-            for cell,prefix,key in zip(cells[1:],('当前','/ 最低','/ 平均'),keys):
+            for cell,prefix,key in zip(cells[1:],('当前','最低','平均'),keys):
                 cell.text=prefix+fmt(values[key])
-        # 与游戏信息面板完全相同的读取器、0.5 秒频率和充电/耗电口径。
+        # 复用读取器，但只在发射间隔读取，避免飞行中JNI和文字重建的尖峰。
         sample = _live_power_snapshot()
         sample['fps'] = dict(values)
         record.sensor(sample)
@@ -218,8 +240,12 @@ class PlaytestMixin:
         _set_keep_awake(False)
         self._playtest_probe.stop()
         record.stop(reason)
+        if self._playtest_gap is not None:
+            self._playtest_gap.update(end_s=record.duration_s,stage='interrupted')
+            self._playtest_gap=None
         Window.unbind(on_flip=self._playtest_flip)
-        self._playtest_driver.cancel(); self._playtest_display.cancel()
+        self._playtest_driver.cancel()
+        if self._playtest_display is not None:self._playtest_display.cancel()
         fx = self.game_area.win_fx
         fx._on_done = None
         fx._abort()
@@ -357,6 +383,7 @@ class PlaytestMixin:
               _number(live.get('current_low'),2),_number(live.get('minimum_low'),2),_number(m.get('low_1pct_fps'),2),
               _number(result.get('temperature_start')),_number(result.get('temperature_end')),_number(result.get('temperature_max')),
               m.get('frame_count',0),_number(m.get('max_ms')))
+        text=text.replace('当前帧率（1秒）','当前帧率（%d秒）'%settings.get('current_fps_window_s',1))
         content=BoxLayout(orientation='vertical',padding=dp(10),spacing=dp(8))
         scroll=ScrollView(do_scroll_x=False)
         label=Label(text=text,size_hint_y=None,halign='left',valign='top',font_size=sp(15 if Window.width<dp(430) else 17))
