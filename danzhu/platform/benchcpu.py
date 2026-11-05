@@ -842,7 +842,20 @@ def _battery_snapshot():
 _GOLD_MK = COL_BALL.lstrip("#")      # markup 里的颜色写法不带 '#'
 
 
-def _live_power_temp_line():
+def _live_power_snapshot():
+    """与游戏信息面板同源的结构化温度/电池功率，供实玩历史保存原值。"""
+    sample = dict(_battery_snapshot() or {})
+    sample.update(watts=None, current_raw=None, current_source=None, current_unit=None)
+    if sample.get('mv'):
+        raw, source = _battery_current_raw()
+        if raw is not None and abs(raw)>0:
+            unit = 'ma' if abs(raw)<20000 else 'ua'
+            sample.update(watts=_power_from(raw,sample['mv'],unit), current_raw=raw,
+                          current_source=source,current_unit=unit)
+    return sample
+
+
+def _live_power_temp_line(sample=None):
     """「启动信息」里那行实时「温度 / 充放电功率」; **读不到就返回空串**(调用方据此整行不出现)。
 
     玩家 2026-09-18: 「新增一行, 内容是 温度：xx摄氏度，功耗xx.xx瓦, 并且每0.5秒刷新一次」
@@ -855,7 +868,7 @@ def _live_power_temp_line():
        (不印「耗电：--」那种占位 —— 那既是噪音又会让宽度忽长忽短。)
     """
     try:
-        _sn = _battery_snapshot()
+        _sn = _live_power_snapshot() if sample is None else sample
         if not _sn:
             return ""                       # PC / 读不到 ⇒ 整行不出现
         _parts = []
@@ -867,10 +880,10 @@ def _live_power_temp_line():
             _parts.append("温度：[color=%s]%.1f[/color] 度" % (_GOLD_MK, _t))
         _mv = _sn.get("mv")
         if _mv:
-            _raw, _src = _battery_current_raw()
+            _raw = _sn.get('current_raw')
             if _raw is not None and abs(_raw) > 0:
                 _unit = "ma" if abs(_raw) < 20000 else "ua"
-                _w = _power_from(_raw, _mv, _unit)
+                _w = _sn.get('watts')
                 if _w is not None:
                     # ⚠️ 充电时这行也叫「功耗」是错的(玩家: 「那个功耗改为耗电更好吧」)。
                     #    ⚠️ 判据**不能用电流符号** —— `_power_from` 正因为符号不可信才一律 `abs()`

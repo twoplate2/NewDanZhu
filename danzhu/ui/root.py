@@ -47,9 +47,10 @@ from ..platform import device as _dev
 from .ui_base import UiMixin
 from .play import PlayMixin
 from .bench import BenchMixin
+from .playtest import PlaytestMixin
 
 
-class RootWidget(BenchMixin, PlayMixin, UiMixin, BoxLayout):
+class RootWidget(PlaytestMixin, BenchMixin, PlayMixin, UiMixin, BoxLayout):
     """界面壳：控件树 + 事件派发 + 输入转发。游戏逻辑全在 `self.game`。"""
 
     def __init__(self, sfx=None, **kw):

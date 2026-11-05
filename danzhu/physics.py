@@ -149,18 +149,16 @@ def _collide_rect(b, rx1, ry1, rx2, ry2, e, ev=0):
         hit = _reflect(b, nx, ny, e)
         is_ceil = (ev == EV_WALL and ry1 == 0 and ry2 == WALL)
         if is_ceil and hit > 0.0:
-            # 天花板弹射器: 角度+力度每发**只抽一次**并存球上, 之后复用(不能每撞一次重抽)
+            # 顶部只随机出口角；速度由碰撞恢复系数决定，不再抽取快慢。
             rng = getattr(b, "_rng", None) or random
             knob = getattr(b, "ceil_knob", None)
             if knob is None:
                 band = _power_band(getattr(b, "launch_power", 0.5))
-                knob = (_sample_table(KNOB_CEIL_ANGLE[band], rng),
-                        _sample_table(KNOB_CEIL_BOOST[band], rng))
+                tilt = _sample_table(KNOB_CEIL_ANGLE[band], rng)
+                _sample_table(KNOB_CEIL_BOOST[band], rng)  # 保留随机流位置，不应用调速
+                knob = (tilt, 1.0)
                 b.ceil_knob = knob
-            tilt, scale = knob
-            if scale != 1.0:
-                b.vx *= scale
-                b.vy *= scale
+            tilt, _legacy_scale = knob
             if tilt:
                 sp = math.hypot(b.vx, b.vy)
                 a = math.atan2(b.vy, b.vx) - math.radians(tilt)
@@ -202,18 +200,14 @@ def _collide_arc(b, x1, y1, x2, y2, frame):
     if st is None:
         rng = getattr(b, "_rng", None) or random
         band = _power_band(getattr(b, "launch_power", 0.5))    # 力度档 → 4 旋钮离散表
-        st = [0, -1,                      # [缓动步数, 上次接触帧, 出口角抖动°, 出口力度系数]
-              _sample_table(KNOB_ARC_ANGLE[band], rng),
-              _sample_table(KNOB_ARC_BOOST[band], rng)]
+        angle = _sample_table(KNOB_ARC_ANGLE[band], rng)
+        _sample_table(KNOB_ARC_BOOST[band], rng)  # 不再在最显眼的顶部随机减速/加速
+        st = [0, -1, angle, 1.0]
         b.arc_ease = st
     n, lf = st[0], st[1]
     if lf != frame:
         n += 1
         lf = frame
-        if n == 1 and st[3] != 1.0:       # 力度系数只在首接触帧乘一次(不每帧连乘)
-            b.vx *= st[3]
-            b.vy *= st[3]
-            st[3] = 1.0
     th = ARC_OUT_ANGLE * min(1.0, n / ARC_EASE_FRAMES) + st[2]
     a = math.radians(th)
     sp = math.hypot(b.vx, b.vy)
@@ -302,7 +296,7 @@ class Ball:
 def launch_ball(power, rng=None):
     """按蓄力比例 power 生成一颗向上发射的球(位于弹簧柱塞处), 纯竖直、零横向引导。
 
-    竖直速度只在 LAUNCH_MIN~LAUNCH_MAX 的窄带内变化, 越顶时刻才散得开。
+    初速随有效蓄力单调增加；弧面和天花板不再应用随机速度乘子。
     """
     u = power_u(power)
     speed = LAUNCH_MIN + (LAUNCH_MAX - LAUNCH_MIN) * u

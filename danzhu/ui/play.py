@@ -106,9 +106,13 @@ class PlayMixin(object):
         return self._act(self.game.launch, *a)
 
     def set_bet(self, v, **kw):
+        if getattr(self, '_playtest', None) is not None and self._playtest.active:
+            return
         return self._act(self.game.set_bet, v, **kw)
 
     def set_rtp(self, t, **kw):
+        if getattr(self, '_playtest', None) is not None and self._playtest.active:
+            return
         return self._act(self.game.set_rtp, t, **kw)
 
     def reset_balance(self, *a, **kw):
@@ -132,6 +136,8 @@ class PlayMixin(object):
         ⚠️ 用**显式命中判定**(`_to_eq` + `collide_point`), 不要靠 `touch.grab_current` ——
         实测那条在这个 Kivy + 触摸来源上读不到(派发走完仍是 None), 照它判定会**静默失效**。
         """
+        if getattr(self, '_playtest', None) is not None and self._playtest.active:
+            return True
         if not self.game.on_touch_down_allowed():
             return True
         _pos = touch.pos
@@ -145,6 +151,8 @@ class PlayMixin(object):
         return super().on_touch_down(touch)
 
     def _on_key_down(self, win, key, *rest):
+        if getattr(self, '_playtest', None) is not None and self._playtest.active:
+            return True
         if key == 32:                     # 空格: 按住蓄力
             # ⚠️ 当拍(`_act`): 老版这里是 `self.start_charge()` 内联在 RootWidget 上 ——
             #    蓄力那声棘轮/`蓄力中`文案必须是**按下这一拍**的, 晚一帧听得出来。
@@ -169,6 +177,8 @@ class PlayMixin(object):
         self._act(self.game.space_fire)
 
     def _on_title_touch_down(self, win, touch):
+        if getattr(self, '_playtest', None) is not None and self._playtest.active:
+            return
         pos = touch.pos
         layer = _land_layer()
         if layer is not None:
@@ -217,6 +227,9 @@ class PlayMixin(object):
             raise
         finally:
             _wall = (time.perf_counter() - _t0) * 1000.0
+            playtest = getattr(self, '_playtest', None)
+            if playtest is not None and playtest.active:
+                playtest.frame(_wall)
             _FRAME_SELF[0] += _wall
             if _capture is not None and _capture.active:
                 _capture.frame_end(self.game, self.game_area, _wall,

@@ -378,6 +378,8 @@ class BenchMixin(object):
     #      · 高压测试 = 长、**一秒不停**、测**衰减**;      `SOC_SUSTAIN_WALL_SEC` 秒
     #    ⚠️ 两者互斥: 一个在跑的时候另一个不许进。
     def _start_hp_test(self):
+        if getattr(self, '_playtest', None) is not None:
+            return
         if getattr(self, "_hp_running", False) or self.game._bench_running:
             return
         self._hp_running = True
@@ -1025,9 +1027,13 @@ class BenchMixin(object):
             row.add_widget(left)
             row.add_widget(right)
             content.add_widget(row)
-        low_btn = Button(text="应用侧帧采样 / 导出", size_hint_y=None, height=dp(48))
-        low_btn.bind(on_release=lambda *_: (popup.dismiss(), self._show_low_capture_menu()))
-        content.add_widget(low_btn)
+        playtest_btn = Button(text='随机实玩模拟', size_hint_y=None, height=dp(48), font_size=sp(17))
+        playtest_btn.bind(on_release=lambda *_: (popup.dismiss(), self._start_playtest()))
+        playtest_history = Button(text='实玩模拟历史',size_hint_y=None,height=dp(48),font_size=sp(17))
+        playtest_history.bind(on_release=lambda *_:(popup.dismiss(),self._show_playtest_history()))
+        playtest_row=BoxLayout(size_hint_y=None,height=dp(48),spacing=dp(8))
+        playtest_row.add_widget(playtest_btn);playtest_row.add_widget(playtest_history)
+        content.add_widget(playtest_row)
         popup.open()
         self._popup_fit_content(popup, content)
 
@@ -1586,6 +1592,8 @@ class BenchMixin(object):
     def _start_bench_test(self, render_only=False, probe="full", pin_cpu=True):
         """开始性能测试(菜单点"开始测试"后)。"""
         from ..bench.low_runtime import ACTIVE
+        if getattr(self, '_playtest', None) is not None:
+            return
         if ACTIVE[0] is not None and ACTIVE[0].active or self.game._bench_running:
             return
         self._low_original_balance = self.game.balance if render_only else None
@@ -1852,64 +1860,6 @@ class BenchMixin(object):
             _set_label_text(self.status_lbl, "采样无效：" + reason)
         else:
             _TEXUPD_ACTIVE[0] = False
-
-    def start_gameplay_capture(self, probe="light", watchdog_sec=120.0):
-        """Read-only normal-play capture; leaves input, board, RNG and affinity alone."""
-        from ..bench.low_runtime import ACTIVE
-        if self.game._bench_running or ACTIVE[0] is not None:
-            return False
-        self._flip_times, self._bench_frames, self._bench_tex = [], [], []
-        self._bench_cpu_prev = time.process_time()
-        self._bench_thr_prev = _THREAD_TIME()
-        self._bench_tex_prev = _TEXUPD[0]
-        _FRAME_BRK.clear()
-        _FRAME_SELF[0] = _FRAME_SWAP[0] = 0.0
-        _TEXUPD_ACTIVE[0] = probe == "full"
-        self._low_begin("normal", probe, watchdog_sec)
-        Window.bind(on_flip=self._on_flip)
-        return True
-
-    def stop_gameplay_capture(self):
-        capture = getattr(self, "_low_capture", None)
-        if capture is not None and capture.active and capture.mode == "normal":
-            self._low_freeze()
-            Window.unbind(on_flip=self._on_flip)
-            _TEXUPD_ACTIVE[0] = False
-
-    def export_low_capture(self, path):
-        capture = getattr(self, "_low_capture", None)
-        if capture is None:
-            raise RuntimeError("no capture")
-        capture.export(path)
-        return path
-
-    def _show_low_capture_menu(self):
-        content = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(12))
-        popup = self._popup(0.92, 360, title="应用侧帧采样", content=content)
-        actions = [("五发轻采样（不锁核）", lambda: self._start_bench_test(True, "light", False)),
-                   ("五发完整诊断（不锁核）", lambda: self._start_bench_test(True, "full", False)),
-                   ("普通游玩开始轻采样", lambda: self.start_gameplay_capture()),
-                   ("普通游玩结束采样", self.stop_gameplay_capture),
-                   ("导出具名 JSON", self._low_export_menu)]
-        for label, action in actions:
-            btn = Button(text=label, size_hint_y=None, height=dp(48))
-            btn.bind(on_release=lambda *_, action=action: (popup.dismiss(), action()))
-            content.add_widget(btn)
-        popup.open()
-        self._popup_fit_content(popup, content)
-
-    def _low_export_menu(self):
-        import os
-        from kivy.app import App
-        try:
-            if getattr(self, "_low_capture", None) is None:
-                raise RuntimeError("尚无采样")
-            path = os.path.join(App.get_running_app().user_data_dir,
-                                "low_" + self._low_capture.meta["session_id"] + ".json")
-            self.export_low_capture(path)
-            _set_label_text(self.status_lbl, "采样已保存：" + path)
-        except RuntimeError as exc:
-            _set_label_text(self.status_lbl, str(exc))
 
     def _bench_gc_listen(self, enabled):
         """异常退出留下的回调也先清除，避免下一轮把 GC 次数和耗时重复统计。"""
