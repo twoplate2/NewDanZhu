@@ -992,10 +992,10 @@ class BenchMixin(object):
         #       玩家读成"颜色好乱"。代价是**同一行里分不出"行动"和"历史"** —— 玩家明确选的取舍。
         #    ⚠️ `COL_DARKRED` / `COL_SOC_DIM` / `COL_BTN_OFF` 在本文件别处仍在用(其它弹窗的
         #       取消/返回/关闭), **不要因为它们在这里不用了就删掉**。
-        start_btn = Button(text='开始模拟测试', font_size='17sp', bold=True,
+        start_btn = Button(text='快速全面测试', font_size='17sp', bold=True,
                            background_normal='', background_color=hex_rgb(COL_FIRE) + (1,),
                            size_hint_y=None, height=dp(52))
-        hist_btn = Button(text='查看模拟历史', font_size='17sp', bold=True,
+        hist_btn = Button(text='快速测试历史', font_size='17sp', bold=True,
                           background_normal='', background_color=hex_rgb(COL_FIRE) + (1,),
                           size_hint_y=None, height=dp(52))
         hp_btn = Button(text='CPU高压测试', font_size='17sp', bold=True,
