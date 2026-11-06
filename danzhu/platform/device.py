@@ -44,6 +44,9 @@ _ACT_CLS = [None]
 _SETTINGS_CLS = [None]
 _SDK_LEVEL = [None]
 _DISPLAY_APPLIER = [None]
+# 仅数值，不持有Activity/Window/Display/Mode的JNI对象。弹窗突发请求最多复用1秒。
+_DISPLAY_MODE_CACHE = [None]
+_DISPLAY_MODE_CACHE_SECONDS = 1.0
 
 
 def _cpufreq_cores():
@@ -217,7 +220,7 @@ def _screen_hz():
         return None
 
 
-def _request_android_high_hz():
+def _request_android_high_hz(reuse_modes=False):
     """按"屏幕支持、Android 系统上限、用户档位"三者最小值请求显示模式。
 
     `Window.setFrameRate(target)`(API 30+)告诉系统此窗口的期望节拍; `preferredDisplayModeId`
@@ -239,13 +242,24 @@ def _request_android_high_hz():
         display = window.getWindowManager().getDefaultDisplay()
         current = display.getMode()
         cw, ch = int(current.getPhysicalWidth()), int(current.getPhysicalHeight())
-        modes = list(display.getSupportedModes())
-        same_size = [m for m in modes
-                     if int(m.getPhysicalWidth()) == cw and int(m.getPhysicalHeight()) == ch]
+        key = (int(display.getDisplayId()), cw, ch)
+        now = time.monotonic()
+        cached = _DISPLAY_MODE_CACHE[0]
+        if (reuse_modes and cached is not None and cached[0] == key
+                and 0 <= now - cached[1] < _DISPLAY_MODE_CACHE_SECONDS):
+            modes = cached[2]
+        else:
+            _DISPLAY_MODE_CACHE[0] = None
+            modes = tuple((int(m.getModeId()), int(m.getPhysicalWidth()),
+                           int(m.getPhysicalHeight()), float(m.getRefreshRate()))
+                          for m in display.getSupportedModes())
+            if modes:
+                _DISPLAY_MODE_CACHE[0] = (key, now, modes)
+        same_size = [m for m in modes if m[1] == cw and m[2] == ch]
         candidates = same_size or modes
 
         def hz(mode):
-            return float(mode.getRefreshRate())
+            return mode[3]
 
         screen_cap = max((hz(m) for m in candidates), default=0.0)
         system_cap = _android_system_fps_cap(activity)
@@ -267,7 +281,7 @@ def _request_android_high_hz():
         # 不绕过 Android 系统的峰值刷新率设定。
         chosen = (max(at_or_below, key=hz) if at_or_below else
                   min(candidates, key=hz) if candidates else None)
-        mode_id = int(chosen.getModeId()) if chosen is not None else 0
+        mode_id = chosen[0] if chosen is not None else 0
         mode_hz = hz(chosen) if chosen is not None else 0.0
         target = min(target, mode_hz) if mode_hz > 0.0 else target
         sdk = _SDK_LEVEL[0]
@@ -275,6 +289,7 @@ def _request_android_high_hz():
         _display_applier()(window, mode_id, mode_hz, sdk)
         return (mode_hz, target)
     except Exception:
+        _DISPLAY_MODE_CACHE[0] = None
         return (0.0, float(_fps_user_cap()))
 
 
@@ -356,10 +371,10 @@ def _bench_fps_lock_off(phys=False):
             pass
 
 
-def _apply_fps_cap():
-    """重申实际帧率上限 = min(屏幕支持, Android系统上限, 用户设定)。"""
+def _apply_fps_cap(reuse_modes=False):
+    """重申实际上限；启动、恢复、设置和benchmark默认完整重查，弹窗可短时复用模式表。"""
     hz = _screen_hz()               # 只用于面板显示
-    requested_hz, cap = _request_android_high_hz()
+    requested_hz, cap = _request_android_high_hz(reuse_modes=reuse_modes)
     try:
         cap = float(cap)
     except Exception:

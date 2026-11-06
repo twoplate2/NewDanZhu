@@ -100,7 +100,8 @@ class PlaytestMixin:
                                       stats_execution='worker',number_rendering='glyph_atlas',
                                       round_end_popup='cached_prewarmed_static_and_atlas_numbers',
                                       text_measurement='single_line_extents_without_texture',
-                                      display_request='cached_classes_and_argument_queue',
+                                      display_request='cached_classes_argument_queue_and_1s_mode_catalog',
+                                      popup_refresh_policy='shared_100ms_leading_350ms_trailing',
                                       gc_enabled=simulation.gc_enabled,gc_manual_only=simulation.gc_manual_only,
                                       gc_manual_interval_s=60,
                                       gc_policy=('disabled' if not simulation.gc_enabled else

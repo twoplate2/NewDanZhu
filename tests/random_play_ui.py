@@ -141,6 +141,8 @@ def main():
             assert report['diagnostics']['core_frame_count']==report['metrics']['frame_count']
             assert report['diagnostics']['cases']
             assert report['settings']['overlay_visible_default'] is False
+            assert report['settings']['popup_refresh_policy']=='shared_100ms_leading_350ms_trailing'
+            assert report['settings']['display_request']=='cached_classes_argument_queue_and_1s_mode_catalog'
             assert [e['visible'] for e in report['display_events'] if e['event']=='request']==[True,False]
             assert [e['visible'] for e in report['display_events'] if e['event']=='display']==[True,False]
             assert report['low_0_1pct_groups']

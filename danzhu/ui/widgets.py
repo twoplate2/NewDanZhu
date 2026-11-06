@@ -30,6 +30,7 @@ from kivy.utils import platform
 from ..config import (COL_BALL, COL_BTN_OFF, COL_FIRE, COL_GRAY, COL_SUB,
                       hex_rgb)
 from ..platform.device import _device_is_wide
+from ..platform.refresh_burst import RefreshBurst
 from .text import (_GLYPH_ATLAS, _GLYPH_HIT, _GLYPH_MAX_CHARS, _GLYPH_MISS,
                    _GLYPH_WAITERS, _GLYPH_WAIT_MAX, _glyph_chars_ok, _glyph_warm_done,
                    _POPUP_N, _glyph_key, _glyph_quads, _glyph_rec, _brk_add)
@@ -145,28 +146,34 @@ class LandLayer(FloatLayout):
         return self._pass_touch(super().on_touch_up, touch)
 
 
+def _apply_popup_refresh(delayed):
+    stamp = time.perf_counter()
+    try:
+        from ..platform.device import _apply_fps_cap
+        _apply_fps_cap(reuse_modes=True)
+    except Exception:
+        pass
+    finally:
+        # 覆盖关闭路径和Clock延迟回调，不再只测open()里的第一次请求。
+        _brk_add('弹窗高刷延迟' if delayed else '弹窗高刷立即', stamp)
+
+
+_POPUP_REFRESH_BURST = RefreshBurst(_apply_popup_refresh, Clock.schedule_once, time.perf_counter)
+
+
 class RotPopup(Popup):
     """挂 LandLayer 的 Popup: 横屏时随层旋转, 坐标系统一为等效竖屏窗口。
     Kivy 2.3 `ModalView.open()` 硬编码挂 Window, 这里照抄其 open/_real_remove_widget
     把宿主换成旋转层(层无 on_resize/on_keyboard 事件, bind 静默无害)。竖屏回落原生行为。"""
 
     def _reassert_high_refresh(self, *_):
-        """弹窗切换后重申高刷新率: 自适应刷新率设备会把静态 Modal 降回 60Hz。"""
+        """所有弹窗共用：100ms内合并立即请求，末次切换350ms后补一次。"""
         if platform != "android":
             return
         try:
-            # ⚠️ 归属表没把 platform/device.py 列为本模块的依赖, 故延迟到老版求值的那一点
-            #    再取(`platform != "android"` 时老版根本不会查这个名字)。
-            from ..platform.device import _apply_fps_cap
-            _apply_fps_cap()
+            _POPUP_REFRESH_BURST.request()
         except Exception:
-            return
-        # Popup 的淡入/淡出会在下一小段时间才真正提交到 Surface; 稳定后再请求一次,
-        # 防止系统在布局切换时覆盖 Window 的 frame-rate / display-mode 偏好。
-        try:
-            Clock.schedule_once(lambda *_: _apply_fps_cap(), 0.35)
-        except Exception:
-            pass
+            pass  # Clock已停止等生命周期边界不能阻止弹窗打开/关闭。
 
     def _arm_high_refresh(self):
         self._reassert_high_refresh()
