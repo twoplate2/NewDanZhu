@@ -915,8 +915,8 @@ def _soc_result_title():
 
 
 def _bench_result_title():
-    """快速全面测试完成后的结果窗口标题。"""
-    return "快速全面测试结果"
+    """快速测试完成后的结果窗口标题。"""
+    return "快速测试结果"
 
 
 def _bench_score_text(d):

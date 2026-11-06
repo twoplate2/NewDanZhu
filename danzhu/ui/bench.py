@@ -33,6 +33,7 @@ import json
 import math
 import os
 import random
+import re
 import sys
 import tempfile
 import threading
@@ -175,16 +176,46 @@ def _flight_segments(frames):
     return [s for s in segs if s[0] > 0]
 
 
-def _bench_menu_desc():
-    """测试菜单说明；每项标题与正文连续排版，窄屏自然换行。"""
+def _bench_menu_desc(width=None, font_size=None):
+    """按实际字宽断行，避免 SDL 把整段中文或 markup 后的正文移到下一行。"""
     color = COL_BALL.lstrip('#')
     rows = (
-        ('快速全面测试：', '在 100 秒内完成画面流畅度与 CPU 单核浮点性能测试。'),
+        ('快速测试：', '在100秒内完成画面流畅度与 CPU 单核浮点性能测试。'),
         ('CPU 高压测试：', '持续进行满载单核浮点计算，考验设备散热，记录性能、温度、功耗和频率变化。'),
         ('帧率测试：', '查看游戏运行期间的帧率、1% Low 帧、功耗和温度信息。'),
     )
-    return '\n'.join('[color=%s][b]%s[/b][/color]%s' % (color, title, body)
-                     for title, body in rows)
+
+    def render(parts):
+        return ''.join('[color=%s][b]%s[/b][/color]' % (color, text) if bold else text
+                       for text, bold in parts)
+
+    if width is None or font_size is None:
+        return '\n'.join(render([(title, True), (body, False)]) for title, body in rows)
+
+    def measured(parts):
+        # 同一字重合起来测量，保留英文 kerning；不要把字符宽度简单相加。
+        return sum(text_px(''.join(text for text, style in parts if style == bold),
+                           font_size, bold=bold) for bold in (True, False))
+
+    lines = []
+    limit = max(1., float(width) - 2.)  # 留出 SDL 整数像素取整余量。
+    for title, body in rows:
+        tokens = []
+        for token in re.findall(r'1% Low 帧|CPU|\d+秒|功耗|温度|频率|性能|测试|信息|记录|计算|散热|.', body):
+            if token in '，。、：；！？' and tokens:
+                tokens[-1] += token  # 标点不单独跑到下一行开头。
+            else:
+                tokens.append(token)
+        line = [(title, True)]
+        for token in tokens:
+            if line and measured(line + [(token, False)]) > limit:
+                lines.append(render(line).rstrip())
+                line = []
+            if line or not token.isspace():
+                line.append((token, False))
+        if line:
+            lines.append(render(line).rstrip())
+    return '\n'.join(lines)
 
 
 class BenchMixin(object):
@@ -970,6 +1001,10 @@ class BenchMixin(object):
                          color=hex_rgb(COL_SUB) + (1,), size_hint_y=None, height=dp(170))
         # 说明高度按实际折行计算，不强行把一项压成屏幕上的单行。
         self._auto_h(desc_lbl, dp(120), dp(8))
+        def reflow_description(label, *_):
+            label.text = _bench_menu_desc(label.width, label.font_size)
+        desc_lbl.bind(width=reflow_description, font_size=reflow_description)
+        reflow_description(desc_lbl)
         content.add_widget(desc_lbl)
         # ⚠️ **按系配色 + 按系排序**(**3 系, 同类同色系**):
         #      模拟(性能测试): 红系 `COL_FIRE` / CPU 高压: 琥珀系 `COL_SOC` / 信息: `COL_BTN`
@@ -977,7 +1012,7 @@ class BenchMixin(object):
         #       玩家读成"颜色好乱"。代价是**同一行里分不出"行动"和"历史"** —— 玩家明确选的取舍。
         #    ⚠️ `COL_DARKRED` / `COL_SOC_DIM` / `COL_BTN_OFF` 在本文件别处仍在用(其它弹窗的
         #       取消/返回/关闭), **不要因为它们在这里不用了就删掉**。
-        start_btn = Button(text='快速全面测试', font_size='17sp', bold=True,
+        start_btn = Button(text='开始快速测试', font_size='17sp', bold=True,
                            background_normal='', background_color=hex_rgb(COL_FIRE) + (1,),
                            size_hint_y=None, height=dp(52))
         hist_btn = Button(text='快速测试历史', font_size='17sp', bold=True,
@@ -1630,7 +1665,7 @@ class BenchMixin(object):
         #    (玩家原话:「都是*100 这个明显不合理」), 一直挂到下一次发射才自愈。
         self._bench_save_board()
         ver = _app_version()
-        self._status_message(("快速全面测试中 " + ver) if ver else "快速全面测试中…")
+        self._status_message(("快速测试中 " + ver) if ver else "快速测试中…")
         # ⚠️ 走 `game._controls`(状态位 + 染色一起), 理由见 `_start_hp_test`。
         #    老版对应点: main.py 的 `_start_bench_test` 里那句 `_set_controls_enabled(False)`。
         self._act(self.game._controls, False)
@@ -5046,7 +5081,7 @@ class BenchMixin(object):
         return self._show_history_table("快速测试历史",_HIST_COLS,records,cells,
             self._show_bench_detail,self._clear_bench_history,
             "平均分：物理引擎每秒模拟步数的平均值\n平均差系数：平均差 ÷ 平均值，越小越稳",
-            "暂无快速测试记录\n\n在性能测试菜单中选择「快速全面测试」")
+            "暂无快速测试记录\n\n在性能测试菜单中选择「开始快速测试」")
 
     def _clear_bench_history(self):
         """清空「快速测试历史」——**不可逆, 所以必须先过一道确认**。
