@@ -95,6 +95,8 @@ class PlaytestMixin:
                                       big_result_widget_pool='two_pairs_per_renderer',
                                       cup_draw_updates='changed_properties_only',
                                       pile_layout='three_bases_four_rotations_shuffle_bag',
+                                      small_pile_layout='floor_spread_10_20_fixed_radius',
+                                      cup_material='porcelain_06_02',
                                       current_fps_window_s=10,minimum_fps_window_s=1,
                                       gap_before_refresh_s=.3,gap_after_refresh_s=.3,
                                       stats_execution='worker',number_rendering='glyph_atlas',

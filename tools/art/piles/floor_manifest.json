@@ -1,0 +1,170 @@
+{
+  "10:0": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 106.75527379111536,
+    "wall_clearance": 1.950053136005728,
+    "floor_supported": 10
+  },
+  "20:0": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.4817620809055,
+    "wall_clearance": 1.950053136005728,
+    "floor_supported": 20
+  },
+  "10:1": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 100.53673009405965,
+    "wall_clearance": 1.9528253447879038,
+    "floor_supported": 10
+  },
+  "20:1": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.47980020811846,
+    "wall_clearance": 1.9528253447879038,
+    "floor_supported": 20
+  },
+  "10:2": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 109.38421222847884,
+    "wall_clearance": 1.9576998832998882,
+    "floor_supported": 10
+  },
+  "20:2": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.48434370618988,
+    "wall_clearance": 1.9574528672858165,
+    "floor_supported": 20
+  },
+  "10:3": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 106.75527426486855,
+    "wall_clearance": 1.9500555560831927,
+    "floor_supported": 10
+  },
+  "20:3": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.48176980389826,
+    "wall_clearance": 1.9500555560831927,
+    "floor_supported": 20
+  },
+  "10:4": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 100.53673684506077,
+    "wall_clearance": 1.9528244770341772,
+    "floor_supported": 10
+  },
+  "20:4": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.47979853763343,
+    "wall_clearance": 1.9528244770341772,
+    "floor_supported": 20
+  },
+  "10:5": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 109.38421976988546,
+    "wall_clearance": 1.9576928364039148,
+    "floor_supported": 10
+  },
+  "20:5": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.48433157407278,
+    "wall_clearance": 1.957455033559178,
+    "floor_supported": 20
+  },
+  "10:6": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 106.75527589891237,
+    "wall_clearance": 1.950060373224126,
+    "floor_supported": 10
+  },
+  "20:6": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.48175941384237,
+    "wall_clearance": 1.950060373224126,
+    "floor_supported": 20
+  },
+  "10:7": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 100.53673876731082,
+    "wall_clearance": 1.9528302106286404,
+    "floor_supported": 10
+  },
+  "20:7": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.47979859384323,
+    "wall_clearance": 1.9528302106286404,
+    "floor_supported": 20
+  },
+  "10:8": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 109.3842166739576,
+    "wall_clearance": 1.9576933783492407,
+    "floor_supported": 10
+  },
+  "20:8": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.4843300688192,
+    "wall_clearance": 1.9574537346408718,
+    "floor_supported": 20
+  },
+  "10:9": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 106.75527964542177,
+    "wall_clearance": 1.9500605795583752,
+    "floor_supported": 10
+  },
+  "20:9": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.4817695018564,
+    "wall_clearance": 1.9500605795583752,
+    "floor_supported": 20
+  },
+  "10:10": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 100.53673957604005,
+    "wall_clearance": 1.9528251772597756,
+    "floor_supported": 10
+  },
+  "20:10": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.4797976676715,
+    "wall_clearance": 1.9528251772597756,
+    "floor_supported": 20
+  },
+  "10:11": {
+    "count": 10,
+    "radius": 50.233,
+    "min_separation": 109.38420724253615,
+    "wall_clearance": 1.9576970364731565,
+    "floor_supported": 10
+  },
+  "20:11": {
+    "count": 20,
+    "radius": 50.233,
+    "min_separation": 100.48434612386201,
+    "wall_clearance": 1.9574489620691864,
+    "floor_supported": 20
+  }
+}

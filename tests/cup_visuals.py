@@ -67,7 +67,8 @@ class CupVisualTests(unittest.TestCase):
                 target_sat=colorsys.rgb_to_hsv(*target)[1]
                 center_sat=colorsys.rgb_to_hsv(r/255,g/255,b/255)[1]
                 self.assertLess(abs(center_sat-target_sat),.06)
-                for xy in ((128,128),(64,70),(179,160)):
+                # 06-02保留主体/暗部色相；亮斑存在选型页原有通道截顶，改由下方浏览器金样精确验证。
+                for xy in ((128,128),(179,160)):
                     rgb=image.getpixel(xy)[:3]
                     hue=colorsys.rgb_to_hsv(*(c/255 for c in rgb))[0]
                     delta=abs(hue-target_hue)
@@ -75,6 +76,25 @@ class CupVisualTests(unittest.TestCase):
             W._CUP_BALL_TEX.pop(bet,None)
             with patch.object(W,"_bake_begin",side_effect=AssertionError("runtime bake")):
                 self.assertIsNotNone(W._ball_texture(bet))
+
+    def test_selected_html_material_pixels_and_runtime_fallback(self):
+        import hashlib
+        import json
+        from PIL import Image
+        root=Path(__file__).resolve().parents[1]
+        reference=json.loads((root/'tools/art/cup_materials/porcelain_06_02_reference.json').read_text(encoding='utf-8-sig'))
+        for bet in W.BET_COLORS:
+            with Image.open(Path(W._ASSET_BALLS)/('cup_%d.png'%bet)) as source:
+                image=source.convert('RGBA');pixels=bytearray(image.tobytes())
+                alpha=image.getchannel('A').tobytes()
+                for i,a in enumerate(alpha):
+                    if a!=255:pixels[i*4:i*4+4]=bytes(4)
+                # 浏览器在半透明边缘有预乘舍入：比较全部不透明像素，以及完整alpha轮廓。
+                self.assertEqual(hashlib.sha256(pixels).hexdigest(),reference[str(bet)]['opaque_rgba_sha256'])
+                self.assertEqual(hashlib.sha256(alpha).hexdigest(),reference[str(bet)]['alpha_sha256'])
+                job=W._bake_begin(bet)
+                while job['done']<512:W._bake_advance(job,7)
+                self.assertEqual(bytes(job['buf']),image.transpose(Image.Transpose.FLIP_TOP_BOTTOM).tobytes())
 
     def test_glass_fill_seam_softened_without_removing_rim(self):
         from PIL import Image

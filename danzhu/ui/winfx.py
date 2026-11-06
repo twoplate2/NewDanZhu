@@ -25,6 +25,7 @@ from ..audio.backend import _FRAME_PROBE
 from ..config import (BENCH_SEED, CH, CW, DEFAULT_BET, DIM_ALPHA, DIM_RGB, hex_rgb)
 from ..fx.pile import (CX, DESIGN_H, DESIGN_W, FLOOR_Y, K2, RIM_Y, PileSpec,
                        build_pile, halfwidth, project_pile)
+from ..fx.porcelain import pigment as _porcelain_pigment, render_rows as _porcelain_rows
 from ..platform.boot import _boot_log
 from ..platform.device import _guard_warm, _vib_warm, _vibrate_tick
 from .text import (_BALL_RIM_K, _BALL_BAND_W, _BALL_BAND_S, _BALL_BAND_SPAN, FIT_SCALES, _FRAME_FIT, _FONT_WARM_ALL, _PIN_CAND, _PIN_DONE,
@@ -313,8 +314,7 @@ _PILE_ROT_STEP = 137.508
 def _r_dp_for(n):
     """球半径(dp)。**所有档同一个值** —— 玩家定稿: 「球一样大」。
 
-    ⚠️ 唯一例外是 **x20**: 它走"土丘"堆法(count<35), 容量小, 兜底缩到 r=44.4 ——
-       那是它的上限, 不是没调好。
+    10/20颗正常查新铺底表，固定r=50.233。仅新表缺失时的旧x20土丘回退会缩到r=44.4。
     ⚠️ 别改回"按颗数分级": 那套值是容量兜底的产物, 会让中得少的档球反而大。
     """
     return 27.0
@@ -384,24 +384,16 @@ def _mix_rgb(a, b, amount):
 
 def _bake_begin(bet):
     """开一份烘焙作业: 算色标、开缓冲、把第二阶段的常量先算好。"""
-    if bet not in BET_COLORS:                       # 未知档回退金球, 不 KeyError
-        stops = [(0.00, (254, 240, 138)), (0.20, (250, 220, 80)),
-                 (0.40, (234, 179, 8)), (0.65, (202, 138, 4)),
-                 (0.82, (172, 108, 9)), (0.92, (128, 69, 8)),
-                 (0.965, (84, 42, 5)), (0.985, (46, 22, 3)),
-                 (0.99, (36, 16, 2))]
-    else:
-        base = tuple(int(c * 255) for c in hex_rgb(BET_COLORS[bet]))
-        stops = [(0.00, _mix_rgb(base, (255, 255, 255), 0.64)),
-                 (0.20, _mix_rgb(base, (255, 255, 255), 0.42)),
-                 (0.40, _mix_rgb(base, (255, 255, 255), 0.18)),
-                 (0.65, _mix_rgb(base, (0, 0, 0), 0.16)),
-                 (0.82, _mix_rgb(base, (0, 0, 0), 0.34)),
-                 (0.92, _mix_rgb(base, (0, 0, 0), 0.56)),
-                 (0.965, _mix_rgb(base, (0, 0, 0), 0.74)),
-                 (0.985, _mix_rgb(base, (0, 0, 0), 0.88)),
-                 (0.99, _mix_rgb(base, (0, 0, 0), 0.92))]
-    # ⚠️ 未知档的金球与投注色两个分支都要过这一行, 所以必须放在 if/else **之后**。
+    if bet in BET_COLORS:
+        d = _CUP_BALL_TEX_PX
+        return {"d":d, "porcelain":_porcelain_pigment(BET_COLORS[bet]),
+                "buf":bytearray(d*d*4), "done":0, "total_ms":0., "worst_ms":0., "steps":0}
+    # 非常规投注档保留原金球回退。
+    stops = [(0.00, (254, 240, 138)), (0.20, (250, 220, 80)),
+             (0.40, (234, 179, 8)), (0.65, (202, 138, 4)),
+             (0.82, (172, 108, 9)), (0.92, (128, 69, 8)),
+             (0.965, (84, 42, 5)), (0.985, (46, 22, 3)),
+             (0.99, (36, 16, 2))]
     stops = [(p if p <= 0.40 else 1.0 - (1.0 - p) * _BALL_RIM_K, c) for (p, c) in stops]
     d = _CUP_BALL_TEX_PX
     ba = math.radians(-32.0)
@@ -416,6 +408,14 @@ def _bake_advance(job, n):
     """把烘焙推进 `n` 行(第一阶段 d 行 → 第二阶段 d 行), 返回已算完的行数。"""
     d = job["d"]
     buf = job["buf"]
+    if "porcelain" in job:
+        start = min(d, job["done"])
+        end = min(d, job["done"]+n)
+        if end > start:
+            buf[start*d*4:end*d*4] = _porcelain_rows(job["porcelain"], start, end, d, bottom_up=True)
+        # 保留两阶段进度协议，避免改变资源预热/分块调用方。
+        job["done"] = min(2*d, job["done"]+n)
+        return job["done"]
     r = job["r"]
     stops = job["stops"]
     band_c = job["band_c"]
@@ -550,6 +550,17 @@ def _beads_from_baked(count, v):
     ⚠️ 表里存的是**球心坐标**, 不是投影结果 —— 投影仍走 project_pile, 这样改 K2/CX/FLOOR_Y
        不用重烘。
     """
+    if count in (10,20):
+        try:
+            from ..fx.floor_pile_data import DATA as floor_data, RADIUS
+            points = floor_data[count,v]
+            if (len(points)==count and RADIUS==_PILE_BAKED_R[10]
+                    and all(math.isfinite(a) for p in points for a in p)
+                    and all(abs(h-RADIUS)<.001 and math.hypot(x,z)<=halfwidth(h)-RADIUS
+                            for x,z,h in points)):
+                return [dict(x=x,z=z,h=h,layer=0,r=RADIUS,natural=True) for x,z,h in points]
+        except (ImportError,KeyError,TypeError,ValueError):
+            pass  # 损坏时保留旧表及其原半径，不能用大半径强套旧20颗坐标。
     if count in (50,100):
         try:
             from ..fx.natural_pile_data import DATA,RADII

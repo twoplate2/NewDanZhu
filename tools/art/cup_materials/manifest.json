@@ -1,6 +1,6 @@
 {
   "tool": "Kivy offline FBO shader (runtime sprites); built-in image_gen (archived v1/v2 sources)",
-  "runtime_material": "procedural offline opaque satin; historical palette in linear-light shading; archived imagegen sources retained for comparison only",
+  "runtime_material": "user selected HTML round2 06-02 opaque porcelain, softer highlight edge",
   "palette_reference": {
     "commit": "da3f8be",
     "version": "0.8.132",
@@ -12,7 +12,7 @@
       "50": "#e0533b",
       "100": "#a335ee"
     },
-    "method": "one shared opaque-satin lighting model for all four historical pigment colors; diffuse and compact soft specular calculated in linear light, then encoded to sRGB; fixed light, opaque circular body, 1px antialias edge; no source-image exposure stacking"
+    "method": "shared 06-02 porcelain lighting; same historical pigments for all four colors"
   },
   "sources": {
     "1": "v2/source_1.png",
@@ -38,8 +38,8 @@
     }
   ],
   "sprite_preparation": {
-    "material_model": "satin",
-    "specular": 0.2,
+    "material_model": "porcelain_06_02",
+    "specular": 0.19,
     "output_size": [
       256,
       256
@@ -47,8 +47,21 @@
     "body_alpha": "opaque",
     "edge_feather_pixels": 1,
     "runtime_size_unchanged": true,
-    "purpose": "shared linear-light diffuse and compact soft specular; historical pigments, no source-image tint/exposure stack or artificial contour",
-    "lighting_source": "tools/cup_satin_material.py"
+    "purpose": "exact HTML 06-02 RGB/alpha; offline PNG and missing-asset fallback share implementation",
+    "lighting_source": "danzhu/fx/porcelain.py",
+    "selected_style": "06-02",
+    "selected_parameters": {
+      "ambient": 0.29,
+      "diffuse": 0.82,
+      "specular": 0.19,
+      "exponent": 22,
+      "highlight_tint": 0.35,
+      "fill": 0.05,
+      "wrap": 0.04,
+      "saturation": 1.08,
+      "edge": 0.035
+    },
+    "reference_validation": "porcelain_06_02_reference.json; browser opaque RGB and complete alpha hashes"
   },
   "legacy_source_preparation": {
     "source_rim_inset_per_side": 0.003,
