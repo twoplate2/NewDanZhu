@@ -16,6 +16,7 @@ from cup_satin_material import fragment as satin_fragment
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from danzhu.fx.porcelain import pigment, render_rows
+from danzhu.fx import porcelain_i
 os.environ.setdefault("KIVY_NO_ARGS", "1")
 from kivy.core.window import Window
 from kivy.core.image import Image as CoreImage
@@ -87,7 +88,7 @@ def main():
     parser.add_argument("--glass-output", type=Path, default=ROOT/"assets/glass")
     parser.add_argument("--midtone-lift", type=float, default=None)
     parser.add_argument("--body-fill", type=float, default=None)
-    parser.add_argument("--material-model", choices=("source","satin","porcelain_06_02"),default=None)
+    parser.add_argument("--material-model", choices=("source","satin","porcelain_06_02","porcelain_I"),default=None)
     parser.add_argument("--specular",type=float,default=None)
     args = parser.parse_args()
     source_dir = args.manifest.resolve().parent
@@ -112,6 +113,13 @@ def main():
     for bet,name in manifest["sources"].items():
         color=palette.get(bet)
         target_color=tuple(int(color[i:i+2],16)/255.0 for i in (1,3,5)) if color else None
+        if material=="porcelain_I":
+            if not color:raise ValueError("porcelain I material needs a palette color")
+            path=target/("cup_%s.png" % bet)
+            size=porcelain_i.SIZE
+            Image.frombytes('RGBA',(size,size),porcelain_i.render_rows(porcelain_i.pigment(color),0,size)).save(path)
+            print(path,path.stat().st_size,"bytes")
+            continue
         if material=="porcelain_06_02":
             if not color:raise ValueError("porcelain material needs a palette color")
             path=target/("cup_%s.png" % bet)

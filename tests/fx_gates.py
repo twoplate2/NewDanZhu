@@ -262,7 +262,7 @@ def main():
         except Exception as exc:                      # noqa: BLE001
             check(False, "球贴图 %s 可生成" % _nm, repr(exc))
             continue
-        _size = 128 if _nm == "主球" else 256
+        _size = 128 if _nm == "主球" else 512
         check(tuple(_t.size) == (_size, _size), "球贴图 %s 画布 %dx%d" % (_nm, _size, _size), str(tuple(_t.size)))
         check(_t.mag_filter == "linear" and "_mipmap_" in _t.min_filter,
               "球贴图 %s 必须开 mipmap" % _nm,

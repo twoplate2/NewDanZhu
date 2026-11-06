@@ -89,6 +89,7 @@ def main():
     W._ball_texture=lambda bet,rows=None: textures[bet] if bet in textures else original_texture(bet,rows)
     if args.no_occlusion:
         W.WinPileFX._ball_exposure=lambda self,ball: 1.0
+        W.WinPileFX._shadow_alpha=lambda self,ball,levels=None: 0.0
     cases=[(bet,count,phase) for bet in textures for count in map(int,args.counts.split(","))
            for phase in args.phases.split(",")]
     records=[]
@@ -103,6 +104,8 @@ def main():
             if args.size and tuple(Window.size)!=tuple(map(int,args.size.split(','))):
                 raise RuntimeError("preview window size differs from requested size")
             Clock.unschedule(self.rootw._frame_timed)
+            for count in map(int,args.counts.split(',')):
+                W.cup_shadows.warm(count,args.variant)
             self.rootw.game.multipliers=[5,2,2,3,2,20,2,2,5]
             self.next_case(0)
 
@@ -155,6 +158,7 @@ def main():
                              glass=args.glass,occlusion=not args.no_occlusion,
                              moment=moment,
                              variant=args.variant,
+                             local_shadow_balls=sum('shadow_texture' in b for b in fx._balls),
                              last_settle=fx._last_settle,
                              deadline_safe=W.WINDUP+fx._last_settle+W.HOLD_BASE<W.FX_MAX_SEC,
                              scene_sha256=hashlib.sha256(json.dumps(layout).encode()).hexdigest(),

@@ -26,7 +26,7 @@ class CupVisualTests(unittest.TestCase):
         for tex in textures:
             self.assertTrue(tex.mipmap)
             self.assertEqual(tex.min_filter, "linear_mipmap_linear")
-        self.assertEqual(W._ball_texture(100).size, (256, 256))
+        self.assertEqual(W._ball_texture(100).size, (512, 512))
         self.assertIs(W._ball_texture(100), W._ball_texture(100))
 
     def test_fallback_chunked_bake_matches_full_bake(self):
@@ -44,31 +44,32 @@ class CupVisualTests(unittest.TestCase):
         for bet in W.BET_COLORS:
             with Image.open(Path(W._ASSET_BALLS)/("cup_%d.png" % bet)) as source:
                 image=source.convert("RGBA")
-                self.assertEqual(image.size,(256,256))
+                self.assertEqual(image.size,(512,512))
                 alpha=image.getchannel("A")
                 self.assertEqual(alpha.getpixel((0,0)),0)
-                self.assertGreater(alpha.getpixel((128,128)),240)
-                for y in range(16,241,8):
-                    for x in range(16,241,8):
-                        if (x-127.5)**2+(y-127.5)**2 < 118**2:
+                self.assertGreater(alpha.getpixel((256,256)),240)
+                for y in range(32,481,16):
+                    for x in range(32,481,16):
+                        if (x-255.5)**2+(y-255.5)**2 < 236**2:
                             self.assertEqual(alpha.getpixel((x,y)),255)
                 self.assertGreater(sum(0<a<255 for a in alpha.getdata()),200)
                 x0,y0,x1,y1=alpha.point(lambda x:255 if x>=128 else 0).getbbox()
                 self.assertLess(abs((x1-x0)-(y1-y0)),4)
-                self.assertGreater(x1-x0,248)
-                r,g,b,_=image.getpixel((128,128))
+                self.assertGreater(x1-x0,504)
+                r,g,b,_=image.getpixel((256,256))
                 if bet==1:self.assertGreater(g,r)
                 elif bet==10:self.assertGreater(b,r)
                 elif bet==50:self.assertGreater(r,b)
                 else:self.assertGreater(min(r,b),g)
-                # 仅判断 r>b 会漏过酒红/紫红；必须与历史投注色板的色相一致。
-                target=W.hex_rgb(W.BET_COLORS[bet])
+                # 仅判断 r>b 会漏过酒红/紫红；必须与选定I方案的修订颜料色相一致。
+                from danzhu.fx.porcelain_i import pigment
+                target=tuple(c/255 for c in pigment(W.BET_COLORS[bet]))
                 target_hue=colorsys.rgb_to_hsv(*target)[0]
                 target_sat=colorsys.rgb_to_hsv(*target)[1]
                 center_sat=colorsys.rgb_to_hsv(r/255,g/255,b/255)[1]
                 self.assertLess(abs(center_sat-target_sat),.06)
-                # 06-02保留主体/暗部色相；亮斑存在选型页原有通道截顶，改由下方浏览器金样精确验证。
-                for xy in ((128,128),(179,160)):
+                # I保留修订颜料的主体/暗部色相，高光由浏览器金样精确验证。
+                for xy in ((256,256),(358,320)):
                     rgb=image.getpixel(xy)[:3]
                     hue=colorsys.rgb_to_hsv(*(c/255 for c in rgb))[0]
                     delta=abs(hue-target_hue)
@@ -82,7 +83,7 @@ class CupVisualTests(unittest.TestCase):
         import json
         from PIL import Image
         root=Path(__file__).resolve().parents[1]
-        reference=json.loads((root/'tools/art/cup_materials/porcelain_06_02_reference.json').read_text(encoding='utf-8-sig'))
+        reference=json.loads((root/'tools/art/cup_materials/porcelain_I_reference.json').read_text(encoding='utf-8-sig'))
         for bet in W.BET_COLORS:
             with Image.open(Path(W._ASSET_BALLS)/('cup_%d.png'%bet)) as source:
                 image=source.convert('RGBA');pixels=bytearray(image.tobytes())
@@ -93,7 +94,7 @@ class CupVisualTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(pixels).hexdigest(),reference[str(bet)]['opaque_rgba_sha256'])
                 self.assertEqual(hashlib.sha256(alpha).hexdigest(),reference[str(bet)]['alpha_sha256'])
                 job=W._bake_begin(bet)
-                while job['done']<512:W._bake_advance(job,7)
+                while job['done']<2*job['d']:W._bake_advance(job,7)
                 self.assertEqual(bytes(job['buf']),image.transpose(Image.Transpose.FLIP_TOP_BOTTOM).tobytes())
 
     def test_glass_fill_seam_softened_without_removing_rim(self):

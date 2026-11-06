@@ -1,0 +1,26 @@
+{
+  "1": {
+    "alpha_sha256": "5633e45450b327be1c356f3adb1849355e3ebd4031fdf0a567b4f5752cacde95",
+    "color": "#2ac453",
+    "opaque_rgba_sha256": "61d26bd5a3bedc332655b29b519331e8ea2b9a12f818046eafbb9ec1daedee77",
+    "size": 512
+  },
+  "10": {
+    "alpha_sha256": "5633e45450b327be1c356f3adb1849355e3ebd4031fdf0a567b4f5752cacde95",
+    "color": "#3d6fec",
+    "opaque_rgba_sha256": "167d20ce81294959901df5fb44d1a48f3ab9c3bafdf40bd0f97a44f6b389307d",
+    "size": 512
+  },
+  "100": {
+    "alpha_sha256": "5633e45450b327be1c356f3adb1849355e3ebd4031fdf0a567b4f5752cacde95",
+    "color": "#a335ee",
+    "opaque_rgba_sha256": "d79019d07fd0c4d6acd20c3196c22c5fad5768581f922307f3c6d2d6feb2ba10",
+    "size": 512
+  },
+  "50": {
+    "alpha_sha256": "5633e45450b327be1c356f3adb1849355e3ebd4031fdf0a567b4f5752cacde95",
+    "color": "#dc3742",
+    "opaque_rgba_sha256": "a0252f0af5be1a15261626d859fb09f1bfe2984fef183f0e688a9a343413f2b3",
+    "size": 512
+  }
+}

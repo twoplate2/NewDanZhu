@@ -25,7 +25,8 @@ from ..audio.backend import _FRAME_PROBE
 from ..config import (BENCH_SEED, CH, CW, DEFAULT_BET, DIM_ALPHA, DIM_RGB, hex_rgb)
 from ..fx.pile import (CX, DESIGN_H, DESIGN_W, FLOOR_Y, K2, RIM_Y, PileSpec,
                        build_pile, halfwidth, project_pile)
-from ..fx.porcelain import pigment as _porcelain_pigment, render_rows as _porcelain_rows
+from ..fx.porcelain_i import pigment as _porcelain_pigment, render_rows as _porcelain_rows
+from . import cup_shadows
 from ..platform.boot import _boot_log
 from ..platform.device import _guard_warm, _vib_warm, _vibrate_tick
 from .text import (_BALL_RIM_K, _BALL_BAND_W, _BALL_BAND_S, _BALL_BAND_SPAN, FIT_SCALES, _FRAME_FIT, _FONT_WARM_ALL, _PIN_CAND, _PIN_DONE,
@@ -130,18 +131,14 @@ VISIBLE_TOP = -DESIGN_H * CUP_T / CUP_H
 _CUP_BALL_TEX = {}          # bet -> Texture(最多 4 个)
 # ⚠️ 贴图密度是**相对屏幕尺寸**定的, 不是一个绝对数: 杯中球屏幕直径 = 逻辑 68.4 x s,
 #    1900p 档 s≈3.65 -> 250 设备px, 128 贴图只有 0.51 texel/px(明显欠采样)。改 BALL_VIEW / 换设备都要重算。
-_CUP_BALL_TEX_PX = 256
+_CUP_BALL_TEX_PX = 512
 # 球纹理的**分块烘焙**作业表: bet -> job dict(见 `_bake_begin`)。**算完才注册进 `_CUP_BALL_TEX`**。
 _BAKE_JOB = {}
 # 各档烘焙完成后的耗时账(`del _BAKE_JOB` 会把它们一起删掉 ⇒ 抄一份小的留着给日志读)。
 _BAKE_STATS = {}
-# 每步算多少行。⚠️ 一档共 2 x 256 = 512 行 ≈ 真机 62 ms ⇒ 每行 ≈ 0.121 ms。
-# **16 行 ≈ 1.95 ms/步**(桌面实测单步中位), 而一帧预算 6.06 ms、正常 body 约 1.3 ms
-# ⇒ 1.3 + 1.95 = 3.25 ms,**留 2.8 ms 余量**,不会把这一帧推过 vsync。
-# ⚠️ 用过 32 行: 单步中位 3.90 ms 但**最慢一步 7.50 ms** ⇒ 1.3 + 7.5 = 8.8 > 6.06
-#    ⇒ **那一步会掉到 2 格(12.12 ms)**。按"宁多几步、不要一次极端"的原则取 16。
-# ⚠️ 调大就重新逼近"一帧一档"的老毛病(真机 62 ms)。
-_BALL_TEX_ROWS = 16
+# 缺PNG时才走分块兜底。512宽每步8行，保持旧256宽16行的像素工作量。
+# 不把历史材质的毫秒数当成新材质在手机上的耗时保证。
+_BALL_TEX_ROWS = 8
 # 弹珠贴图的"型"参数: 只改烘出来的内容, 运行期一个字节没多; 尺寸/物理/玩法不动。
 # ⚠️ 调这四个数之前先出图(老工程 temp/facilitator/ab_render.py 能逐像素复现)。
 # ⚠️ `sp()` 读当时的窗口密度, 模块导入时窗口还没建 —— **必须懒算**(见 prebake 链)。
@@ -321,7 +318,7 @@ def _r_dp_for(n):
 
 
 def _ball_texture(bet, rows=None):
-    """按投注颜色复用球贴图，保持 256×256，不在逐帧绘制时烘焙。
+    """按投注颜色复用512×512球贴图，不在逐帧绘制时烘焙。
 
     rows=None 一次完成，rows=N 分块完成；两条路径像素一致。
     材质使用柔和棚光下的实体球明暗与环境反射，四档保留各自颜色。
@@ -1097,9 +1094,17 @@ class WinPileFX(Widget):
             idx += 1
         self._balls.sort(key=lambda bb: -bb["z"])
         by_pile = {b["pile_index"]:i for i,b in enumerate(self._balls)}
+        shadow=cup_shadows.lookup(count,seed%_PILE_VARIANTS,proj)
         for b in self._balls:
             b["light_links"] = tuple((by_pile[j],weight) for j,weight
                                      in proj[b["pile_index"]].get("light_links", ()) if j in by_pile)
+            if shadow is not None:
+                regions,peers,strength=shadow
+                near=peers[b['pile_index']]
+                if near:
+                    b['shadow_texture']=regions[b['pile_index']]
+                    b['shadow_peers']=tuple(by_pile[j] for j in near)
+                    b['shadow_strength']=strength
         # 画家序: 远先画
         # 投放节奏就地从颗数推: 高倍率球多, 间隔压到 SPAWN_MIN 免得堆成"喷射球云"。
         # ⚠️ 只在这里算一次 —— play_win 另算一份会漂移。
@@ -1362,6 +1367,9 @@ class WinPileFX(Widget):
         Rectangle(texture=_ball_texture(b["value"]),
                   pos=(x - rx, y - ry), size=(rx * 2, ry * 2))
         PopMatrix()
+        if b.get('shadow_texture') is not None:
+            Color(1,1,1,alpha*self._shadow_alpha(b))
+            Rectangle(texture=b['shadow_texture'],pos=(x-rx,y-ry),size=(rx*2,ry*2))
 
     def _tbl_key_ok(self, back_tex, front_tex, fb_tex):
         """持久指令表还能不能用。见 `_redraw` 顶上那段说明。
@@ -1389,6 +1397,10 @@ class WinPileFX(Widget):
         self._fx_post = []         # 球**之后**的固定层(前层玻璃)
         self._bd = []              # 球层: 每球 (Color, Rotate, Rectangle, ball)
         self._bd_state = []
+        self._sd=[]
+        self._sd_state=[]
+        self._shadow_levels=[0.]*len(self._balls)
+        self._shadow_levels_complete=False
         self._fixed_state = None
         with self.canvas:
             # ① 堆体接地的软阴影(替代逐球贴球心阴影, 不再放大悬空感)
@@ -1437,11 +1449,19 @@ class WinPileFX(Widget):
                 PopMatrix()
                 self._bd.append((_c, _ro, _r, _b))
                 self._bd_state.append(None)
+                # 阴影紧跟接收它的球，后续前方球照常遮挡；不覆盖玻璃。
+                if _b.get('shadow_texture') is not None:
+                    sc=Color(1,1,1,0)
+                    sr=Rectangle(texture=_b['shadow_texture'],pos=(0,0),size=(0,0))
+                    self._sd.append((sc,sr))
+                else:self._sd.append(None)
+                self._sd_state.append(None)
             # ⑥ 前层玻璃(必须在球**之后**)
             self._fx_post.append(("front", Color(1.0, 1.0, 1.0, 0.0),
                                   Rectangle(texture=front_tex, pos=(0, 0), size=(0, 0)),
                                   None, None, None))
         self._tbl_ok = True
+        self._has_local_shadows=any(entry is not None for entry in self._sd)
         self._tbl_balls = self._balls
         self._tbl_tex = (back_tex, front_tex, fb_tex)
         self._tbl_wh = (self.width, self.height)
@@ -1509,6 +1529,7 @@ class WinPileFX(Widget):
 
     def _ball_exposure(self, ball):
         """遮蔽随邻球接近渐进形成，不额外改变最终材质亮度。"""
+        if ball.get('shadow_texture') is not None:return 1.0
         links = ball.get("light_links", ())
         if not links:
             return 1.0
@@ -1522,25 +1543,43 @@ class WinPileFX(Widget):
             occlusion += weight*amount
         return 1.0-min(.32,arrival*occlusion)
 
+    def _shadow_alpha(self,ball,levels=None):
+        """只在相关邻球接近时渐入局部纹理；与settled布尔切换无关。"""
+        amount=self._light_presence(ball)
+        for index in ball.get('shadow_peers',()):
+            amount=min(amount,levels[index] if levels is not None else self._light_presence(self._balls[index]))
+            if amount<=0:return 0.
+        return amount*ball.get('shadow_strength',.68)
+
+    def _hide_shadow(self,index):
+        if self._sd[index] is not None and self._sd_state[index] is not None:
+            self._sd[index][1].size=(0,0);self._sd_state[index]=None
+
     def _tbl_apply_balls(self, a_cup):
         """运动、遮蔽仍逐帧计算；只将改变的属性写入既有画布指令。"""
+        if self._has_local_shadows and not self._shadow_levels_complete:
+            for i,ball in enumerate(self._balls):self._shadow_levels[i]=self._light_presence(ball)
+            self._shadow_levels_complete=all(level>=1 for level in self._shadow_levels)
         for index,(_c, _ro, _r, _b) in enumerate(self._bd):
             previous=self._bd_state[index]
             _al = a_cup
             if not _b["settled"]:
                 if _b["tt"] < _b["f_enter"]:        # 还在可见顶边之上: 不画
+                    self._hide_shadow(index)
                     if previous is not None:
                         _r.size = (0.0, 0.0)
                         self._bd_state[index]=None
                     continue
                 _al *= max(0.0, min(1.0, (_b["tt"] - _b["f_enter"]) / ENTER_FADE))
                 if _al <= 0.0:
+                    self._hide_shadow(index)
                     if previous is not None:
                         _r.size = (0.0, 0.0)
                         self._bd_state[index]=None
                     continue
             _scr = self._ball_screen(_b)
             if _scr is None:
+                self._hide_shadow(index)
                 if previous is not None:
                     _r.size = (0.0, 0.0)
                     self._bd_state[index]=None
@@ -1553,6 +1592,15 @@ class WinPileFX(Widget):
             if previous is None or state[1]!=previous[1]:_r.pos=state[1]
             if previous is None or state[2]!=previous[2]:_r.size=state[2]
             self._bd_state[index]=state
+            if self._sd[index] is not None:
+                strength=(_b['shadow_strength'] if self._shadow_levels_complete else
+                          self._shadow_alpha(_b,self._shadow_levels))
+                shadow_state=(_al*strength,state[1],state[2] if _al*strength>0 else (0,0))
+                old=self._sd_state[index];sc,sr=self._sd[index]
+                if old is None or shadow_state[0]!=old[0]:sc.a=shadow_state[0]
+                if old is None or shadow_state[1]!=old[1]:sr.pos=shadow_state[1]
+                if old is None or shadow_state[2]!=old[2]:sr.size=shadow_state[2]
+                self._sd_state[index]=shadow_state
 
     def _tbl_drop(self):
         """作废持久表(并把画布清干净)。
@@ -1568,6 +1616,8 @@ class WinPileFX(Widget):
         self._fx_post = []
         self._bd = []
         self._bd_state = []
+        self._sd=[];self._sd_state=[];self._shadow_levels=[]
+        self._has_local_shadows=False;self._shadow_levels_complete=False
         self._fixed_state = None
 
     def _redraw(self, *_):
@@ -1643,15 +1693,20 @@ class WinPileFX(Widget):
             self._pile_warm_new = 0
             self._pile_warm_ms = 0.0
         started = time.perf_counter()
+        model=getattr(self.area,'model',None)
+        if self.mode!='idle' or (model is not None and model.state!='ready'):
+            return False  # 游玩/动画期间不解码或上传图集，缺少的局内不临时切换。
         for count in (2,3,5,10,20,50,100):
             for seed in range(_PILE_VARIANTS):
-                if (count,seed) in _PILE_CACHE:
+                if (count,seed) in _PILE_CACHE and cup_shadows.attempted(count,seed):
                     continue
-                try:
-                    _pile_projected(count,seed)
-                    self._pile_warm_new += 1
-                except Exception:
-                    continue
+                if (count,seed) not in _PILE_CACHE:
+                    try:
+                        _pile_projected(count,seed)
+                        self._pile_warm_new += 1
+                    except Exception:
+                        continue
+                cup_shadows.warm(count,seed)
                 if time.perf_counter()-started >= budget:
                     self._pile_warm_ms += (time.perf_counter()-started)*1000
                     return False

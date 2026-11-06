@@ -119,6 +119,10 @@ def main():
     for cls, fn, oldp, newp, what in TARGETS:
         o = canvas_seq(oldp, cls, fn)
         n = canvas_seq(newp, cls, fn)
+        if o is not None and cls=='WinPileFX' and fn in ('_tbl_build','_draw_bead'):
+            # 152有意增加每球的局部阴影Color/Rectangle，必须紧随该球的PopMatrix，
+            # 其余层序仍与原版完全一致。运行时逐球层序另由cup_local_shadows验证。
+            o=list(o);at=o.index('PopMatrix')+1;o[at:at]=['Color','Rectangle']
         name = "%s.%s" % (cls, fn)
         if o is None or n is None:
             print("  [FAIL] %-26s 抽不到: 老版=%s 新版=%s" % (name, o is None, n is None))
@@ -143,7 +147,7 @@ def main():
         print("门禁结果: 红 %d 项 / 共 %d 项 —— **顺序即层序, 挪一行画面就错**"
               % (bad, len(TARGETS)))
         return 1
-    print("门禁结果: 全绿 —— %d 个方法的画布层序与老版逐条相同" % len(TARGETS))
+    print("门禁结果: 全绿 —— %d 个方法层序通过（包含152明确新增的每球阴影层）" % len(TARGETS))
     return 0
 
 

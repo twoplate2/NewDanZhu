@@ -1,6 +1,6 @@
 {
   "tool": "Kivy offline FBO shader (runtime sprites); built-in image_gen (archived v1/v2 sources)",
-  "runtime_material": "user selected HTML round2 06-02 opaque porcelain, softer highlight edge",
+  "runtime_material": "selected scene I sphere only; 512px; pure blue/green/red; original glass retained",
   "palette_reference": {
     "commit": "da3f8be",
     "version": "0.8.132",
@@ -12,7 +12,7 @@
       "50": "#e0533b",
       "100": "#a335ee"
     },
-    "method": "shared 06-02 porcelain lighting; same historical pigments for all four colors"
+    "method": "historical UI colors retained; cup-only pure RGB overrides in cup_palette; scene I fitted shading"
   },
   "sources": {
     "1": "v2/source_1.png",
@@ -38,35 +38,30 @@
     }
   ],
   "sprite_preparation": {
-    "material_model": "porcelain_06_02",
-    "specular": 0.19,
+    "material_model": "porcelain_I",
+    "specular": 0.2990645942174523,
     "output_size": [
-      256,
-      256
+      512,
+      512
     ],
     "body_alpha": "opaque",
     "edge_feather_pixels": 1,
     "runtime_size_unchanged": true,
-    "purpose": "exact HTML 06-02 RGB/alpha; offline PNG and missing-asset fallback share implementation",
-    "lighting_source": "danzhu/fx/porcelain.py",
-    "selected_style": "06-02",
-    "selected_parameters": {
-      "ambient": 0.29,
-      "diffuse": 0.82,
-      "specular": 0.19,
-      "exponent": 22,
-      "highlight_tint": 0.35,
-      "fill": 0.05,
-      "wrap": 0.04,
-      "saturation": 1.08,
-      "edge": 0.035
-    },
-    "reference_validation": "porcelain_06_02_reference.json; browser opaque RGB and complete alpha hashes"
+    "purpose": "whole-sphere fitted lighting, separate cached layout shadows",
+    "lighting_source": "danzhu/fx/porcelain_i.py",
+    "selected_style": "I",
+    "reference_validation": "porcelain_I_reference.json"
   },
   "legacy_source_preparation": {
     "source_rim_inset_per_side": 0.003,
     "highlight_compression": 0,
     "midtone_lift": 0.12,
     "body_fill": 0.65
+  },
+  "cup_palette": {
+    "1": "#2ac453",
+    "10": "#3d6fec",
+    "50": "#dc3742",
+    "100": "fitted original I pigment"
   }
 }
