@@ -110,6 +110,9 @@ def main():
             assert frozen==(root._playtest_label.text,root._playtest_sensor.text)
             assert writes and all('random_play_sandbox' in p for p in writes)
             root._stop_playtest()
+            renderers=record.settings['cup_renderer_builds']
+            assert renderers['mesh']>0 and renderers['ready'],renderers
+            assert renderers['fallback_error'] is None,renderers
             assert awake==[True,False]
             assert root.game is old and root.game_area.model is old
             assert old._bench_running is False

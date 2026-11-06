@@ -39,6 +39,7 @@ def main():
     from danzhu.ui import winfx as W
     old_fixed,old_balls=baseline_functions(W)
     fx=root.game_area.win_fx
+    fx._batch_disabled=True
     totals=[0,0];frames=0
     for count in (2,50,100):
         fx.play_win(count,100)

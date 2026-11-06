@@ -1675,6 +1675,8 @@ class BenchMixin(object):
     def _start_benchmark(self):
         """阶段1: 真实屏幕采样(on_flip, 自动发球5发), 发满后停止采样，再测阶段2物理吞吐。"""
         self._flip_times = []
+        _fx = self.game_area.win_fx
+        self._bench_cup_start = (_fx._batch_builds, _fx._legacy_builds)
         # ---- 诊断: 光有"平均帧率/1%Low"没法定位卡在哪 ----
         self._bench_frames = []          # [(帧间隔ms, 场景标签, ...)]
         self._bench_cpu0 = time.process_time()
@@ -2342,6 +2344,14 @@ class BenchMixin(object):
         _cpu_tot = time.process_time() - getattr(self, "_bench_cpu0", 0.0)
         out["cpu_per_frame"] = _cpu_tot * 1000.0 / max(1, out["n"])
         out["gc_policy"] = "disabled"
+        _fx = getattr(getattr(self, 'game_area', None), 'win_fx', None)
+        _start = getattr(self, '_bench_cup_start', (0, 0))
+        if _fx is not None:
+            out['cup_renderer_builds'] = dict(
+                mesh=getattr(_fx,'_batch_builds',0)-_start[0],
+                rectangles=getattr(_fx,'_legacy_builds',0)-_start[1],
+                ready=getattr(_fx,'_batch_renderer',None) is not None,
+                fallback_error=getattr(_fx,'_batch_error',None))
         out["cfg_sum"] = _CFG_STAT[0] * 1000.0
         out["cfg_worst"] = _CFG_STAT[1] * 1000.0
         out["cfg_n"] = _CFG_STAT[2]
@@ -3561,6 +3571,10 @@ class BenchMixin(object):
                 #    用户态占绝对多数 ⇒ 纯 Python 的 CPU 竞争(GIL)。
             if d.get("gc_policy") == "disabled":
                 _lines.append("# Python循环GC：固定关闭（引用计数照常）")
+            _cup = d.get('cup_renderer_builds')
+            if _cup is not None:
+                _lines.append('# 落杯绘制: 批绘建表%d次 / 矩形回退%d次；预热就绪=%s；回退原因=%s' % (
+                    _cup['mesh'],_cup['rectangles'],_cup['ready'],_cup.get('fallback_error') or '无'))
             _lines.append("# 音频后端: %s" % str(d.get("backend", "?")))
             # JNI: 主线程那一笔才是"卡我们"的; 后台那一笔只说明工作线程在忙。
             _jn = int(d.get("jni_n", 0) or 0)

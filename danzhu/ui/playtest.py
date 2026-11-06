@@ -68,6 +68,7 @@ class PlaytestMixin:
         self._playtest_fx_state = (fx._seq, fx._rng.getstate(),
                                    {n:list(bag) for n,bag in fx._variant_bags.items()},dict(fx._last_variant))
         self._playtest_big_text_start=dict(self.game_area._big_text_stats)
+        self._playtest_cup_start=(fx._batch_builds,fx._legacy_builds)
         old = self.game
         simulation = Game(fx=fx, voice_duration=old._voice_duration, save_config=old._save_cfg,
                           sound_gate=old._sound_gate, on_easter_popup=old._on_easter_popup,
@@ -98,6 +99,7 @@ class PlaytestMixin:
                                       small_pile_layout='floor_spread_10_20_fixed_radius',
                                       cup_material='scene_I_512_pure_palette',
                                       cup_shadow='prebaked_local_masks_neighbour_arrival_fade',
+                                      cup_renderer='ordered_dual_texture_mesh_v1',
                                       current_fps_window_s=10,minimum_fps_window_s=1,
                                       gap_before_refresh_s=.3,gap_after_refresh_s=.3,
                                       stats_execution='worker',number_rendering='glyph_atlas',
@@ -365,6 +367,10 @@ class PlaytestMixin:
         self._playtest_driver.cancel()
         if self._playtest_display is not None:self._playtest_display.cancel()
         fx = self.game_area.win_fx
+        record.settings['cup_renderer_builds'] = dict(
+            mesh=fx._batch_builds-self._playtest_cup_start[0],
+            rectangles=fx._legacy_builds-self._playtest_cup_start[1],
+            ready=fx._batch_renderer is not None, fallback_error=fx._batch_error)
         fx._on_done = None
         fx._abort()
         self.game._timers.clear()

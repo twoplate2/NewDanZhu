@@ -784,6 +784,12 @@ class WinPileFX(Widget):
         # `_tbl_ok` = 表还能用; 另外三项是**重建判据**(球列表身份 / 三张贴图 / 控件尺寸)。
         # ⚠️ 球列表必须比**对象身份**: 新一局长度可能一样(8 颗换 8 颗), 只比长度会拿上一局的球继续画。
         self._tbl_ok = False
+        self._batch_renderer = None
+        self._batch_attempted = False
+        self._batch_active = False
+        self._batch_error = None
+        self._batch_builds = 0
+        self._legacy_builds = 0
         self._tbl_balls = None
         self._tbl_tex = None
         self._tbl_wh = None
@@ -1377,6 +1383,20 @@ class WinPileFX(Widget):
                 and self._tbl_tex == (back_tex, front_tex, fb_tex)
                 and self._tbl_wh == (self.width, self.height))
 
+    def _prepare_batch(self):
+        """只在启动/空闲阶段编译并试画；失败时整次运行沿用矩形路径。"""
+        if self._batch_attempted or getattr(self, '_batch_disabled', False):
+            return
+        self._batch_attempted = True
+        started = time.perf_counter()
+        try:
+            from .cup_batch import CupBatch
+            self._batch_renderer = CupBatch()
+            _boot_log('prebake', 'Cup batch warm %.1f ms' % ((time.perf_counter()-started)*1000))
+        except Exception as exc:
+            self._batch_error = repr(exc)
+            _boot_log('prebake', 'Cup batch fallback: %r' % exc)
+
     def _tbl_build(self, back_tex, front_tex, fb_tex):
         """**一次性**建出「固定层 + 球层 + 前层玻璃」的持久指令表。
 
@@ -1397,6 +1417,19 @@ class WinPileFX(Widget):
         self._shadow_levels=[0.]*len(self._balls)
         self._shadow_levels_complete=False
         self._fixed_state = None
+        self._has_local_shadows = any(b.get('shadow_texture') is not None for b in self._balls)
+        self._batch_active = False
+        batch = self._batch_renderer
+        if batch is not None and not getattr(self, '_batch_disabled', False) and self._balls:
+            try:
+                self._batch_active = batch.configure(self._balls, _ball_texture(self._balls[0]['value']))
+                if self._batch_active:
+                    batch.flush()
+            except Exception as exc:
+                self._batch_error = repr(exc)
+                self._batch_active = False
+                self._batch_renderer = None
+                _boot_log('prebake', 'Cup batch configure fallback: %r' % exc)
         with self.canvas:
             # ① 堆体接地的软阴影(替代逐球贴球心阴影, 不再放大悬空感)
             self._fx_pre.append(("shadow", Color(0.02, 0.02, 0.03, 0.0),
@@ -1431,32 +1464,37 @@ class WinPileFX(Widget):
                 self._fx_pre.append(("rim", Color(1.0, 1.0, 1.0, 0.0),
                                      Rectangle(texture=_t, pos=(0, 0), size=(0, 0)),
                                      _f0, _fh, _a))
-            # ⑤ 球层: **原始顺序单趟**(红线 1)。⚠️⚠️ **每颗球必须自带 PushMatrix/PopMatrix**
-            #    (红线 4, 画面事故实修): Kivy 的 `Rotate` 是**上下文指令**, 作用于**其后所有**指令
-            #    直到被 Pop 掉 —— 漏了这一对, 20 颗球就是 20 个旋转的复合, 而且**球层后面紧跟着前层
-            #    玻璃**, 那些未 Pop 的旋转全叠到玻璃矩形上 ⇒ 整块玻璃被拧飞。
-            #    由老工程 `tools/fx_probe.py [21]` 钉死: Push/Pop 必须**配对**且**包住**每一条 Rotate。
-            for _b in self._balls:
-                _c = Color(1.0, 1.0, 1.0, 0.0)
-                PushMatrix()
-                _ro = Rotate(angle=0.0, origin=(0, 0))
-                _r = Rectangle(texture=_ball_texture(_b["value"]), pos=(0, 0), size=(0, 0))
-                PopMatrix()
-                self._bd.append((_c, _ro, _r, _b))
-                self._bd_state.append(None)
-                # 阴影紧跟接收它的球，后续前方球照常遮挡；不覆盖玻璃。
-                if _b.get('shadow_texture') is not None:
-                    sc=Color(1,1,1,0)
-                    sr=Rectangle(texture=_b['shadow_texture'],pos=(0,0),size=(0,0))
-                    self._sd.append((sc,sr))
-                else:self._sd.append(None)
-                self._sd_state.append(None)
+            # 球与阴影在Mesh索引中交错排列；外层玻璃次序不变。
+            if self._batch_active:
+                self.canvas.add(batch.context)
+            else:
+                # ⑤ 球层: **原始顺序单趟**(红线 1)。⚠️⚠️ **每颗球必须自带 PushMatrix/PopMatrix**
+                #    (红线 4, 画面事故实修): Kivy 的 `Rotate` 是**上下文指令**, 作用于**其后所有**指令
+                #    直到被 Pop 掉 —— 漏了这一对, 20 颗球就是 20 个旋转的复合, 而且**球层后面紧跟着前层
+                #    玻璃**, 那些未 Pop 的旋转全叠到玻璃矩形上 ⇒ 整块玻璃被拧飞。
+                #    由老工程 `tools/fx_probe.py [21]` 钉死: Push/Pop 必须**配对**且**包住**每一条 Rotate。
+                for _b in self._balls:
+                    _c = Color(1.0, 1.0, 1.0, 0.0)
+                    PushMatrix()
+                    _ro = Rotate(angle=0.0, origin=(0, 0))
+                    _r = Rectangle(texture=_ball_texture(_b["value"]), pos=(0, 0), size=(0, 0))
+                    PopMatrix()
+                    self._bd.append((_c, _ro, _r, _b))
+                    self._bd_state.append(None)
+                    # 阴影紧跟接收它的球，后续前方球照常遮挡；不覆盖玻璃。
+                    if _b.get('shadow_texture') is not None:
+                        sc=Color(1,1,1,0)
+                        sr=Rectangle(texture=_b['shadow_texture'],pos=(0,0),size=(0,0))
+                        self._sd.append((sc,sr))
+                    else:self._sd.append(None)
+                    self._sd_state.append(None)
             # ⑥ 前层玻璃(必须在球**之后**)
             self._fx_post.append(("front", Color(1.0, 1.0, 1.0, 0.0),
                                   Rectangle(texture=front_tex, pos=(0, 0), size=(0, 0)),
                                   None, None, None))
+        if self._batch_active:self._batch_builds += 1
+        else:self._legacy_builds += 1
         self._tbl_ok = True
-        self._has_local_shadows=any(entry is not None for entry in self._sd)
         self._tbl_balls = self._balls
         self._tbl_tex = (back_tex, front_tex, fb_tex)
         self._tbl_wh = (self.width, self.height)
@@ -1555,6 +1593,9 @@ class WinPileFX(Widget):
         if self._has_local_shadows and not self._shadow_levels_complete:
             for i,ball in enumerate(self._balls):self._shadow_levels[i]=self._light_presence(ball)
             self._shadow_levels_complete=all(level>=1 for level in self._shadow_levels)
+        if self._batch_active:
+            self._apply_batch_balls(a_cup)
+            return
         for index,(_c, _ro, _r, _b) in enumerate(self._bd):
             previous=self._bd_state[index]
             _al = a_cup
@@ -1597,6 +1638,40 @@ class WinPileFX(Widget):
                 if old is None or shadow_state[2]!=old[2]:sr.size=shadow_state[2]
                 self._sd_state[index]=shadow_state
 
+    def _apply_batch_balls(self, a_cup):
+        batch = self._batch_renderer
+        # RenderContext继承变换矩阵；祖先控件的透明度显式合并到其opacity。
+        opacity = 1.
+        widget = self
+        while isinstance(widget, Widget):
+            opacity *= getattr(widget, 'opacity', 1.)
+            widget = getattr(widget, 'parent', None)
+        if batch.context.opacity != opacity:
+            batch.context.opacity = opacity
+        for index, ball in enumerate(self._balls):
+            alpha = a_cup
+            if not ball['settled']:
+                if ball['tt'] < ball['f_enter']:
+                    batch.hide(index*2); batch.hide(index*2+1)
+                    continue
+                alpha *= max(0., min(1., (ball['tt']-ball['f_enter'])/ENTER_FADE))
+            screen = self._ball_screen(ball) if alpha > 0 else None
+            if screen is None:
+                batch.hide(index*2); batch.hide(index*2+1)
+                continue
+            x, y, rx, ry, _angle = screen
+            pos, size = (x-rx, y-ry), (rx*2, ry*2)
+            exposure = self._ball_exposure(ball)
+            batch.quad(index*2, pos, size, (exposure, exposure, exposure, alpha))
+            if ball.get('shadow_texture') is not None:
+                strength = (ball['shadow_strength'] if self._shadow_levels_complete else
+                            self._shadow_alpha(ball, self._shadow_levels))
+                if alpha*strength > 0:
+                    batch.quad(index*2+1, pos, size, (1., 1., 1., alpha*strength))
+                else:
+                    batch.hide(index*2+1)
+        batch.flush()
+
     def _tbl_drop(self):
         """作废持久表(并把画布清干净)。
 
@@ -1607,6 +1682,8 @@ class WinPileFX(Widget):
             self.canvas.clear()
         self._tbl_ok = False
         self._tbl_balls = None
+        self._batch_active = False
+        if self._batch_renderer is not None:self._batch_renderer.clear()
         self._fx_pre = []
         self._fx_post = []
         self._bd = []
@@ -1733,6 +1810,12 @@ class WinPileFX(Widget):
                 _glyph_finish_warm()
             self._glyph_done = True
             Clock.schedule_once(self.prebake_step, 0.02)
+            return
+        if not self._batch_attempted and not getattr(self, '_batch_disabled', False):
+            model = getattr(self.area, 'model', None)
+            if self.mode == 'idle' and (model is None or model.state == 'ready'):
+                self._prepare_batch()
+            Clock.schedule_once(self.prebake_step, .05)
             return
         if not self._glass_prebaked:
             self._glass_prebaked = True

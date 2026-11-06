@@ -245,6 +245,10 @@ def format_report(document):
     memory=[s['memory_rss_bytes'] for s in document.get('sensors',[]) if s.get('memory_rss_bytes') is not None]
     memory_line=('占用内存（RSS）：首次 %.1fMB；末次 %.1fMB；采样最高 %.1fMB；变化 %+.1fMB'%
                  (memory[0]/1e6,memory[-1]/1e6,max(memory)/1e6,(memory[-1]-memory[0])/1e6)) if memory else '占用内存（RSS）：未采到'
+    renderer = settings.get('cup_renderer_builds')
+    if renderer is not None:
+        lines.insert(-2,'落杯绘制：批绘建表%d次 / 矩形回退%d次；预热就绪=%s；回退原因=%s' % (
+            renderer['mesh'],renderer['rectangles'],renderer['ready'],renderer.get('fallback_error') or '无'))
     lines.insert(-2,memory_line)
     lines.insert(-2,'内存口径：进程驻留内存，含共享页；非独占PSS或完整GPU用量。1MB=1000000字节，仅发射间隔采样，最高值非瞬时峰值。')
     for phase,row in sorted(document.get('low_1pct_by_phase',{}).items(),key=lambda item:int(item[0])):

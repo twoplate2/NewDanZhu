@@ -17,6 +17,7 @@ sys.path.insert(0,str(ROOT))
 
 def main():
     parser=argparse.ArgumentParser()
+    parser.add_argument("--legacy-cup",action="store_true",help="保留0.9.0矩形路径用于逐像素对照")
     parser.add_argument("--draw-baseline",action="store_true",help="使用0.8.147逐帧属性写入作视觉对照")
     parser.add_argument("--assets",type=Path,default=ROOT/"assets/balls")
     parser.add_argument("--label",default="current")
@@ -45,6 +46,7 @@ def main():
     from danzhu.ui.app import PlinkoApp
     from danzhu.ui.root import RootWidget
     C.SOUND_ENABLED=False
+    W.WinPileFX._batch_disabled = args.legacy_cup or args.draw_baseline
     if args.draw_baseline:
         import ast
         import subprocess
@@ -104,6 +106,7 @@ def main():
             if args.size and tuple(Window.size)!=tuple(map(int,args.size.split(','))):
                 raise RuntimeError("preview window size differs from requested size")
             Clock.unschedule(self.rootw._frame_timed)
+            self.rootw.game_area.win_fx._prepare_batch()
             for count in map(int,args.counts.split(',')):
                 W.cup_shadows.warm(count,args.variant)
             self.rootw.game.multipliers=[5,2,2,3,2,20,2,2,5]
@@ -158,6 +161,7 @@ def main():
                              glass=args.glass,occlusion=not args.no_occlusion,
                              moment=moment,
                              variant=args.variant,
+                             cup_renderer='mesh' if fx._batch_active else 'rectangles',
                              local_shadow_balls=sum('shadow_texture' in b for b in fx._balls),
                              last_settle=fx._last_settle,
                              deadline_safe=W.WINDUP+fx._last_settle+W.HOLD_BASE<W.FX_MAX_SEC,

@@ -16,6 +16,7 @@ class LocalShadowTests(unittest.TestCase):
     def scene(self,count=100):
         S.warm(count,0)
         fx=W.WinPileFX(None,size=(520,660));fx._rng=random.Random(42);fx._make_balls(count,100,0)
+        fx._batch_disabled=True
         fx._tbl_build(*W._glass_textures())
         return fx
 
