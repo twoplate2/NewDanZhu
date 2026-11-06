@@ -911,12 +911,12 @@ def _soc_result_title():
         v = _app_version()
     except Exception:
         v = ""
-    return ("CPU高压测试 %s" % v) if v else "CPU高压测试"
+    return ("CPU 高压测试结果 %s" % v) if v else "CPU 高压测试结果"
 
 
 def _bench_result_title():
-    """普通模拟测试的成绩窗口标题。跑完即时窗口与历史详情窗口共用。"""
-    return "画面帧率和性能测试"
+    """快速全面测试完成后的结果窗口标题。"""
+    return "快速全面测试结果"
 
 
 def _bench_score_text(d):

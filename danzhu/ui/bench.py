@@ -107,7 +107,7 @@ JANK_RATE = 0.55
 SLOW_RATE = 0.75
 # 采样期屏幕刷新率采样: {(场景标签, Hz): 次数}(见 `_bench_hz_tick`)。
 _BENCH_HZ = {}
-# 「测试历史（渲染 / CPU）」的表头。⚠️ 与数据行**分开排版**(见 `_show_bench_history`)。
+# 「快速测试历史」的表头。⚠️ 与数据行**分开排版**(见 `_show_bench_history`)。
 _HIST_COLS = ('时间', '平均/1%Low帧', '平均分/平均差系数')
 # 本帧**主线程**烧了多少毫秒 CPU(线程级时钟)。写的人只有 `_on_flip`, 读的人只有跑分面板。
 _FRAME_THR = [0.0]
@@ -176,25 +176,15 @@ def _flight_segments(frames):
 
 
 def _bench_menu_desc():
-    """跑分菜单里那段说明的正文。
-
-    ⚠️ **末句那个"约 86 秒"是 2026-09-20 用真机录像实测出来的**(Y700 TB323FU):
-       拿面板上「物理演算第 N/45 秒」那行做标尺(线性拟合 44.9s → 89.9s, 正好 45 秒),
-       加上渲染采样段(第一次自动发射 3.8s 起) ⇒ 跑分本体 ≈ **86 秒**。
-       拆开是: 渲染采样 32s + 相位切换/等球落地 ~4s + 物理跑分 45s。
-    ⚠️ **旧值「约 67 秒」是手写的粗估**(docstring 原文自己写着"不是算出来的"), 它按
-       "渲染窗口约 25 秒"估 —— 而实测是 **32 秒**, 光这一项就差 7 秒。
-    ⚠️ **「窗口覆盖第 5 发」那处改动(同日)不改总时长** —— 关窗之后本来就有
-       `_wait_idle_then_bench` 等球落地, 那几秒一直在跑, 只是原来没算进采样窗口。
-       ⇒ 这个结论是**读代码得出的, 没有实测**; 真要动它得重测。
-    ⚠️ 三行是**逐字照抄玩家给的文本**(含「1、」这个顿号编号、小写 `python`、数字两侧不加空格)
-       —— 他要的就是这三行, 别自作主张改标点。三行都放得下, 不折行。
-       （**只有那个秒数是可维护的估算值**, 改 `_target_launches` / `SOC_SAMPLE_*` 要回来改它。）
-    """
-    return ('模拟测试约 86 秒（含装杯动画）\n测试三项设备性能：\n'
-            '1、累计发射5颗弹珠，测屏幕渲染帧率\n'
-            '2、用python物理引擎，测CPU单核浮点\n'
-            '3、用高压测试，考验CPU调度和散热')
+    """测试菜单说明；每项标题与正文连续排版，窄屏自然换行。"""
+    color = COL_BALL.lstrip('#')
+    rows = (
+        ('快速全面测试：', '在 100 秒内完成画面流畅度与 CPU 单核浮点性能测试。'),
+        ('CPU 高压测试：', '持续进行满载单核浮点计算，考验设备散热，记录性能、温度、功耗和频率变化。'),
+        ('帧率测试：', '查看游戏运行期间的帧率、1% Low 帧、功耗和温度信息。'),
+    )
+    return '\n'.join('[color=%s][b]%s[/b][/color]%s' % (color, title, body)
+                     for title, body in rows)
 
 
 class BenchMixin(object):
@@ -310,7 +300,7 @@ class BenchMixin(object):
             _w0 = getattr(self, "_hp_wall0", 0.0)
             _el = (time.time() - _w0) if _w0 else 0.0
             _cap = int(SOC_SUSTAIN_WALL_SEC)
-            return "CPU高压测试第%d/%d秒" % (min(int(_el) + 1, _cap), _cap)
+            return "CPU 高压测试：第 %d/%d 秒" % (min(int(_el) + 1, _cap), _cap)
         if self.game._bench_running:
             # ⚠️⚠️ **渲染窗口那 25 秒一个字都不显示**: 不写标签 ⇒ 不会在测 1%Low 的窗口里
             #    造出一次文字重建, 也就**不需要为它预烘**。
@@ -332,9 +322,8 @@ class BenchMixin(object):
             #       同名会在读代码时误导 —— 两处是**两把不同的尺子**。
             _pcap = max(1, int(math.ceil(_dt)))
             _pv = min(int(_dd) + 1, _pcap)
-            # ⚠️ 文案是玩家逐字定稿的: `物理演算第x/45秒` —— **不带空格**, 与黑屏上另一行
-            #    `CPU高压测试 d/360秒` 对齐。
-            return "物理演算第%d/%d秒" % (_pv, _pcap)
+            # 只更改阶段名称；进度仍沿用原计算口径。
+            return "单核浮点测试：第 %d/%d 秒" % (_pv, _pcap)
         return None
 
     def _prog_tick(self, dt=0):
@@ -392,7 +381,7 @@ class BenchMixin(object):
         self._prog_start()
         # ⚠️ **黑屏与白字不在这里建** —— 本函数可能跑在**工作线程**上, 而它们要碰 Kivy 的
         #    canvas / CoreLabel。**在调用方 `_wait_idle_then_hp`(主线程)那里建。**
-        self._status_message("CPU高压测试第1/%d秒" % int(SOC_SUSTAIN_WALL_SEC))
+        self._status_message("CPU 高压测试：第 1/%d 秒" % int(SOC_SUSTAIN_WALL_SEC))
         # ⚠️ 走 `game._controls`, **不是** `self._set_controls_enabled` —— 后者只是这条链的
         #    **界面那一半**(染色/标签), 状态位在 `Game`。老版那一下是同一个方法(置位 + 染色一起),
         #    而新版的状态位由 `on_touch_down_allowed()`(`_restyle_buttons` 的置灰)读
@@ -409,7 +398,7 @@ class BenchMixin(object):
             #    `_run_hp_test` 是工作线程, 而这两个碰 Kivy 的 canvas / CoreLabel
             #    —— 跨线程做会卡死。
             self._show_bench_dim()
-            self._set_bench_msg("CPU高压测试第1/%d秒" % int(SOC_SUSTAIN_WALL_SEC))
+            self._set_bench_msg("CPU 高压测试：第 1/%d 秒" % int(SOC_SUSTAIN_WALL_SEC))
             BackgroundThread(target=self._run_hp_test, daemon=True).start()
         else:
             Clock.schedule_once(self._wait_idle_then_hp, 0.5)
@@ -923,7 +912,7 @@ class BenchMixin(object):
             freq_btn = Button(text="频率曲线", font_size="14sp", bold=True,
                               background_normal="", background_color=hex_rgb(COL_BTN) + (1,))
             freq_btn.bind(on_release=lambda *_: self._show_hp_curve(
-                _fw, title="高压CPU测试的频率曲线", unit="MHz", unit_name="采样"))
+                _fw, title="高压测试频率曲线", unit="MHz", unit_name="采样"))
             _btnrow.add_widget(freq_btn)
         # ⚠️ **只画功率**(单轴): 温度仍然报, 但**只在面板文字**里。
         #    ⇒ **不新增按钮**: 这一行本来就有 4 个控件, 360dp 上每个只剩 ~68dp,
@@ -936,7 +925,7 @@ class BenchMixin(object):
             #    推, 过滤掉一个点会让它**后面所有点左移一格**(实测: 末点从 357.8s 变成 357.2s)。
             #    跳点由 `SpeedCurve` 自己负责。
             _dt1 = ((getattr(self, "_hp_power_meta", None) or {}).get("dt") or 0.2)
-            power_btn = Button(text="功率曲线", font_size="14sp", bold=True,
+            power_btn = Button(text="功耗曲线", font_size="14sp", bold=True,
                                background_normal="", background_color=hex_rgb(COL_SOC) + (1,))
             # 两个粒度: 「每帧」= 原样(保住每一根真实的爆发); 「每5秒」= 每 25 格取中位数
             # ⇒ 那些 2 秒宽的峰被平台拉回来(max 7.60→3.81)。
@@ -946,7 +935,7 @@ class BenchMixin(object):
                    "每5秒": (_med5(_pw1, POWER_GRAIN_K["每5秒"]), "5秒段")}
             _ck1 = self.game.power_grain          # 打开时**用上次选的那一档**(粒度是保存的)
             power_btn.bind(on_release=lambda *_: self._show_hp_curve(
-                _v1[_ck1][0], dt=_dt1, title="CPU高压测试的功率曲线",
+                _v1[_ck1][0], dt=_dt1, title="高压测试功耗曲线",
                 unit="W", unit_name="采样", value_decimals=2, flat_min_range=1.0,
                 axis_unit="W", save_log=True, variants=_v1, cur_key=_ck1,
                 log_extra={"pt": list(getattr(self, "_hp_power_times", None) or []),
@@ -967,23 +956,19 @@ class BenchMixin(object):
         self._popup_fit_content(popup, content)
 
     def _show_bench_menu(self):
-        """弹珠发射模拟测试菜单：三行两列，测试、历史、信息与帧率设定各自成对。"""
+        """性能测试菜单：三行两列，测试、历史、信息与帧率设定各自成对。"""
         content = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(12))
         _ver = _app_version()
-        _title = ('弹珠发射模拟测试 ' + _ver) if _ver else '弹珠发射模拟测试'
+        _title = ('性能测试 ' + _ver) if _ver else '性能测试'
         title_lbl = self._fit_line(Label(text=_title, bold=True, halign='center',
                                          color=hex_rgb(COL_TEXT) + (1,),
                                          size_hint_y=None, height=dp(30)), 20)
         content.add_widget(title_lbl)
         # ⚠️ 文案在 `_bench_menu_desc()` 里(抽出去是为了让测量脚本能量到**出货这一份**)。
-        # ⚠️ 末句的「连压 N 分钟」走常量, 别再写成硬编码字面量。
-        desc_lbl = Label(text=_bench_menu_desc(),
+        desc_lbl = Label(text=_bench_menu_desc(), markup=True,
                          font_size='15sp', halign='left', valign='middle',
                          color=hex_rgb(COL_SUB) + (1,), size_hint_y=None, height=dp(170))
-        # 说明是**多行正文** —— 只能用"高度跟着排版走"(缩字号会把整段一起缩小)。
-        # 它原来定高 dp(170), 而排版后要 198px(400dp) / 242px(360dp) ⇒ 折出来的行被裁掉。
-        # ⚠️ 末段那两行是**手写 \n 断的**, 别删 —— 交给 Kivy 自动折的话断点会落在"纯 Python"
-        #    两边那个**空格**上, 于是断成两行(玩家报的"这个纯python执行的换行也很奇怪"就是它)。
+        # 说明高度按实际折行计算，不强行把一项压成屏幕上的单行。
         self._auto_h(desc_lbl, dp(120), dp(8))
         content.add_widget(desc_lbl)
         # ⚠️ **按系配色 + 按系排序**(**3 系, 同类同色系**):
@@ -998,7 +983,7 @@ class BenchMixin(object):
         hist_btn = Button(text='快速测试历史', font_size='17sp', bold=True,
                           background_normal='', background_color=hex_rgb(COL_FIRE) + (1,),
                           size_hint_y=None, height=dp(52))
-        hp_btn = Button(text='CPU高压测试', font_size='17sp', bold=True,
+        hp_btn = Button(text='CPU 高压测试', font_size='17sp', bold=True,
                         background_normal='', background_color=hex_rgb(COL_SOC) + (1,),
                         size_hint_y=None, height=dp(52))
         hph_btn = Button(text='高压测试历史', font_size='17sp', bold=True,
@@ -1645,7 +1630,7 @@ class BenchMixin(object):
         #    (玩家原话:「都是*100 这个明显不合理」), 一直挂到下一次发射才自愈。
         self._bench_save_board()
         ver = _app_version()
-        self._status_message(("模拟测试中 " + ver) if ver else "模拟测试中…")
+        self._status_message(("快速全面测试中 " + ver) if ver else "快速全面测试中…")
         # ⚠️ 走 `game._controls`(状态位 + 染色一起), 理由见 `_start_hp_test`。
         #    老版对应点: main.py 的 `_start_bench_test` 里那句 `_set_controls_enabled(False)`。
         self._act(self.game._controls, False)
@@ -2369,7 +2354,7 @@ class BenchMixin(object):
             self._show_bench_dim()
             # ⚠️ 这句只在黑屏刚上来时亮一下 —— 0.25 秒后 `_prog_tick` 就会用真进度盖掉,
             #    所以**不拼数字**(总秒数到那时还没算出来), 只写名字。
-            self._set_bench_msg("物理演算")
+            self._set_bench_msg("单核浮点测试")
             BackgroundThread(target=self._run_benchmark, daemon=True).start()
         else:
             Clock.schedule_once(self._wait_idle_then_bench, 0.5)
@@ -4668,16 +4653,16 @@ class BenchMixin(object):
             average,mad=_hp_score(record),record.get("mad")
             return (_hist_stamp(record.get("time")),"—" if average is None else "%d" % average,
                     "—" if mad is None else "%.2f%%" % float(mad))
-        return self._show_history_table("CPU高压测试历史",("时间","平均值","平均差系数"),
+        return self._show_history_table("高压测试历史",("时间","平均值","平均差系数"),
             records,cells,self._show_hp_detail,self._clear_hp_history,
             "平均值：物理引擎每秒模拟步数的平均值\n平均差系数：平均差 ÷ 平均值，越小越稳",
-            "暂无 CPU 高压测试记录\n\n性能测试菜单里选「CPU高压测试」")
+            "暂无高压测试记录\n\n在性能测试菜单中选择「CPU 高压测试」")
 
     def _clear_hp_history(self):
-        """清空「CPU 高压测试历史」——**不可逆, 所以必须先过一道确认**。
+        """清空「高压测试历史」——**不可逆, 所以必须先过一道确认**。
 
         ⚠️ 与 `_clear_bench_history` **同款**。
-        ⚠️ **只清这一张表**(`plinko_hp_history.json`)。「模拟测试历史」是**另一张**
+        ⚠️ **只清这一张表**(`plinko_hp_history.json`)。「快速测试历史」是**另一张**
            (`plinko_bench_history.json`) —— 两张表分开是定过的案, 别一起清。
         ⚠️ 确认框里**必须写清条数**(「不可恢复」四个字不能省)。
         """
@@ -4685,14 +4670,14 @@ class BenchMixin(object):
         if _n <= 0:
             return
         content = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(10))
-        ttl = self._fit_line(Label(text='清空 CPU 高压测试历史', bold=True, halign='center',
+        ttl = self._fit_line(Label(text='清空 高压测试历史', bold=True, halign='center',
                                    color=hex_rgb(COL_TEXT) + (1,),
                                    size_hint_y=None, height=dp(28)), 19)
         content.add_widget(ttl)
         # ⚠️⚠️ **正文里绝不能出现 markdown 星号** —— Kivy 的 Label 不认 markdown,
         #    `**3**` 会在屏幕上**原样显示成 `**3**`**。
-        msg = Label(text='将删除全部 %d 条 CPU 高压测试历史，\n不可恢复。\n\n'
-                         '（模拟测试历史不受影响）' % _n,
+        msg = Label(text='将删除全部 %d 条 高压测试历史，\n不可恢复。\n\n'
+                         '（快速测试历史不受影响）' % _n,
                     font_size='15sp', halign='center', valign='middle',
                     color=hex_rgb(COL_SUB) + (1,), size_hint_y=None)
         self._auto_h(msg, dp(90), dp(6))
@@ -4712,7 +4697,7 @@ class BenchMixin(object):
             self.hp_history = []
             self._save_hp_history()          # 盘上也要清, 否则重启又回来了
             popup.dismiss()
-            self._status_message('CPU 高压测试历史已清空')
+            self._status_message('高压测试历史已清空')
             self._show_hp_history()          # 当场重开 → 看到空态
 
         cancel.bind(on_release=popup.dismiss)
@@ -4752,7 +4737,7 @@ class BenchMixin(object):
         #    `_kw` 要拿**原始的字符串**去重开弹窗; 一旦这里覆盖成 Label 控件, `_kw["title"]`
         #    抓到的就是控件 ⇒ 切粒度时 `Label(text=<Label>)` ⇒
         #    `ValueError: Label.text accept only str`。
-        _title_lbl = self._fit_line(Label(text=(title or '高压CPU测试的成绩曲线'),
+        _title_lbl = self._fit_line(Label(text=(title or '高压测试成绩曲线'),
                                           bold=True, halign='center',
                                           color=hex_rgb(COL_TEXT) + (1,),
                                           size_hint_y=None, height=dp(26)), 19)
@@ -4929,7 +4914,7 @@ class BenchMixin(object):
                 'amp_mean', 'amp_min', 'amp_max', 'wh', 'ppw') if _k in r},
         })
         content = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(8))
-        title_lbl = self._fit_line(Label(text='CPU高压测试详情', bold=True,
+        title_lbl = self._fit_line(Label(text='高压测试详情', bold=True,
                                          halign='center', color=hex_rgb(COL_BALL) + (1,),
                                          size_hint_y=None, height=dp(28)), 19)
         content.add_widget(title_lbl)
@@ -4954,7 +4939,7 @@ class BenchMixin(object):
             freq_btn = Button(text='频率曲线', font_size='14sp', bold=True,
                               background_normal='', background_color=hex_rgb(COL_BTN) + (1,))
             freq_btn.bind(on_release=lambda *_: self._show_hp_curve(
-                _fw, title='高压CPU测试的频率曲线', unit='MHz', unit_name='采样'))
+                _fw, title='高压测试频率曲线', unit='MHz', unit_name='采样'))
             _btnrow.add_widget(freq_btn)
         # ⚠️ 与现场那个按钮**同一套逻辑**(只画功率), 只是数据从**记录**里取:
         #    `power_series`(定长 5Hz 网格) + `power_dt`(格宽)。
@@ -4963,14 +4948,14 @@ class BenchMixin(object):
         _pw2 = list(r.get('power_series') or [])
         if len([x for x in _pw2 if x is not None]) >= 2:
             _dt2 = (r.get('power_dt') or 0.2)
-            power_btn = Button(text='功率曲线', font_size='14sp', bold=True,
+            power_btn = Button(text='功耗曲线', font_size='14sp', bold=True,
                                background_normal='', background_color=hex_rgb(COL_SOC) + (1,))
             # ⚠️ 与现场那条**同一套**(两个粒度 + 导出原始值), 数据从记录里取。
             _v2 = {"每帧": (list(_pw2), "采样"),
                    "每5秒": (_med5(_pw2, POWER_GRAIN_K["每5秒"]), "5秒段")}
             _ck2 = self.game.power_grain
             power_btn.bind(on_release=lambda *_: self._show_hp_curve(
-                _v2[_ck2][0], dt=_dt2, title='CPU高压测试的功率曲线',
+                _v2[_ck2][0], dt=_dt2, title='高压测试功耗曲线',
                 unit='W', unit_name='采样', value_decimals=2, flat_min_range=1.0,
                 axis_unit='W', save_log=True, variants=_v2, cur_key=_ck2,
                 # ⚠️ 老记录里**没有**原始电流/电压序列, 所以这三项**显式传空** ——
@@ -4997,7 +4982,7 @@ class BenchMixin(object):
         self._popup_fit_content(popup, content)
 
     def _show_bench_detail(self, r):
-        """「测试历史（渲染 / CPU）」某一条的**详情** —— 点开的就是跑完那一刻的成绩面板。
+        """「快速测试历史」某一条的**详情** —— 点开的就是跑完那一刻的成绩面板。
 
         ⚠️ 正文走 `_bench_score_text(r)` —— **与现场那个成绩面板共用同一份渲染**,
            所以两边永远长一样(两处各写一份迟早脱钩)。
@@ -5006,7 +4991,7 @@ class BenchMixin(object):
         """
         content = BoxLayout(orientation='vertical', padding=dp(14), spacing=dp(8))
         # 历史详情标题不带版本号; 版本仍保留在记录字段中供追溯。
-        title_lbl = self._fit_line(Label(text='画面帧率和性能测试', bold=True, halign='center',
+        title_lbl = self._fit_line(Label(text='快速测试详情', bold=True, halign='center',
                                          color=hex_rgb(COL_TEXT) + (1,),
                                          size_hint_y=None, height=dp(28)), 20)
         content.add_widget(title_lbl)
@@ -5058,13 +5043,13 @@ class BenchMixin(object):
             mad=record.get("phys_mad")
             score="%d/—" % record.get("phys_fps",0) if mad is None else "%d/%.1f%%" % (record.get("phys_fps",0),float(mad))
             return _hist_stamp(record.get("time")),fps_text,score
-        return self._show_history_table("测试历史（渲染 / CPU）",_HIST_COLS,records,cells,
+        return self._show_history_table("快速测试历史",_HIST_COLS,records,cells,
             self._show_bench_detail,self._clear_bench_history,
             "平均分：物理引擎每秒模拟步数的平均值\n平均差系数：平均差 ÷ 平均值，越小越稳",
-            "暂无测试记录\n\n长按标题 3 秒即可测试")
+            "暂无快速测试记录\n\n在性能测试菜单中选择「快速全面测试」")
 
     def _clear_bench_history(self):
-        """清空「模拟测试历史」——**不可逆, 所以必须先过一道确认**。
+        """清空「快速测试历史」——**不可逆, 所以必须先过一道确认**。
 
         ⚠️ **只清这一张表**(`plinko_bench_history.json`)。CPU 高压历史是**另一张**
            (`plinko_hp_history.json`) —— 两张表分开是定过的案, 别一起清。
@@ -5074,14 +5059,14 @@ class BenchMixin(object):
         if _n <= 0:
             return
         content = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(10))
-        ttl = self._fit_line(Label(text='清空模拟测试历史', bold=True, halign='center',
+        ttl = self._fit_line(Label(text='清空快速测试历史', bold=True, halign='center',
                                    color=hex_rgb(COL_TEXT) + (1,),
                                    size_hint_y=None, height=dp(28)), 19)
         content.add_widget(ttl)
         # ⚠️⚠️ **正文里绝不能出现 markdown 星号** —— Kivy 的 Label 不认 markdown,
         #    `**3**` 会在屏幕上**原样显示成 `**3**`**。
-        msg = Label(text='将删除全部 %d 条模拟测试历史，\n不可恢复。\n\n'
-                         '（CPU 高压测试历史不受影响）' % _n,
+        msg = Label(text='将删除全部 %d 条快速测试历史，\n不可恢复。\n\n'
+                         '（高压测试历史不受影响）' % _n,
                     font_size='15sp', halign='center', valign='middle',
                     color=hex_rgb(COL_SUB) + (1,), size_hint_y=None)
         self._auto_h(msg, dp(90), dp(6))
@@ -5101,7 +5086,7 @@ class BenchMixin(object):
             self.bench_history = []
             self._save_bench_history()          # 盘上也要清, 否则重启又回来了
             popup.dismiss()
-            self._status_message('模拟测试历史已清空')
+            self._status_message('快速测试历史已清空')
             self._show_bench_history()          # 当场重开 → 看到空态
 
         cancel.bind(on_release=popup.dismiss)
@@ -5142,7 +5127,7 @@ class BenchMixin(object):
     # ⚠️ 与性能测试历史**同一套存取路子**(同目录、同 JSON 套路), 只是另一个文件。
     #    分开存是因为量纲不同(峰值 vs 衰减), 挤一张表只会互相污染。
     def _hp_history_path(self):
-        """CPU 高压测试历史 JSON 路径(与性能测试历史同目录)。"""
+        """高压测试历史 JSON 路径(与性能测试历史同目录)。"""
         if platform == "android":
             try:
                 base = App.get_running_app().user_data_dir
