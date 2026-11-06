@@ -368,7 +368,7 @@ class Game(object):
         #    它单独存一份是为了 `impact_sound` 的第一道闸 —— 见那里的说明。
         self.sfx_enabled = True
         self.fps_cap_setting = FPS_CAP_DEFAULT
-        self.prefer_fast_cores = False
+        self.prefer_fast_cores = True
         self.power_grain = POWER_GRAIN_DEFAULT
         self._bench_running = False  # 跑分开关(普通玩法恒 False; 跑分链自己置位)
         self._bench_ball_i = 0

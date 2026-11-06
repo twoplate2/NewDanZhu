@@ -98,7 +98,11 @@ def main():
                     assert gap['end_s']-gap['refresh_end_s']>=.3-1e-6
             assert 7 in record.frames[3::4]
             assert not root._playtest_info_built,'hidden mode must not construct metric widgets'
+            hidden_button_color=tuple(root._playtest_toggle_btn.background_color)
+            assert root._playtest_toggle_btn.text=='显示信息'
             root._toggle_playtest_info()
+            assert root._playtest_toggle_btn.text=='隐藏信息'
+            assert tuple(root._playtest_toggle_btn.background_color)!=hidden_button_color
             assert not root._playtest_info_built,'show request waits for a shot gap'
             for _ in range(2400):
                 clock.t+=1/120;Clock.tick();root._frame_timed(1/120);root._playtest_flip(Window)
@@ -106,6 +110,8 @@ def main():
             assert root._playtest_info_built and root._playtest_info_box.parent is root._playtest_panel
             assert '占用内存：' in root._playtest_label.text and 'MB' in root._playtest_label.text
             root._toggle_playtest_info()
+            assert root._playtest_toggle_btn.text=='显示信息'
+            assert tuple(root._playtest_toggle_btn.background_color)==hidden_button_color
             assert root._playtest_info_box.parent is None
             frozen=(root._playtest_label.text,root._playtest_sensor.text)
             for _ in range(240):

@@ -21,7 +21,7 @@ from ..bench.playtest import PlaytestRecord, format_report
 from ..bench.playtest_probe import PlayProbe
 from ..bench.low_runtime import ACTIVE
 from ..game import Game
-from ..config import MISFIRE_POWER, COL_BALL
+from ..config import MISFIRE_POWER, COL_BALL, COL_BTN, hex_rgb
 from ..platform.benchcpu import _live_power_snapshot
 from ..platform.memory import process_memory_snapshot
 from ..platform.device import _set_keep_awake, _screen_hz
@@ -146,7 +146,8 @@ class PlaytestMixin:
         save = Button(text='停止并保存', font_size=sp(14))
         stop.bind(on_release=lambda *_: self._stop_playtest() if self._playtest.active else self._close_playtest())
         save.bind(on_release=lambda *_: self._save_playtest())
-        toggle=Button(text='显示信息',font_size=sp(14))
+        toggle=Button(text='显示信息',font_size=sp(14),background_normal='',background_down='',
+                      background_color=hex_rgb(COL_BTN)+(1,),color=(1,1,1,1))
         toggle.bind(on_release=self._toggle_playtest_info)
         self._playtest_toggle_btn=toggle
         row.add_widget(toggle);row.add_widget(stop); row.add_widget(save); panel.add_widget(row)
@@ -207,6 +208,7 @@ class PlaytestMixin:
         self._playtest.display_events.append(dict(elapsed_s=self._playtest.clock()-self._playtest.started,
                                                  event='request',visible=self._playtest_show_info))
         self._playtest_toggle_btn.text='隐藏信息' if self._playtest_show_info else '显示信息'
+        self._playtest_toggle_btn.background_color=hex_rgb('#247658' if self._playtest_show_info else COL_BTN)+(1,)
         if not self._playtest_show_info and self._playtest_info_box is not None:
             self._playtest_panel.remove_widget(self._playtest_info_box)
             self._playtest.settings['overlay_visible']=False

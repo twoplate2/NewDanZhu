@@ -74,6 +74,7 @@ def main():
     g.hits = 9
     g.fps_cap_setting = 90
     g.power_grain = "每5秒"
+    g.prefer_fast_cores = False  # 显式关闭必须能覆盖新版默认开启。
     g._save_config()
     check(os.path.exists(path), "落盘文件已生成", path)
     with io.open(path, encoding="utf-8") as f:
@@ -89,7 +90,7 @@ def main():
     print("\n== 二、读回来逐字段复原 ==")
     g2 = _game(path)
     got = {k: getattr(g2, k) for k in CFG_KEYS}
-    want = dict(zip(CFG_KEYS, (100, 2.0, 50, 4321, 7, 21, 9, 90, "每5秒", False, False)))
+    want = dict(zip(CFG_KEYS, (100, 2.0, 50, 4321, 7, 21, 9, 90, "每5秒", False)))
     bad = {k: (want[k], got[k]) for k in CFG_KEYS if got[k] != want[k]}
     check(not bad, "9 个字段逐个复原", "" if not bad else repr(bad))
     check(g2.display_balance == 4321.0 and g2._anim_target_balance == 4321.0,
