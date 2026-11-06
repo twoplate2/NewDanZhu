@@ -11,6 +11,7 @@
 import os
 import random
 import threading
+from .scheduling import BackgroundThread
 import time
 
 from ..config import COL_BALL, MISFIRE_POWER
@@ -731,7 +732,7 @@ def _freq_sampler_start(win=None):
                 _next = _start + (int((_after - _start) // 1.0) + 1) * 1.0
 
     try:
-        threading.Thread(target=_samp, daemon=True).start()
+        BackgroundThread(target=_samp, daemon=True).start()
     except Exception:
         pass
     return _frq, _stop
@@ -1653,7 +1654,7 @@ def _battery_sampler_start(win, interval_sec=1.0, power_hz=5.0):
         _sink["stats"] = _pwr_finish(_sink["raw"], _p_step, _sink["plugged"])
 
     try:
-        threading.Thread(target=_samp, daemon=True).start()
+        BackgroundThread(target=_samp, daemon=True).start()
     except Exception:
         pass
     return _values, _stop, _sink

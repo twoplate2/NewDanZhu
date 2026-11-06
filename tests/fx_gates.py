@@ -2779,7 +2779,7 @@ def main():
     check("_cpufreq_mhz()" not in _fn_body(bench_src, "_on_flip"),
           "频率采样**不在** `_on_flip` 里(埋点不许抬高它要解释的那个数)")
     check("def _cpufreq_worker" in SRC["device"]
-          and "threading.Thread(target=_cpufreq_worker" in SRC["device"],
+          and "BackgroundThread(target=_cpufreq_worker" in SRC["device"],
           "频率采样跑在工作线程上")
 
     # ---- 第二趟文字渲染(真光栅化) ----

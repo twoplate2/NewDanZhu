@@ -368,6 +368,7 @@ class Game(object):
         #    它单独存一份是为了 `impact_sound` 的第一道闸 —— 见那里的说明。
         self.sfx_enabled = True
         self.fps_cap_setting = FPS_CAP_DEFAULT
+        self.prefer_fast_cores = False
         self.power_grain = POWER_GRAIN_DEFAULT
         self._bench_running = False  # 跑分开关(普通玩法恒 False; 跑分链自己置位)
         self._bench_ball_i = 0
@@ -1561,6 +1562,13 @@ class Game(object):
 
     # ---- 帧率上限设定 ----
 
+    def set_prefer_fast_cores(self, enabled):
+        if not isinstance(enabled, bool):return False
+        self.prefer_fast_cores = enabled
+        self._emit('cpu_policy', {'prefer_fast': enabled})
+        self._save_config()
+        return True
+
     def set_fps_cap_setting(self, cap):
         """写入用户帧率档位, 并立即按三重上限重算实际目标。返回是否受理。
 
@@ -1623,6 +1631,8 @@ class Game(object):
                         self.plays = cfg["plays"]
                     if isinstance(cfg.get("hits"), int) and cfg["hits"] >= 0:
                         self.hits = cfg["hits"]
+                    if isinstance(cfg.get("prefer_fast_cores"), bool):
+                        self.prefer_fast_cores = cfg["prefer_fast_cores"]
                     if (isinstance(cfg.get("fps_cap_setting"), int)
                             and cfg["fps_cap_setting"] in FPS_CAP_OPTIONS):
                         self.fps_cap_setting = cfg["fps_cap_setting"]
@@ -1677,6 +1687,7 @@ class Game(object):
                 "plays": self.plays,
                 "hits": self.hits,
                 "fps_cap_setting": int(self.fps_cap_setting),
+                "prefer_fast_cores": self.prefer_fast_cores,
                 "power_grain": self.power_grain,
             }
             path = self._config_path()      # 路径在主线程算好(工作线程问不到 App)

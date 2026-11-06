@@ -36,6 +36,7 @@ import random
 import sys
 import tempfile
 import threading
+from ..platform.scheduling import BackgroundThread
 import time
 
 from kivy.app import App
@@ -409,7 +410,7 @@ class BenchMixin(object):
             #    —— 跨线程做会卡死。
             self._show_bench_dim()
             self._set_bench_msg("CPU高压测试第1/%d秒" % int(SOC_SUSTAIN_WALL_SEC))
-            threading.Thread(target=self._run_hp_test, daemon=True).start()
+            BackgroundThread(target=self._run_hp_test, daemon=True).start()
         else:
             Clock.schedule_once(self._wait_idle_then_hp, 0.5)
 
@@ -1392,8 +1393,7 @@ class BenchMixin(object):
                 sfx.out.replay_reset()
             except Exception:
                 pass
-            import threading
-            threading.Thread(target=sfx._bake, daemon=True).start()
+            BackgroundThread(target=sfx._bake, daemon=True).start()
         except Exception as exc:
             # ⚠️ **绝不静默**: 上一次这里一句都不说, 玩家点下去"完全没有反馈", 而音频状态其实
             #    已经被清掉了。现在起不来就立刻放行 + 把原因说出来(toast)。红线是绝不软锁。
@@ -1677,6 +1677,7 @@ class BenchMixin(object):
         self._flip_times = []
         _fx = self.game_area.win_fx
         self._bench_cup_start = (_fx._batch_builds, _fx._legacy_builds)
+        self._bench_game_cpu_policy = self._cpu_policy.snapshot()
         # ---- 诊断: 光有"平均帧率/1%Low"没法定位卡在哪 ----
         self._bench_frames = []          # [(帧间隔ms, 场景标签, ...)]
         self._bench_cpu0 = time.process_time()
@@ -2344,6 +2345,7 @@ class BenchMixin(object):
         _cpu_tot = time.process_time() - getattr(self, "_bench_cpu0", 0.0)
         out["cpu_per_frame"] = _cpu_tot * 1000.0 / max(1, out["n"])
         out["gc_policy"] = "disabled"
+        out["game_cpu_policy"] = getattr(self,"_bench_game_cpu_policy",None)
         _fx = getattr(getattr(self, 'game_area', None), 'win_fx', None)
         _start = getattr(self, '_bench_cup_start', (0, 0))
         if _fx is not None:
@@ -2368,7 +2370,7 @@ class BenchMixin(object):
             # ⚠️ 这句只在黑屏刚上来时亮一下 —— 0.25 秒后 `_prog_tick` 就会用真进度盖掉,
             #    所以**不拼数字**(总秒数到那时还没算出来), 只写名字。
             self._set_bench_msg("物理演算")
-            threading.Thread(target=self._run_benchmark, daemon=True).start()
+            BackgroundThread(target=self._run_benchmark, daemon=True).start()
         else:
             Clock.schedule_once(self._wait_idle_then_bench, 0.5)
 
@@ -3571,6 +3573,9 @@ class BenchMixin(object):
                 #    用户态占绝对多数 ⇒ 纯 Python 的 CPU 竞争(GIL)。
             if d.get("gc_policy") == "disabled":
                 _lines.append("# Python循环GC：固定关闭（引用计数照常）")
+            if d.get('game_cpu_policy') is not None:
+                from ..platform.scheduling import describe_policy
+                _lines.append('# 采样前'+describe_policy(d['game_cpu_policy']))
             _cup = d.get('cup_renderer_builds')
             if _cup is not None:
                 _lines.append('# 落杯绘制: 批绘建表%d次 / 矩形回退%d次；预热就绪=%s；回退原因=%s' % (

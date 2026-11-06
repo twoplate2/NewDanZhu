@@ -42,7 +42,7 @@ def main():
             for confirm in (False, True):
                 root._show_fps_cap_settings()
                 popup = Window.children[0]
-                assert not any(isinstance(w, Switch) for w in popup.walk())
+                assert len([w for w in popup.walk() if isinstance(w, Switch)]) == 1
                 assert not any('GC' in getattr(w, 'text', '') for w in popup.walk())
                 slider = next(w for w in popup.walk() if isinstance(w, Slider))
                 slider.value = 0

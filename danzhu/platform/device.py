@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import threading
+from .scheduling import BackgroundThread
 import time
 from collections import deque
 
@@ -127,7 +128,7 @@ def _cpufreq_start():
     _CPUFRQ["cap"] = _cpufreq_cap_mhz()
     _CPUFRQ["stop"] = False
     try:
-        _CPUFRQ["thr"] = threading.Thread(target=_cpufreq_worker, daemon=True)
+        _CPUFRQ["thr"] = BackgroundThread(target=_cpufreq_worker, daemon=True)
         _CPUFRQ["thr"].start()
     except Exception:
         _CPUFRQ["thr"] = None
@@ -569,7 +570,7 @@ def _vib_warm():
                 try:
                     import queue as _queue
                     _VIB_Q = _queue.Queue(maxsize=32)
-                    threading.Thread(target=_vib_worker, daemon=True).start()
+                    BackgroundThread(target=_vib_worker, daemon=True).start()
                 except Exception:
                     _VIB_Q = False
     _vib_get()                            # 顺手把系统服务代理也取回来
@@ -591,7 +592,7 @@ def _vibrate(ms, amp=255):
                 try:
                     import queue as _queue
                     _VIB_Q = _queue.Queue(maxsize=32)
-                    threading.Thread(target=_vib_worker, daemon=True).start()
+                    BackgroundThread(target=_vib_worker, daemon=True).start()
                 except Exception:
                     _VIB_Q = False       # 建不起来: 退回同步调用, 绝不静默失震
     if _VIB_Q is False:
@@ -760,7 +761,7 @@ def _guard_warm():
                 try:
                     import queue as _queue
                     _GUARD_Q = _queue.Queue(maxsize=16)
-                    threading.Thread(target=_guard_worker, daemon=True).start()
+                    BackgroundThread(target=_guard_worker, daemon=True).start()
                 except Exception:
                     _GUARD_Q = False
     try:
@@ -782,7 +783,7 @@ def _guard_post(tag):
                 try:
                     import queue as _queue
                     _GUARD_Q = _queue.Queue(maxsize=16)
-                    threading.Thread(target=_guard_worker, daemon=True).start()
+                    BackgroundThread(target=_guard_worker, daemon=True).start()
                 except Exception:
                     _GUARD_Q = False
     if _GUARD_Q is False:
@@ -842,7 +843,7 @@ def _cfg_warm():
         return
     try:
         _CFG_EVT = threading.Event()
-        threading.Thread(target=_cfg_worker, daemon=True).start()
+        BackgroundThread(target=_cfg_worker, daemon=True).start()
         _CFG_OK[0] = True
     except Exception:
         _CFG_OK[0] = False

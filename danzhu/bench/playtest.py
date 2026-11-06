@@ -245,6 +245,9 @@ def format_report(document):
     memory=[s['memory_rss_bytes'] for s in document.get('sensors',[]) if s.get('memory_rss_bytes') is not None]
     memory_line=('占用内存（RSS）：首次 %.1fMB；末次 %.1fMB；采样最高 %.1fMB；变化 %+.1fMB'%
                  (memory[0]/1e6,memory[-1]/1e6,max(memory)/1e6,(memory[-1]-memory[0])/1e6)) if memory else '占用内存（RSS）：未采到'
+    if 'game_cpu_policy' in settings:
+        from ..platform.scheduling import describe_policy
+        lines.insert(-2,describe_policy(settings['game_cpu_policy']))
     renderer = settings.get('cup_renderer_builds')
     if renderer is not None:
         lines.insert(-2,'落杯绘制：批绘建表%d次 / 矩形回退%d次；预热就绪=%s；回退原因=%s' % (

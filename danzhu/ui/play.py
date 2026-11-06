@@ -504,6 +504,8 @@ class PlayMixin(object):
                 self._refresh_mute_btn()
             elif kind == "sfx_enabled":
                 self.sfx.set_enabled(ev.data["enabled"])
+            elif kind == "cpu_policy":
+                self._cpu_policy.set_preference(ev.data["prefer_fast"])
             elif kind == "fps_cap":
                 _FPS_USER_CAP[0] = ev.data["cap"]
                 try:
@@ -869,6 +871,7 @@ class PlayMixin(object):
     def _show_fps_cap_settings(self):
         """帧率上限设定：拖动滑条选档，确认后持久化并立即重申 Android 高刷请求。"""
         from kivy.uix.slider import Slider
+        from kivy.uix.switch import Switch
 
         values = FPS_CAP_OPTIONS
         current = (self.game.fps_cap_setting if self.game.fps_cap_setting in values
@@ -904,6 +907,16 @@ class PlayMixin(object):
                      color=hex_rgb(COL_SUB) + (1,), size_hint_y=None, height=dp(24))
         hint.bind(size=lambda w, *_: setattr(w, 'text_size', w.size))
         content.add_widget(hint)
+        cpu_row = BoxLayout(size_hint_y=None,height=dp(38),spacing=dp(8))
+        cpu_row.add_widget(Label(text='优先性能核（实验）',font_size='16sp'))
+        cpu_switch = Switch(active=self.game.prefer_fast_cores,size_hint_x=None,width=dp(72))
+        cpu_row.add_widget(cpu_switch)
+        content.add_widget(cpu_row)
+        cpu_hint = Label(text='关闭：系统调度；开启：游戏主线程使用最高性能核组',
+                         font_size='11sp',halign='center',valign='middle',
+                         color=hex_rgb(COL_SUB)+(1,),size_hint_y=None,height=dp(32))
+        cpu_hint.bind(size=lambda w,*_:setattr(w,'text_size',w.size))
+        content.add_widget(cpu_hint)
         actions = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
         cancel = Button(text='取消', font_size='16sp', bold=True, background_normal='',
                         background_color=hex_rgb(COL_BTN_OFF) + (1,))
@@ -913,7 +926,7 @@ class PlayMixin(object):
         actions.add_widget(confirm)
         content.add_widget(actions)
         # ⚠️ 0.96 是配合上面那行文案算的: 11sp 要 271dp 而 0.88 的可用宽只有 261dp。
-        popup = self._popup(0.96, 318, title='', content=content,
+        popup = self._popup(0.96, 410, title='', content=content,
                             auto_dismiss=True, separator_height=0)
 
         def _pick(_slider, value):
@@ -925,6 +938,7 @@ class PlayMixin(object):
             # `_FPS_USER_CAP[0]` + `_apply_fps_cap()` 由 `fps_cap` 事件做。
             # ⚠️ 当拍(`_act`): 老版 `_set_fps_cap_setting` 就是在这句里同步重申高刷请求的
             #    (main.py:20706), 直调会让新上限晚一帧才生效。
+            self._act(self.game.set_prefer_fast_cores, bool(cpu_switch.active))
             if self._act(self.game.set_fps_cap_setting, picked[0]):
                 self.game_area.center_toast('帧率上限已设为 %d Hz' % picked[0],
                                             hexcolor=COL_GREEN, size=20, life=1.3)

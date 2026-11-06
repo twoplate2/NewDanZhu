@@ -283,6 +283,7 @@ class PlinkoApp(App):
     def on_pause(self):
         self.rootw._stop_playtest('paused')
         self.rootw._low_interrupt("paused")
+        self.rootw._cpu_policy.suspend()
         try:
             self.rootw.sfx.pause_out()       # 切后台静音(SoundPool.autoPause)
         except Exception:
@@ -297,6 +298,7 @@ class PlinkoApp(App):
         return True
 
     def on_resume(self):
+        self.rootw._cpu_policy.resume()
         if platform == "android":
             try:
                 _apply_fps_cap()        # 屏幕刷新率会随智能刷新率/外接屏变, 回来重算一次
@@ -315,6 +317,8 @@ class PlinkoApp(App):
         if getattr(self.rootw,'_round_end_view',None) is not None:self.rootw._round_end_view.dispose()
         self.rootw._close_playtest()
         self.rootw._low_interrupt("stopped")
+        self.rootw._cpu_policy_event.cancel()
+        self.rootw._cpu_policy.suspend()
         try:
             self.rootw.sfx.close()
         except Exception:

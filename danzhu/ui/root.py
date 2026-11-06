@@ -56,6 +56,8 @@ class RootWidget(PlaytestMixin, BenchMixin, PlayMixin, UiMixin, BoxLayout):
     def __init__(self, sfx=None, **kw):
         import gc
         gc.disable()  # 直接构建界面的入口也遵守固定关闭策略。
+        from ..platform.scheduling import GameCpuPolicy
+        self._cpu_policy = GameCpuPolicy(android=_dev.platform == 'android')
         super().__init__(orientation="vertical", spacing=dp(10), **kw)
         # ⚠️ 走 `_cfg.SOUND_ENABLED`(运行期读模块属性), **不 from-import** ——
         #    from-import 绑的是拷贝, 运行期改 `config.SOUND_ENABLED`(录制台就靠这个把
@@ -153,6 +155,8 @@ class RootWidget(PlaytestMixin, BenchMixin, PlayMixin, UiMixin, BoxLayout):
         #       睡眠结束才跑, 代价落在这里
         #     · A→B 翻转**照旧发生**(3/7)
         # ⇒ 判据要取「**稳定 A 的比例**」和「A 组的分数」, **不能取"按中位分类的比例"**。
+        self._cpu_policy.prefer_fast = self.game.prefer_fast_cores
+        self._cpu_policy_event = Clock.schedule_once(lambda dt: self._cpu_policy.apply(), .1)
         Clock.schedule_interval(self._frame_timed, FRAME_TICK_DT)
         self._round_end_prepare_event=Clock.schedule_once(self._prepare_round_end,.1)
         # 中奖杯的球纹理/球堆预热: 分帧摊在启动后做, 别等中奖那一刻现算(低端机单档

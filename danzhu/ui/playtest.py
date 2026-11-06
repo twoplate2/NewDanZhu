@@ -1,8 +1,9 @@
-"""按正常游戏输入驱动帧率测试，不设置 benchmark 标志，不固定盘面或锁核。"""
+"""按正常游戏输入驱动帧率测试，继承设备调度偏好；不另设benchmark标志、固定盘面或绑核。"""
 import os
 import json
 import random
 import threading
+from ..platform.scheduling import BackgroundThread, reset_worker_affinity
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -76,7 +77,7 @@ class PlaytestMixin:
         simulation.take_events()
         simulation._config_path = lambda: os.path.join(directory, 'config.json')
         simulation._history_path = lambda: os.path.join(directory, 'history.json')
-        for field in ('bet','rtp_target','max_plays','sound_mode','sfx_enabled','fps_cap_setting','power_grain'):
+        for field in ('bet','rtp_target','max_plays','sound_mode','sfx_enabled','fps_cap_setting','power_grain','prefer_fast_cores'):
             setattr(simulation, field, getattr(old, field))
         simulation.rtp_btns = dict(old.rtp_btns)
         simulation.multipliers = simulation._boards[simulation.rtp_target]
@@ -108,6 +109,7 @@ class PlaytestMixin:
                                       display_request='cached_classes_argument_queue_and_1s_mode_catalog',
                                       popup_refresh_policy='shared_100ms_leading_350ms_trailing',
                                       gc_policy='disabled',
+                                      game_cpu_policy=self._cpu_policy.snapshot(),
                                       low_0_1pct_window_s=10,low_0_1pct_rounding='ceil',
                                       low_0_1pct_aggregation='mean_and_minimum_of_complete_10s_groups',
                                       display_hz=_screen_hz(),kivy_cap=getattr(Clock,'_max_fps',None),
@@ -117,7 +119,7 @@ class PlaytestMixin:
         self._playtest_next = time.perf_counter()+.7
         self._playtest_target = None
         self._playtest_gap = None
-        self._playtest_worker=ThreadPoolExecutor(max_workers=1,thread_name_prefix='playtest-stats')
+        self._playtest_worker=ThreadPoolExecutor(max_workers=1,thread_name_prefix='playtest-stats',initializer=reset_worker_affinity)
         self._playtest_job=None
         self._playtest_result = None
         self._playtest_make_panel()
@@ -359,6 +361,7 @@ class PlaytestMixin:
         _set_keep_awake(False)
         self._playtest_probe.stop()
         self._playtest_worker.shutdown(wait=False,cancel_futures=True)
+        record.settings["game_cpu_policy_end"] = self._cpu_policy.snapshot()
         record.stop(reason)
         if self._playtest_gap is not None:
             self._playtest_gap.update(end_s=record.duration_s,stage='interrupted')
@@ -434,7 +437,7 @@ class PlaytestMixin:
                     if status is not None: status.text=message
                     self._playtest_save_btn.disabled = False
             Clock.schedule_once(done,0)
-        threading.Thread(target=save,daemon=True).start()
+        BackgroundThread(target=save,daemon=True).start()
 
     def _close_playtest(self):
         self._stop_playtest('stopped',show_summary=False)

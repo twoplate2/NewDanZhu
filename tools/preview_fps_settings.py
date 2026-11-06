@@ -29,7 +29,7 @@ class Preview(PlinkoApp):
         self.popup=Window.children[0]
         Clock.schedule_once(self.capture,.5)
     def capture(self,dt):
-        assert not any(isinstance(w,Switch) for w in self.popup.walk())
+        assert len([w for w in self.popup.walk() if isinstance(w,Switch)]) == 1
         assert self.popup.y>=0 and self.popup.top<=Window.height+1
         print(Window.screenshot(str(OUT/('fps_%dx%d.png'%self.case))),flush=True)
         Clock.schedule_once(self.next_case,.1)

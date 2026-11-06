@@ -9,6 +9,7 @@ named 后端(SoundPool/SoundLoader): WAV 落盘 + 按名字播, gain 直接给�
 
 import os
 import threading
+from ..platform.scheduling import BackgroundThread
 import time
 
 from ..config import (EV_ARC, EV_CEIL, EV_DIV, EV_PEG, EV_WALL,
@@ -121,7 +122,7 @@ class Sfx:
             try:
                 import queue as _queue
                 self._q = _queue.Queue(maxsize=64)
-                self._qthread = threading.Thread(target=self._drain, daemon=True)
+                self._qthread = BackgroundThread(target=self._drain, daemon=True)
                 self._qthread.start()
             except Exception:
                 self._q = None
@@ -135,7 +136,7 @@ class Sfx:
         """起烘焙线程。⚠️ 只有**没起过**才起(幂等)。"""
         if self._thread is not None:
             return
-        self._thread = threading.Thread(target=self._bake, daemon=True)
+        self._thread = BackgroundThread(target=self._bake, daemon=True)
         self._thread.start()
 
     def _backend_call(self, item):
@@ -747,7 +748,7 @@ class Sfx:
                     return
 
         try:
-            threading.Thread(target=_worker, args=(todo,), daemon=True).start()
+            BackgroundThread(target=_worker, args=(todo,), daemon=True).start()
         except Exception:
             pass
 

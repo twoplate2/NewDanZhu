@@ -5,11 +5,13 @@
    改动前先看老工程 `DanZhu/android/p4a/hook.py`(函数体与这份逐行相同)与
    `DanZhu/android/BUILD_APK.md`。
 
-干两件事:
+干三件事:
   1) 主 activity 强制 `screenOrientation=fullSensor`(四方向随重力) + `resizeableActivity=true`。
      ⚠️ 与 spec 的 `orientation` / `android.manifest.orientation` 是**同一件事**, 这里是兜底:
         p4a 对多个 --orientation 可能写 `unspecified`。锁竖屏时代(sensorPortrait+targetSdk30)已结束。
   2) 给 application 换成 `@style/PlinkoTheme`, 只把启动窗口底色改成和 presplash 同一个 #0b1220。
+
+  3) application声明appCategory=game，普通游戏与所有benchmark共享游戏身份。
 
 ⚠️ `android.presplash_color`(buildozer.spec) == `danzhu/config.py::VEIL_BG` ==
    本文件 styles.xml 里那个 `windowSplashScreenBackground` —— **三处必须同值**,
@@ -72,7 +74,8 @@ def _inject_manifest(self):
             tag = tag.replace(m_orient.group(0), 'android:screenOrientation="fullSensor"')
             changed += 1
     else:
-        tag = tag[:tag.rfind('>')] + ' android:screenOrientation="fullSensor">' + tag[tag.rfind('>') + 1:]
+        close = tag.rfind("/>") if tag.endswith("/>") else tag.rfind(">")
+        tag = tag[:close] + ' android:screenOrientation="fullSensor"' + tag[close:]
         changed += 1
 
     # 2) resizeableActivity=true(31+ 默认即 true, 显式写双保险)
@@ -82,7 +85,8 @@ def _inject_manifest(self):
             tag = tag.replace(m_rs.group(0), 'android:resizeableActivity="true"')
             changed += 1
     else:
-        tag = tag[:tag.rfind('>')] + ' android:resizeableActivity="true">' + tag[tag.rfind('>') + 1:]
+        close = tag.rfind("/>") if tag.endswith("/>") else tag.rfind(">")
+        tag = tag[:close] + ' android:resizeableActivity="true"' + tag[close:]
         changed += 1
 
     if changed:
@@ -91,6 +95,32 @@ def _inject_manifest(self):
             f.write(xml)
     info('[hook] fullSensor+resizeable 注入: changed=%d' % changed)
     return changed
+
+
+def _inject_game_category(self):
+    """同一APK的所有入口共用游戏分类，不依赖启动的是游戏还是benchmark。"""
+    manifest = _find_manifest(self)
+    if not manifest:
+        info('[hook] AndroidManifest.xml not generated yet; game category pending')
+        return 0
+    with open(manifest, encoding='utf-8') as f:
+        xml = f.read()
+    match = re.search(r'<application\b[^>]*>', xml)
+    if match is None:
+        raise RuntimeError('application tag missing from AndroidManifest.xml')
+    tag = match.group(0)
+    old = re.search(r"android:appCategory\s*=\s*(['\"])[^'\"]*\1", tag)
+    if old:
+        updated = tag[:old.start()] + 'android:appCategory="game"' + tag[old.end():]
+    else:
+        updated = tag[:-1] + ' android:appCategory="game">'
+    if updated == tag:
+        return 0
+    xml = xml[:match.start()] + updated + xml[match.end():]
+    with open(manifest, 'w', encoding='utf-8') as f:
+        f.write(xml)
+    info('[hook] application appCategory=game')
+    return 1
 
 
 def _inject_theme(self):
@@ -166,6 +196,7 @@ def before_apk_build(self):
     ⚠️ 不再降 targetSdk —— 30 兼容模式是大屏 letterbox 盒的元凶, 保持 spec 的 33。"""
     info('[hook] before_apk_build 开始')
     _inject_manifest(self)
+    _inject_game_category(self)
     _inject_theme(self)
 
 
@@ -173,4 +204,5 @@ def after_apk_build(self):
     """兜底(幂等): 万一 before 没跑到, 再试一次。"""
     info('[hook] after_apk_build 兜底')
     _inject_manifest(self)
+    _inject_game_category(self)
     _inject_theme(self)

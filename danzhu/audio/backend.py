@@ -15,6 +15,7 @@ import struct
 import sys
 import tempfile
 import threading
+from ..platform.scheduling import BackgroundThread
 import time
 
 from .synth import SFX_SEED, SR, pcm_to_wav
@@ -889,7 +890,7 @@ class _SoundPoolOut:
                     #    「这一段**从没验过**」—— 否则起不来的那段会静默地不进任何判据,
                     #    而 `return not _stuck` 就会**声称全部就绪**。
                     _slots[_t] = None
-                    _th = threading.Thread(target=self._probe_chunk,
+                    _th = BackgroundThread(target=self._probe_chunk,
                                            args=(_pi, _t, _pool, _chunk, _res, _lk, _err, _gen),
                                            daemon=True)
                     try:
