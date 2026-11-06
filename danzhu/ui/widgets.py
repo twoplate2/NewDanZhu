@@ -911,7 +911,7 @@ def _soc_result_title():
         v = _app_version()
     except Exception:
         v = ""
-    return ("CPU 高压测试结果 %s" % v) if v else "CPU 高压测试结果"
+    return ("高压测试结果 %s" % v) if v else "高压测试结果"
 
 
 def _bench_result_title():

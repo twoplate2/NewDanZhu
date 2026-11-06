@@ -35,7 +35,7 @@ class MenuLayoutTests(unittest.TestCase):
     def test_titles_continue_into_body_and_terms_stay_together(self):
         for width in (275, 440, 700):
             text = plain(_bench_menu_desc(width, 15))
-            self.assertIn('CPU 高压测试：持续', text)
+            self.assertIn('高压测试：持续', text)
             self.assertIn('快速测试：在100秒', text)
             self.assertIn('帧率测试：模拟', text)
             self.assertNotIn('C\nPU', text)

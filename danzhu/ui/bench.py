@@ -181,7 +181,7 @@ def _bench_menu_desc(width=None, font_size=None):
     color = COL_BALL.lstrip('#')
     rows = (
         ('快速测试：', '在100秒内完成帧率与CPU 单核浮点性能测试。'),
-        ('CPU 高压测试：', '持续进行满载单核浮点计算，考验设备散热，记录性能、温度、功耗和频率变化。'),
+        ('高压测试：', '持续进行满载单核浮点计算，考验设备散热，记录性能、温度、功耗和频率变化。'),
         ('帧率测试：', '模拟游戏运行，实时查看帧率、功耗、温度。'),
     )
 
@@ -317,7 +317,7 @@ class BenchMixin(object):
     # ⚠️⚠️ **渲染窗口那 25 秒一个字都不显示**: 那段正在测 1%Low, 在里面写标签就是往被测帧
     #    上加活儿。**只有后面全力跑 CPU 高压 / 物理演算时才显示** —— 那两个阶段
     #    `_finish_render_sample` 已经跑过(屏幕采样停了) ⇒ 写标签不进成绩。
-    #    两种文案都由 `_prog_text` 出: `CPU高压测试第d/d秒`(分子从 **1** 起) 与
+    #    两种文案都由 `_prog_text` 出: `高压测试第d/d秒`(分子从 **1** 起) 与
     #    `物理演算第d/d秒`(分子从 **1** 起、分母 `ceil(总秒数)`, 实测 **45**)。
     def _prog_text(self):
         """当前该显示的进度文案; 没有测试在跑就返回 None。"""
@@ -331,7 +331,7 @@ class BenchMixin(object):
             _w0 = getattr(self, "_hp_wall0", 0.0)
             _el = (time.time() - _w0) if _w0 else 0.0
             _cap = int(SOC_SUSTAIN_WALL_SEC)
-            return "CPU 高压测试：第 %d/%d 秒" % (min(int(_el) + 1, _cap), _cap)
+            return "高压测试：第 %d/%d 秒" % (min(int(_el) + 1, _cap), _cap)
         if self.game._bench_running:
             # ⚠️⚠️ **渲染窗口那 25 秒一个字都不显示**: 不写标签 ⇒ 不会在测 1%Low 的窗口里
             #    造出一次文字重建, 也就**不需要为它预烘**。
@@ -412,7 +412,7 @@ class BenchMixin(object):
         self._prog_start()
         # ⚠️ **黑屏与白字不在这里建** —— 本函数可能跑在**工作线程**上, 而它们要碰 Kivy 的
         #    canvas / CoreLabel。**在调用方 `_wait_idle_then_hp`(主线程)那里建。**
-        self._status_message("CPU 高压测试：第 1/%d 秒" % int(SOC_SUSTAIN_WALL_SEC))
+        self._status_message("高压测试：第 1/%d 秒" % int(SOC_SUSTAIN_WALL_SEC))
         # ⚠️ 走 `game._controls`, **不是** `self._set_controls_enabled` —— 后者只是这条链的
         #    **界面那一半**(染色/标签), 状态位在 `Game`。老版那一下是同一个方法(置位 + 染色一起),
         #    而新版的状态位由 `on_touch_down_allowed()`(`_restyle_buttons` 的置灰)读
@@ -429,7 +429,7 @@ class BenchMixin(object):
             #    `_run_hp_test` 是工作线程, 而这两个碰 Kivy 的 canvas / CoreLabel
             #    —— 跨线程做会卡死。
             self._show_bench_dim()
-            self._set_bench_msg("CPU 高压测试：第 1/%d 秒" % int(SOC_SUSTAIN_WALL_SEC))
+            self._set_bench_msg("高压测试：第 1/%d 秒" % int(SOC_SUSTAIN_WALL_SEC))
             BackgroundThread(target=self._run_hp_test, daemon=True).start()
         else:
             Clock.schedule_once(self._wait_idle_then_hp, 0.5)
@@ -915,7 +915,7 @@ class BenchMixin(object):
         except Exception:
             _txt = ""
         content = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
-        # ⚠️ 标题改成 `CPU高压测试 v0.x.x`, 正文那行不再带版本。
+        # ⚠️ 标题改成 `高压测试 v0.x.x`, 正文那行不再带版本。
         title_lbl = self._fit_line(Label(text=_soc_result_title(), bold=True, halign="center",
                                          color=hex_rgb(COL_TEXT) + (1,),
                                          size_hint_y=None, height=dp(28)), 20)
@@ -987,7 +987,7 @@ class BenchMixin(object):
         self._popup_fit_content(popup, content)
 
     def _show_bench_menu(self):
-        """性能测试菜单：三行两列，测试、历史、信息与帧率设定各自成对。"""
+        """性能测试菜单：三组测试在上，信息与帧率设定放在最后一行。"""
         content = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(12))
         _ver = _app_version()
         _title = ('性能测试 ' + _ver) if _ver else '性能测试'
@@ -1026,7 +1026,7 @@ class BenchMixin(object):
 
         start_btn = menu_button('开始快速测试', 0)
         hist_btn = menu_button('快速测试历史', 0)
-        hp_btn = menu_button('CPU 高压测试', 1)
+        hp_btn = menu_button('开始高压测试', 1)
         hph_btn = menu_button('高压测试历史', 1)
         info_btn = menu_button('游戏信息', 2)
         cap_btn = menu_button('帧率上限设定', 2)
@@ -1043,7 +1043,7 @@ class BenchMixin(object):
         hp_btn.bind(on_release=lambda *_: (popup.dismiss(), self._start_hp_test()))
         hph_btn.bind(on_release=lambda *_: (popup.dismiss(), self._show_hp_history()))
         cap_btn.bind(on_release=lambda *_: (popup.dismiss(), self._show_fps_cap_settings()))
-        for left, right in ((start_btn, hist_btn), (hp_btn, hph_btn), (info_btn, cap_btn)):
+        for left, right in ((start_btn, hist_btn), (hp_btn, hph_btn)):
             row = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
             row.add_widget(left)
             row.add_widget(right)
@@ -1055,6 +1055,10 @@ class BenchMixin(object):
         playtest_row=BoxLayout(size_hint_y=None,height=dp(48),spacing=dp(8))
         playtest_row.add_widget(playtest_btn);playtest_row.add_widget(playtest_history)
         content.add_widget(playtest_row)
+        settings_row = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
+        settings_row.add_widget(info_btn)
+        settings_row.add_widget(cap_btn)
+        content.add_widget(settings_row)
         popup.open()
         self._popup_fit_content(popup, content)
 
@@ -3830,7 +3834,7 @@ class BenchMixin(object):
             return _d if _v is None else ("%s" % (_v,))
 
         _L = []
-        _L.append("# 跳跳的弹珠机 · CPU高压测试 · 电池功率原始记录")
+        _L.append("# 跳跳的弹珠机 · 高压测试 · 电池功率原始记录")
         try:
             _L.append("# 时间: %s" % time.strftime("%Y-%m-%d %H:%M:%S"))
         except Exception:
@@ -4691,7 +4695,7 @@ class BenchMixin(object):
         return self._show_history_table("高压测试历史",("时间","平均值","平均差系数"),
             records,cells,self._show_hp_detail,self._clear_hp_history,
             "平均值：物理引擎每秒模拟步数的平均值\n平均差系数：平均差 ÷ 平均值，越小越稳",
-            "暂无高压测试记录\n\n在性能测试菜单中选择「CPU 高压测试」")
+            "暂无高压测试记录\n\n在性能测试菜单中选择「开始高压测试」")
 
     def _clear_hp_history(self):
         """清空「高压测试历史」——**不可逆, 所以必须先过一道确认**。
@@ -5158,7 +5162,7 @@ class BenchMixin(object):
         except Exception:
             pass
 
-    # ---- CPU 高压测试的独立历史 ----
+    # ---- 高压测试的独立历史 ----
     # ⚠️ 与性能测试历史**同一套存取路子**(同目录、同 JSON 套路), 只是另一个文件。
     #    分开存是因为量纲不同(峰值 vs 衰减), 挤一张表只会互相污染。
     def _hp_history_path(self):
