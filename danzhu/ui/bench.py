@@ -1006,30 +1006,30 @@ class BenchMixin(object):
         desc_lbl.bind(width=reflow_description, font_size=reflow_description)
         reflow_description(desc_lbl)
         content.add_widget(desc_lbl)
-        # ⚠️ **按系配色 + 按系排序**(**3 系, 同类同色系**):
-        #      模拟(性能测试): 红系 `COL_FIRE` / CPU 高压: 琥珀系 `COL_SOC` / 信息: `COL_BTN`
-        #    ⚠️⚠️ **一行一个颜色 —— 右边的按钮用左边那个的颜色**: 改之前是 6 个按钮 6 种颜色,
-        #       玩家读成"颜色好乱"。代价是**同一行里分不出"行动"和"历史"** —— 玩家明确选的取舍。
-        #    ⚠️ `COL_DARKRED` / `COL_SOC_DIM` / `COL_BTN_OFF` 在本文件别处仍在用(其它弹窗的
-        #       取消/返回/关闭), **不要因为它们在这里不用了就删掉**。
-        start_btn = Button(text='开始快速测试', font_size='17sp', bold=True,
-                           background_normal='', background_color=hex_rgb(COL_FIRE) + (1,),
-                           size_hint_y=None, height=dp(52))
-        hist_btn = Button(text='快速测试历史', font_size='17sp', bold=True,
-                          background_normal='', background_color=hex_rgb(COL_FIRE) + (1,),
-                          size_hint_y=None, height=dp(52))
-        hp_btn = Button(text='CPU 高压测试', font_size='17sp', bold=True,
-                        background_normal='', background_color=hex_rgb(COL_SOC) + (1,),
-                        size_hint_y=None, height=dp(52))
-        hph_btn = Button(text='高压测试历史', font_size='17sp', bold=True,
-                         background_normal='', background_color=hex_rgb(COL_SOC) + (1,),
-                         size_hint_y=None, height=dp(52))
-        info_btn = Button(text='游戏信息', font_size='17sp', bold=True,
-                          background_normal='', background_color=hex_rgb(COL_BTN) + (1,),
-                          size_hint_y=None, height=dp(52))
-        cap_btn = Button(text='帧率上限设定', font_size='17sp', bold=True,
-                         background_normal='', background_color=hex_rgb(COL_BTN) + (1,),
-                         size_hint_y=None, height=dp(52))
+        # 菜单局部配色：同一行同色，浅灰调底配深色字，不影响其他界面。
+        palettes = (('#8fa9ba', '#192f3d'),   # 灰蓝：快速测试
+                    ('#b29c8d', '#35281f'),   # 灰棕：高压测试
+                    ('#a59cb5', '#2f253b'),   # 灰紫：信息与设置
+                    ('#91ac9e', '#20382b'))   # 灰绿：帧率测试，避免纯灰像禁用
+
+        def menu_button(text, group, height=52):
+            fill, ink = palettes[group]
+            normal = hex_rgb(fill) + (1,)
+            pressed = tuple(v * .94 for v in normal[:3]) + (1,)
+            button = Button(text=text, font_size=sp(17), bold=True,
+                            background_normal='', background_down='',
+                            background_color=normal, color=hex_rgb(ink) + (1,),
+                            size_hint_y=None, height=dp(height))
+            button.bind(state=lambda widget, state: setattr(
+                widget, 'background_color', pressed if state == 'down' else normal))
+            return button
+
+        start_btn = menu_button('开始快速测试', 0)
+        hist_btn = menu_button('快速测试历史', 0)
+        hp_btn = menu_button('CPU 高压测试', 1)
+        hph_btn = menu_button('高压测试历史', 1)
+        info_btn = menu_button('游戏信息', 2)
+        cap_btn = menu_button('帧率上限设定', 2)
         # ⚠️⚠️ **宽度 0.92 是算出来的, 不是拍的**: 说明那三条要用全角逗号, 第 2 条要 269px,
         #    而弹窗宽度按 `宽 × 屏宽dp − 56`(外壳 24 + 正文内边距 32)算可用宽 —— 360dp 上
         #    0.92 给 275px(余 6px)。本文件里另外两张历史面板早就用 0.92, 这一处改完就统一了。
@@ -1048,9 +1048,9 @@ class BenchMixin(object):
             row.add_widget(left)
             row.add_widget(right)
             content.add_widget(row)
-        playtest_btn = Button(text='开始帧率测试', size_hint_y=None, height=dp(48), font_size=sp(17))
+        playtest_btn = menu_button('开始帧率测试', 3, 48)
         playtest_btn.bind(on_release=lambda *_: (popup.dismiss(), self._start_playtest()))
-        playtest_history = Button(text='帧率测试历史',size_hint_y=None,height=dp(48),font_size=sp(17))
+        playtest_history = menu_button('帧率测试历史', 3, 48)
         playtest_history.bind(on_release=lambda *_:(popup.dismiss(),self._show_playtest_history()))
         playtest_row=BoxLayout(size_hint_y=None,height=dp(48),spacing=dp(8))
         playtest_row.add_widget(playtest_btn);playtest_row.add_widget(playtest_history)
