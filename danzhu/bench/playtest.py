@@ -19,7 +19,6 @@ class PlaytestRecord:
         self.recent = deque()
         self.events, self.sensors, self.gaps = [], [], []
         self.display_events=[]
-        self.idle_gc_events=[]
         self.wall_ms = 0.
         self.active = True
         self.reason = None
@@ -218,7 +217,6 @@ class PlaytestRecord:
                     frames=[list(self.frames[i*4:i*4+4]) for i in selected],
                     events=list(self.events), sensors=list(self.sensors),test_gaps=list(self.gaps),
                     display_events=list(self.display_events),
-                    idle_gc_events=list(self.idle_gc_events),
                     sensor_interval_s=self.settings.get('sensor_interval_s',.5), live_metrics_window_s=10)
 
 
@@ -255,12 +253,6 @@ def format_report(document):
         row=document.get('worst_frame_by_scope',{}).get(key)
         if row:lines.append('%s：#%d @%.3fs，%.3fms，约%.2f FPS，%s'%(
             label,row['frame_index'],row['elapsed_s'],row['interval_ms'],row['equivalent_fps'],phases[row['phase']]))
-    if 'idle_gc_events' in document:
-        collections=document['idle_gc_events']
-        lines.append('空闲策略GC：%d次，最长%.3fms（不含启动预热）；回收帧仍计入全程统计。'%(
-            len(collections),max((e['duration_ms'] for e in collections),default=0)))
-        lines.append('回收代数：'+ ' / '.join('第%d代 %d次'%(generation,sum(e.get('generation')==generation for e in collections))
-                                            for generation in (0,1,2)))
     lines.extend(['','二、慢帧与其余帧的核心计时均值（ms）',
                   '主线程 CPU / 游戏帧 CPU / 前次 swap 等待 / 画布提交 / 面板自身'])
     for key,label in (('slowest_1pct','最慢1%'),('slowest_0_1pct','最慢0.1%'),('other_frames','其余帧')):

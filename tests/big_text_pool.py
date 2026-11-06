@@ -52,7 +52,6 @@ def main():
         assert miss[0].text=='+200'
         assert T._lbl_canvas_color(miss[0]).a==1
         expire()
-    root._idle_gc.stop()
     print('PASS: pooled widgets reset correctly, active overlap protected; old/new unreachable objects',before,after)
 
 

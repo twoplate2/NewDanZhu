@@ -49,7 +49,7 @@ def check(ok, name, detail=""):
 
 
 CFG_KEYS = ("max_plays", "rtp_target", "bet", "balance", "round_plays",
-            "plays", "hits", "fps_cap_setting", "power_grain", "gc_enabled", "gc_manual_only")
+            "plays", "hits", "fps_cap_setting", "power_grain")
 
 
 def _game(path, **kw):

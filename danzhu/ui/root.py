@@ -54,6 +54,8 @@ class RootWidget(PlaytestMixin, BenchMixin, PlayMixin, UiMixin, BoxLayout):
     """界面壳：控件树 + 事件派发 + 输入转发。游戏逻辑全在 `self.game`。"""
 
     def __init__(self, sfx=None, **kw):
+        import gc
+        gc.disable()  # 直接构建界面的入口也遵守固定关闭策略。
         super().__init__(orientation="vertical", spacing=dp(10), **kw)
         # ⚠️ 走 `_cfg.SOUND_ENABLED`(运行期读模块属性), **不 from-import** ——
         #    from-import 绑的是拷贝, 运行期改 `config.SOUND_ENABLED`(录制台就靠这个把
@@ -152,11 +154,6 @@ class RootWidget(PlaytestMixin, BenchMixin, PlayMixin, UiMixin, BoxLayout):
         #     · A→B 翻转**照旧发生**(3/7)
         # ⇒ 判据要取「**稳定 A 的比例**」和「A 组的分数」, **不能取"按中位分类的比例"**。
         Clock.schedule_interval(self._frame_timed, FRAME_TICK_DT)
-        from ..idle_gc import IdleGC
-        self._idle_gc=IdleGC()
-        self._idle_gc.set_enabled(self.game.gc_enabled,self.game.gc_manual_only)
-        self._idle_gc.start()
-        self._idle_gc_event=Clock.schedule_interval(self._idle_gc_tick,.1)
         self._round_end_prepare_event=Clock.schedule_once(self._prepare_round_end,.1)
         # 中奖杯的球纹理/球堆预热: 分帧摊在启动后做, 别等中奖那一刻现算(低端机单档
         # d=128 纯 Python 合成要 100~200ms, 一次做完就是几个长帧, 而这动画的全部意义

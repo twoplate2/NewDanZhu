@@ -44,12 +44,13 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(doc['group_mean_ms']['slowest_1pct']['draw_ms'],10)
         self.assertLess(doc['group_mean_ms']['other_frames']['draw_ms'],.11)
 
-    def test_gc_cleanup_and_unknown_not_zero(self):
+    def test_probe_cleanup_and_unknown_not_zero(self):
+        before=list(gc.callbacks)
         probe=PlayProbe();probe.start()
         self.assertIs(ACTIVE_PLAY[0],probe)
-        self.assertIn(probe.gc_callback,gc.callbacks)
+        self.assertEqual(before,gc.callbacks)
         probe.stop();probe.stop()
-        self.assertIsNone(ACTIVE_PLAY[0]);self.assertNotIn(probe.gc_callback,gc.callbacks)
+        self.assertIsNone(ACTIVE_PLAY[0]);self.assertEqual(before,gc.callbacks)
         diag=DiagnosticFrames();diag.append(0,1,6,0,None)
         self.assertIsNone(diag.document([0])['group_mean_ms']['slowest_1pct']['thread_cpu_ms'])
 

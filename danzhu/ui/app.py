@@ -281,7 +281,6 @@ class PlinkoApp(App):
 
     # ---- Android 生命周期 ----
     def on_pause(self):
-        if getattr(self.rootw,'_idle_gc',None) is not None:self.rootw._idle_gc.stop(restore=False)
         self.rootw._stop_playtest('paused')
         self.rootw._low_interrupt("paused")
         try:
@@ -298,7 +297,6 @@ class PlinkoApp(App):
         return True
 
     def on_resume(self):
-        if getattr(self.rootw,'_idle_gc',None) is not None:self.rootw._idle_gc.start()
         if platform == "android":
             try:
                 _apply_fps_cap()        # 屏幕刷新率会随智能刷新率/外接屏变, 回来重算一次
@@ -315,8 +313,6 @@ class PlinkoApp(App):
     def on_stop(self):
         if getattr(self.rootw,'_round_end_prepare_event',None) is not None:self.rootw._round_end_prepare_event.cancel()
         if getattr(self.rootw,'_round_end_view',None) is not None:self.rootw._round_end_view.dispose()
-        if getattr(self.rootw,'_idle_gc',None) is not None:self.rootw._idle_gc.stop(restore=False)
-        if getattr(self.rootw,'_idle_gc_event',None) is not None:self.rootw._idle_gc_event.cancel()
         self.rootw._close_playtest()
         self.rootw._low_interrupt("stopped")
         try:

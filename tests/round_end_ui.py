@@ -44,7 +44,7 @@ def main():
     with patch.object(CoreLabel,'refresh',refresh):
         root._show_round_end(dict(plays=50,balance=123456));pump()
     assert counter[0]==0,('resize warmup incomplete',counter[0])
-    view.popup.dismiss(animation=False);view.dispose();root._idle_gc.stop()
+    view.popup.dismiss(animation=False);view.dispose()
     print('PASS: reused popup, first/repeated show 0 CoreLabel refresh, 18-digit balance fits, one callback, resize prewarmed')
 
 

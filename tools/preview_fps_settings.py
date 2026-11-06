@@ -1,4 +1,4 @@
-"""隔离存档检查帧率设置GC开关布局。"""
+"""隔离存档检查帧率设置布局。"""
 from pathlib import Path
 import sys
 import tempfile
@@ -11,7 +11,7 @@ from danzhu import config as C
 from danzhu.ui.app import PlinkoApp
 from danzhu.ui.root import RootWidget
 C.SOUND_ENABLED=False
-OUT=Path(__file__).resolve().parent/'output/gc_settings_preview'
+OUT=Path(__file__).resolve().parent/'output/fps_settings_preview'
 OUT.mkdir(parents=True,exist_ok=True)
 class Preview(PlinkoApp):
     def on_start(self):
@@ -29,10 +29,9 @@ class Preview(PlinkoApp):
         self.popup=Window.children[0]
         Clock.schedule_once(self.capture,.5)
     def capture(self,dt):
-        switch=next(w for w in self.popup.walk() if isinstance(w,Switch))
-        assert not switch.active
+        assert not any(isinstance(w,Switch) for w in self.popup.walk())
         assert self.popup.y>=0 and self.popup.top<=Window.height+1
-        print(Window.screenshot(str(OUT/('gc_%dx%d.png'%self.case))),flush=True)
+        print(Window.screenshot(str(OUT/('fps_%dx%d.png'%self.case))),flush=True)
         Clock.schedule_once(self.next_case,.1)
 if __name__=='__main__':
     with tempfile.TemporaryDirectory() as folder:

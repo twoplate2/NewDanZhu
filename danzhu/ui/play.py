@@ -70,33 +70,6 @@ from .widgets import _land_layer
 class PlayMixin(object):
     """`Game` ↔ 控件的适配层。**不定义 `__init__`**(`__init__` 只在 root.py)。"""
 
-    def _idle_gc_quiet(self):
-        from .text import _POPUP_N
-        game,area=self.game,self.game_area
-        fx=area.win_fx
-        still_cup=(fx.mode=='result' and not getattr(fx,'_closing_at',0) and not getattr(fx,'_dirty',False))
-        return (getattr(self,'_load_veil',None) is None and not _POPUP_N[0]
-                and game.state in ('ready','landed') and (fx.mode=='idle' or still_cup)
-                and not area._effects and area._pulse is None and not game._anim_pending
-                and game._balance_release_at is None and game._stats_release_at is None
-                and game.now>=game._anim_start_time+game._anim_dur
-                and abs(area._spring_power)<.002 and abs(area._spring_vel)<.03
-                and not game._round_end_shown)
-
-    def _idle_gc_tick(self,_dt):
-        from .winfx import _PREBAKE_DONE
-        if self.game.state in ("charging","flying","misfire"):
-            self._idle_gc.manual_pending=False
-        quiet=self._idle_gc_quiet() and _PREBAKE_DONE[0] and not getattr(self,'_hp_running',False)
-        event=self._idle_gc.tick(quiet)
-        if event:
-            from ..bench.playtest_probe import ACTIVE_PLAY
-            probe=ACTIVE_PLAY[0]
-            if probe is not None:probe.step('空闲GC',event['duration_ms']/1000)
-            record=getattr(self,'_playtest',None)
-            if record is not None and record.active:
-                record.idle_gc_events.append(dict(event='idle_gc',elapsed_s=record.clock()-record.started,
-                    state=self.game.state,cup_mode=self.game_area.win_fx.mode,**event))
 
     # =====================================================================
     # 〇、同步入口 —— **从 UI 侧调 Game 一律走 `_act`, 不要直接 `self.game.xxx()`**
@@ -418,8 +391,6 @@ class PlayMixin(object):
         #    写在派发之后, 两者就调换了。数值上等价(`display_balance` 在 `step` 内已更新完),
         #    但"同一帧里谁先谁后"是本工程的对账口径, 不靠"反正互不依赖"来省。
         balance_text=str(int(round(self.game.display_balance)))
-        if balance_text!=self.balance_lbl.text and hasattr(self,'_idle_gc'):
-            self._idle_gc.quiet_since=None
         _set_label_text(self.balance_lbl,balance_text)
         self._dispatch(_events, dt)
         # 装杯期把整块界面(减去游戏区)压暗。⚠️ 位置: 必须在 `tick_draw()` **之后** ——
@@ -466,8 +437,6 @@ class PlayMixin(object):
         """派发**一条**事件。清单见 `_dispatch` 的说明。"""
         if True:
             kind = ev.kind
-            if kind in ('state','stats','big_result','controls','update_slots','toast','toast_clear','round_end_popup','round_end_close'):
-                if hasattr(self,'_idle_gc'):self._idle_gc.quiet_since=None
             if kind == "launch":
                 # 老版 `launch()` 里那句 `_SINCE_LAUNCH[0] = 0`(在"state 必须是 charging"
                 # 守卫之后、**哑火分支之前** —— 所以哑火也清)。
@@ -535,8 +504,6 @@ class PlayMixin(object):
                 self._refresh_mute_btn()
             elif kind == "sfx_enabled":
                 self.sfx.set_enabled(ev.data["enabled"])
-            elif kind == "gc_policy":
-                self._idle_gc.set_enabled(ev.data["enabled"],ev.data["manual_only"])
             elif kind == "fps_cap":
                 _FPS_USER_CAP[0] = ev.data["cap"]
                 try:
@@ -902,7 +869,6 @@ class PlayMixin(object):
     def _show_fps_cap_settings(self):
         """帧率上限设定：拖动滑条选档，确认后持久化并立即重申 Android 高刷请求。"""
         from kivy.uix.slider import Slider
-        from kivy.uix.switch import Switch
 
         values = FPS_CAP_OPTIONS
         current = (self.game.fps_cap_setting if self.game.fps_cap_setting in values
@@ -938,18 +904,6 @@ class PlayMixin(object):
                      color=hex_rgb(COL_SUB) + (1,), size_hint_y=None, height=dp(24))
         hint.bind(size=lambda w, *_: setattr(w, 'text_size', w.size))
         content.add_widget(hint)
-        gc_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-        gc_row.add_widget(Label(text="开启GC", font_size="16sp"))
-        gc_switch = Switch(active=self.game.gc_enabled, size_hint_x=None, width=dp(72))
-        gc_row.add_widget(gc_switch)
-        content.add_widget(gc_row)
-        manual_row = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
-        manual_row.add_widget(Label(text="手动GC\n落杯关闭后0.3秒 / 间隔60秒", font_size="13sp"))
-        manual_switch = Switch(active=self.game.gc_manual_only, size_hint_x=None, width=dp(72),
-                               disabled=not gc_switch.active)
-        gc_switch.bind(active=lambda w,v:setattr(manual_switch,'disabled',not v))
-        manual_row.add_widget(manual_switch)
-        content.add_widget(manual_row)
         actions = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
         cancel = Button(text='取消', font_size='16sp', bold=True, background_normal='',
                         background_color=hex_rgb(COL_BTN_OFF) + (1,))
@@ -959,7 +913,7 @@ class PlayMixin(object):
         actions.add_widget(confirm)
         content.add_widget(actions)
         # ⚠️ 0.96 是配合上面那行文案算的: 11sp 要 271dp 而 0.88 的可用宽只有 261dp。
-        popup = self._popup(0.96, 418, title='', content=content,
+        popup = self._popup(0.96, 318, title='', content=content,
                             auto_dismiss=True, separator_height=0)
 
         def _pick(_slider, value):
@@ -971,7 +925,6 @@ class PlayMixin(object):
             # `_FPS_USER_CAP[0]` + `_apply_fps_cap()` 由 `fps_cap` 事件做。
             # ⚠️ 当拍(`_act`): 老版 `_set_fps_cap_setting` 就是在这句里同步重申高刷请求的
             #    (main.py:20706), 直调会让新上限晚一帧才生效。
-            self._act(self.game.set_gc_enabled, bool(gc_switch.active), bool(manual_switch.active))
             if self._act(self.game.set_fps_cap_setting, picked[0]):
                 self.game_area.center_toast('帧率上限已设为 %d Hz' % picked[0],
                                             hexcolor=COL_GREEN, size=20, life=1.3)

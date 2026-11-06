@@ -1,11 +1,9 @@
 """实玩诊断：仅测试时启用；全帧紧凑核心数据 + 有界最慢帧上下文。"""
 from array import array
 from collections import deque
-import gc
 import heapq
 import math
 import time
-import threading
 
 ACTIVE_PLAY = [None]
 CORE_COLUMNS = ('thread_cpu_ms','frame_cpu_ms','swap_ms','draw_ms','monitor_ms')
@@ -22,8 +20,6 @@ class PlayProbe:
         self.swap_source=None
         self.interval_id=0
         self.active=True
-        self.gc_start=None
-        self.owner_thread=threading.get_ident()
 
     def step(self, tag, seconds):
         if not self.active:return
@@ -47,20 +43,13 @@ class PlayProbe:
         self.swap_ms=0.;self.swap_source=None;self.steps={};self.interval_id+=1
         return sample
 
-    def gc_callback(self,phase,info):
-        if phase=='start':self.gc_start=self.clock()
-        elif self.gc_start is not None:
-            tag='GC' if threading.get_ident()==self.owner_thread else '后台GC'
-            self.step(tag,self.clock()-self.gc_start);self.gc_start=None
 
     def start(self):
         ACTIVE_PLAY[0]=self
-        gc.callbacks.append(self.gc_callback)
 
     def stop(self):
         self.active=False
         if ACTIVE_PLAY[0] is self:ACTIVE_PLAY[0]=None
-        while self.gc_callback in gc.callbacks:gc.callbacks.remove(self.gc_callback)
 
 
 class DiagnosticFrames:

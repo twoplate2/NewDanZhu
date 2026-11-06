@@ -75,7 +75,6 @@ class RoundEndView:
     def _request_resize(self,*_):
         # Window.size派发时width/height别名可能仍是上一拍，等属性更新完成再计算。
         if not self.disposed:
-            if getattr(self.host,'_idle_gc',None) is not None:self.host._idle_gc.quiet_since=None
             self._resize_event()
 
     def resize(self,*_):

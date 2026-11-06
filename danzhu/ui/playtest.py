@@ -75,7 +75,7 @@ class PlaytestMixin:
         simulation.take_events()
         simulation._config_path = lambda: os.path.join(directory, 'config.json')
         simulation._history_path = lambda: os.path.join(directory, 'history.json')
-        for field in ('bet','rtp_target','max_plays','sound_mode','sfx_enabled','fps_cap_setting','power_grain','gc_enabled','gc_manual_only'):
+        for field in ('bet','rtp_target','max_plays','sound_mode','sfx_enabled','fps_cap_setting','power_grain'):
             setattr(simulation, field, getattr(old, field))
         simulation.rtp_btns = dict(old.rtp_btns)
         simulation.multipliers = simulation._boards[simulation.rtp_target]
@@ -105,16 +105,12 @@ class PlaytestMixin:
                                       text_measurement='single_line_extents_without_texture',
                                       display_request='cached_classes_argument_queue_and_1s_mode_catalog',
                                       popup_refresh_policy='shared_100ms_leading_350ms_trailing',
-                                      gc_enabled=simulation.gc_enabled,gc_manual_only=simulation.gc_manual_only,
-                                      gc_manual_interval_s=60,
-                                      gc_policy=('disabled' if not simulation.gc_enabled else
-                                                 'manual_close_after_interval' if simulation.gc_manual_only else
-                                                 'generational_collect_when_visually_quiet'),
+                                      gc_policy='disabled',
                                       low_0_1pct_window_s=10,low_0_1pct_rounding='ceil',
                                       low_0_1pct_aggregation='mean_and_minimum_of_complete_10s_groups',
                                       display_hz=_screen_hz(),kivy_cap=getattr(Clock,'_max_fps',None),
                                       random_power_range=[MISFIRE_POWER,1.0],
-                                      diagnostic_probe='scoped_steps_gc_thread_cpu_draw_swap_v1')
+                                      diagnostic_probe='scoped_steps_thread_cpu_draw_swap_v2')
         self._playtest_rng = random.Random()
         self._playtest_next = time.perf_counter()+.7
         self._playtest_target = None
@@ -352,7 +348,6 @@ class PlaytestMixin:
         self._playtest_sensor_plain=' '.join(plain)
         self._playtest_sensor.text=' '.join(fields)
         self._playtest_layout()
-        if hasattr(self,'_idle_gc'):self._idle_gc.quiet_since=None
         return True
 
     def _stop_playtest(self, reason='user', show_summary=True):

@@ -46,7 +46,6 @@ class UiMixin(object):
 
     def _status_message(self,text,important=False):
         if important or not text:
-            if text!=self.status_lbl.text and hasattr(self,'_idle_gc'):self._idle_gc.quiet_since=None
             _set_label_text(self.status_lbl,text)
 
     # ------------------------------ 尺寸 ------------------------------

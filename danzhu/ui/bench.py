@@ -70,9 +70,9 @@ from .widgets import (FpsCurve, RotPopup, SpeedCurve, STAGE_ORDER, _app_version,
 #     `from .winfx import`: 这两个表在 `prebake_step` 里是**整个重绑**(`globals()[...] = tuple(...)`),
 #     不是原地改 —— from-import 拿到的是导入那一刻的 `()` / `None`, 之后永不更新,
 #     下面「字号预热表 N 项」会**恒印 0**(而真值是 48+4=52), 正是本工程反复防的自证失效。
-#     `_GC_FROZEN` / `_PREBAKE_DONE` 是下标原地改的 list, from-import 没有这个问题。
+#     `_PREBAKE_DONE` 是下标原地改的 list, from-import 没有这个问题。
 from . import winfx
-from .winfx import _GC_FROZEN, _PREBAKE_DONE
+from .winfx import _PREBAKE_DONE
 
 from ..audio.backend import (ARM_LADDER, SND_SLOW_MS, _FRAME_PROBE, _LOAD_BYTES, _SND_STAT,
                              _cpu_shape, _sfx_cache_dir)
@@ -1677,8 +1677,6 @@ class BenchMixin(object):
         self._flip_times = []
         # ---- 诊断: 光有"平均帧率/1%Low"没法定位卡在哪 ----
         self._bench_frames = []          # [(帧间隔ms, 场景标签, ...)]
-        self._bench_gc = {}              # gen -> [次数, 总秒, 最坏秒]
-        self._bench_gc_t0 = 0.0
         self._bench_cpu0 = time.process_time()
         self._bench_cpu_prev = self._bench_cpu0
         self._bench_thr_prev = _THREAD_TIME()
@@ -1746,7 +1744,6 @@ class BenchMixin(object):
         _CFG_STAT[1] = 0.0
         _CFG_STAT[2] = 0
         self._bench_wall0 = time.time()
-        self._bench_gc_listen(True)
         # 阶段 1 测的是 Kivy 主渲染线程，不能像物理跑分那样在工作线程里锁。
         # 这里运行在主线程，且只覆盖 on_flip 采样窗口；采样结束会先恢复，再启动物理工作线程。
         self._render_aff_before = _bench_pin_fast_cpus() if getattr(self, "_low_pin_cpu", True) else None
@@ -1815,7 +1812,6 @@ class BenchMixin(object):
         _cpufreq_stop()
         _bench_fps_lock_off()
         _TEXUPD_ACTIVE[0] = False
-        self._bench_gc_listen(False)
         fx = getattr(self.game_area, "win_fx", None)
         if fx is not None:
             fx._low_scene = None
@@ -1861,28 +1857,6 @@ class BenchMixin(object):
         else:
             _TEXUPD_ACTIVE[0] = False
 
-    def _bench_gc_listen(self, enabled):
-        """异常退出留下的回调也先清除，避免下一轮把 GC 次数和耗时重复统计。"""
-        import gc
-        while self._bench_gc_cb in gc.callbacks:
-            gc.callbacks.remove(self._bench_gc_cb)
-        if enabled:
-            gc.callbacks.append(self._bench_gc_cb)
-
-    def _bench_gc_cb(self, phase, info):
-        """量每一次 GC 的耗时。安卓上 GC 停顿直接表现为掉帧, 而本工程从来没调过 gc。"""
-        try:
-            if phase == "start":
-                self._bench_gc_t0 = time.perf_counter()
-                return
-            d = time.perf_counter() - self._bench_gc_t0
-            e = self._bench_gc.setdefault(info.get("generation", -1), [0, 0.0, 0.0])
-            e[0] += 1
-            e[1] += d
-            if d > e[2]:
-                e[2] = d
-        except Exception:
-            pass
 
     def _bench_tag(self):
         """这一帧"屏幕上在演什么"。跑分现在会把装杯演出一起采样(25s 窗口被拉到 ~15s),
@@ -2137,7 +2111,6 @@ class BenchMixin(object):
 
     def _bench_collect_diag(self):
         """把采样到的原始帧信息整理成可读诊断。**只读采样结果, 不改任何行为。**"""
-        self._bench_gc_listen(False)
         out = {}
         fr = list(getattr(self, "_bench_frames", []) or [])
         if not fr:
@@ -2368,17 +2341,7 @@ class BenchMixin(object):
         # 它离"帧间隔"越近, 越是处理器顶不住; 差得远就是大头在等画面。
         _cpu_tot = time.process_time() - getattr(self, "_bench_cpu0", 0.0)
         out["cpu_per_frame"] = _cpu_tot * 1000.0 / max(1, out["n"])
-        # GC 停顿: 次数 / 总时长 / 最坏一次
-        gcs = getattr(self, "_bench_gc", {}) or {}
-        out["gc_n"] = sum(v[0] for v in gcs.values())
-        out["gc_total"] = sum(v[1] for v in gcs.values())
-        out["gc_worst"] = max((v[2] for v in gcs.values()), default=0.0)
-        # 最坏那一次是**哪一代**的回收 —— gen-2(全量)在扫整个对象图, 量级与 gen-0 完全不同。
-        # 这一栏是"GC 冻结有没有生效"的判据: 冻结之后 gen-2 该变成扫不到东西。
-        out["gc_worst_gen"] = (max(gcs, key=lambda g: gcs[g][2]) if gcs else -1)
-        out["gc_frozen"] = _GC_FROZEN[0]
-        out["gc_frz_before"] = _GC_FROZEN[1]
-        out["gc_frz_after"] = _GC_FROZEN[2]
+        out["gc_policy"] = "disabled"
         out["cfg_sum"] = _CFG_STAT[0] * 1000.0
         out["cfg_worst"] = _CFG_STAT[1] * 1000.0
         out["cfg_n"] = _CFG_STAT[2]
@@ -3584,10 +3547,9 @@ class BenchMixin(object):
         # ⚠️ 为什么补: 真机日志里有两段 0.8 秒的低谷; 而低谷里飞行帧的**主线程 CPU 占比与
         #    全局一模一样(34%)**, 只是**绝对 CPU 涨了 20%**(2.05→2.49ms)、帧长同步涨 20%。
         #    也就是说那段**不是被外面挡住, 是我们自己每帧多干了 20% 的活**。可"多干的是什么"
-        #    这份日志一个字都没有 —— 而 GC 次数/耗时、进程态 utime/stime、后端是谁、这几个数
+        #    这份日志一个字都没有 —— 而进程态 utime/stime、后端是谁、这几个数
         #    `_bench_collect_diag` **早就采好了, 只是从来没引用过它们**。纯打印, 零行为改变。
         try:
-            _gc_n = int(d.get("gc_n", 0) or 0)
             _u = float(d.get("utime_ms", -1.0))
             _s = float(d.get("stime_ms", -1.0))
             _cpf = float(d.get("cpu_per_frame", 0.0) or 0.0)
@@ -3597,24 +3559,9 @@ class BenchMixin(object):
                               % (_u, _s, 100.0 * _s / max(1.0, _u + _s), _cpf))
                 # ⚠️ 读法: 内核占比高 ⇒ JNI/Binder/socket 写/文件写回这一族;
                 #    用户态占绝对多数 ⇒ 纯 Python 的 CPU 竞争(GIL)。
-            _lines.append("# GC: %d 次 · 累计 %.1f 毫秒 · 单次最慢 %.1f 毫秒(gen%s)  ·  后端 %s"
-                          % (_gc_n, float(d.get("gc_total", 0.0) or 0.0) * 1000.0,
-                             float(d.get("gc_worst", 0.0) or 0.0) * 1000.0,
-                             str(d.get("gc_worst_gen", -1)), str(d.get("backend", "?"))))
-            # ⚠️ **内存冻结必须落进日志**。这一行原来**只在成绩面板上显示**, txt 里没有
-            #    ⇒ **离线看日志时无从判断**。实测代价: 四轮日志里有一轮撞到 **21.2 毫秒的 gen-2**
-            #    (占那一轮最慢帧的全部), 而账面上它与另外三轮看不出任何差别。
-            # ⚠️ **`gc_frozen == 0` 也要印**(印成"没冻结"), 不能 `if frozen:` 就跳过 ——
-            #    那正是本仓库栽过的"静默": 冻结链没跑到/抛了异常时, 日志一片安静, 看起来
-            #    和"冻结成功所以没问题"一模一样。
-            _fz = int(d.get("gc_frozen", 0) or 0)
-            if _fz:
-                _lines.append("# 内存冻结: 已冻结 %d 个常驻对象 · 强制全量回收 冻结前 %.1f → 冻结后 %.1f 毫秒"
-                              % (_fz, float(d.get("gc_frz_before", 0.0) or 0.0),
-                                 float(d.get("gc_frz_after", 0.0) or 0.0)))
-            else:
-                _lines.append("# 内存冻结: **没冻结**(gc_frozen=0) —— 冻结链没跑到或抛了异常,"
-                              " 常驻对象仍被 gen-2 全量回收反复扫")
+            if d.get("gc_policy") == "disabled":
+                _lines.append("# Python循环GC：固定关闭（引用计数照常）")
+            _lines.append("# 音频后端: %s" % str(d.get("backend", "?")))
             # JNI: 主线程那一笔才是"卡我们"的; 后台那一笔只说明工作线程在忙。
             _jn = int(d.get("jni_n", 0) or 0)
             if _jn or float(d.get("ui_n", 0) or 0):

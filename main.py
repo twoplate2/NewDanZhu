@@ -12,6 +12,11 @@
    控件与演出仍在 `rootw` 本身上（`rootw.game_area` 等）—— 那是**壳**，不是逻辑。
 """
 
+import gc
+
+# 固定禁用自动循环 GC；引用计数照常工作。
+gc.disable()
+
 import os
 import sys
 

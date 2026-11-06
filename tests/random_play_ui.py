@@ -53,8 +53,8 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         with patch.object(App,'get_running_app',return_value=SimpleNamespace(user_data_dir=directory)):
             root._start_playtest()
-            assert not root.game.gc_enabled
-            assert not root._idle_gc.collection_enabled
+            import gc
+            assert not gc.isenabled()
             assert root._playtest.settings["gc_policy"]=="disabled"
             assert awake==[True]
             assert root._playtest_display is None
@@ -108,7 +108,6 @@ def main():
             for _ in range(240):
                 clock.t+=1/120;Clock.tick();root._frame_timed(1/120);root._playtest_flip(Window)
             assert frozen==(root._playtest_label.text,root._playtest_sensor.text)
-            assert not record.idle_gc_events
             assert writes and all('random_play_sandbox' in p for p in writes)
             root._stop_playtest()
             assert awake==[True,False]

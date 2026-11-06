@@ -2492,10 +2492,7 @@ def main():
                                 # 节拍真值那一行要用的几个(见 `_bench_collect_diag` 的"节拍真值")
                                 "screen_hz": 120.0, "req_hz": 165.0, "clock_maxfps": 165.0,
                                 "maxfps": "165", "vsync": "1", "multisamples": "2",
-                                # 「已采未印」那几格 —— ⚠️ 单位别搞错: `gc_total`/`gc_worst` 采集端
-                                # 存的是**秒**(perf_counter 差), 打印端自己 ×1000; 其余都已经是毫秒。
-                                "gc_n": 5, "gc_total": 0.012, "gc_worst": 0.008,
-                                "gc_worst_gen": 1, "backend": "SoundPool",
+                                "gc_policy": "disabled", "backend": "SoundPool",
                                 "utime_ms": 900.0, "stime_ms": 100.0, "cpu_per_frame": 1.86,
                                 "jni_n": 11, "jni_main_sum": 1.2, "jni_main_worst": 0.4,
                                 "jni_bg_sum": 18.0, "jni_bg_worst": 6.0,
@@ -2730,10 +2727,10 @@ def main():
     check("CPU 也高=我们交晚了" in _log_sw and "CPU 低=真在等屏幕" in _log_sw,
           "等屏幕那一行的判据写明了**两个方向**(必须配合 CPU 账一起读, 不能只看 swap 高)",
           " ".join(l.strip() for l in _log_sw.split("\n") if "等屏幕 中位" in l)[-70:])
-    # ---- 已采未印的几格(GC / 进程态 / JNI / 后端 / 越界位次) ----
-    check("GC:" in _log_sw and "后端" in _log_sw,
-          "头部印出 GC 次数/累计/单次最慢 + 实际生效的后端(降级到别的后端会改变所有音效读数的含义)",
-          " ".join(l.strip() for l in _log_sw.split("\n") if l.startswith("# GC:"))[:110])
+    # ---- 固定GC策略 / 进程态 / JNI / 后端 / 越界位次 ----
+    check("Python循环GC：固定关闭" in _log_sw and "音频后端: SoundPool" in _log_sw
+          and "内存冻结" not in _log_sw,
+          "头部记录固定关闭GC和实际音频后端，不再输出冻结/回收计数")
     check("进程态" in _log_sw and "内核" in _log_sw,
           "头部印出进程态 utime/stime(内核占比高 = JNI/Binder/写盘那一族; 用户态高 = 纯 Python 抢 GIL)")
     check("最差20帧距上次发射的帧数" in _log_sw,
