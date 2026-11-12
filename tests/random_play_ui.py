@@ -21,6 +21,7 @@ def main():
     module._set_keep_awake=awake.append
     root._load_veil=None
     old=root.game
+    old.launch_extrapolation=True
     root._act(old.set_bet,100);root._act(old.set_rtp,3.6)
     root._act(old.set_prefer_fast_cores,True)
     initial=(old.balance,old.plays,old.hits,old.bet,old.rtp_target,list(old.multipliers))
@@ -58,6 +59,8 @@ def main():
             assert not gc.isenabled()
             assert root._playtest.settings["gc_policy"]=="disabled"
             assert root.game.prefer_fast_cores==old.prefer_fast_cores
+            assert root.game.launch_extrapolation==old.launch_extrapolation
+            assert root._playtest.settings['launch_extrapolation'] is True
             assert root._playtest.settings['game_cpu_policy']['prefer_fast_cores']==old.prefer_fast_cores
             assert awake==[True]
             assert root._playtest_display is None

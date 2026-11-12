@@ -77,7 +77,7 @@ class PlaytestMixin:
         simulation.take_events()
         simulation._config_path = lambda: os.path.join(directory, 'config.json')
         simulation._history_path = lambda: os.path.join(directory, 'history.json')
-        for field in ('bet','rtp_target','max_plays','sound_mode','sfx_enabled','fps_cap_setting','power_grain','prefer_fast_cores'):
+        for field in ('bet','rtp_target','max_plays','sound_mode','sfx_enabled','fps_cap_setting','power_grain','prefer_fast_cores','launch_extrapolation'):
             setattr(simulation, field, getattr(old, field))
         simulation.rtp_btns = dict(old.rtp_btns)
         simulation.multipliers = simulation._boards[simulation.rtp_target]
@@ -89,6 +89,7 @@ class PlaytestMixin:
         self._playtest = PlaytestRecord(clock=time.perf_counter)
         self._playtest_probe=PlayProbe()
         self._playtest.settings = dict(bet=simulation.bet, rtp=simulation.rtp_target,
+                                      launch_extrapolation=simulation.launch_extrapolation,
                                       fps_cap=simulation.fps_cap_setting, sensor_interval_s=None,
                                       sensor_policy='between_shots',ui_refresh_policy='between_shots',
                                       memory_metric='process_rss',memory_unit='MB_decimal',

@@ -11,6 +11,12 @@ from danzhu.bench.playtest import PlaytestRecord, format_report
 
 
 class ReportTests(unittest.TestCase):
+    def test_launch_display_mode_is_explicit_and_old_reports_are_unknown(self):
+        for settings, expected in (({'launch_extrapolation':True}, '发射段外推'),
+                                   ({'launch_extrapolation':False}, '原始显示'),
+                                   ({}, '未记录')):
+            self.assertIn('弹珠显示：'+expected, format_report({'settings':settings}))
+
     def test_swap_belongs_to_next_interval_and_accumulators_reset(self):
         clock=[0.];cpu=[0.]
         probe=PlayProbe(clock=lambda:clock[0],cpu=lambda:cpu[0])

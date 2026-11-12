@@ -49,7 +49,7 @@ def check(ok, name, detail=""):
 
 
 CFG_KEYS = ("max_plays", "rtp_target", "bet", "balance", "round_plays",
-            "plays", "hits", "fps_cap_setting", "power_grain", "prefer_fast_cores")
+            "plays", "hits", "fps_cap_setting", "power_grain", "prefer_fast_cores", "launch_extrapolation")
 
 
 def _game(path, **kw):
@@ -63,7 +63,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="danzhu_persist_")
     path = os.path.join(tmp, "plinko_config.json")
 
-    print("== 一、写下去的是不是那 11 个键 ==")
+    print("== 一、写下去的是不是预期的 %d 个键 ==" % len(CFG_KEYS))
     g = _game(path)
     g.max_plays = 100
     g.rtp_target = 2.0
@@ -75,12 +75,13 @@ def main():
     g.fps_cap_setting = 90
     g.power_grain = "每5秒"
     g.prefer_fast_cores = False  # 显式关闭必须能覆盖新版默认开启。
+    g.launch_extrapolation = True
     g._save_config()
     check(os.path.exists(path), "落盘文件已生成", path)
     with io.open(path, encoding="utf-8") as f:
         cfg = json.load(f)
     check(set(cfg) == set(CFG_KEYS),
-          "键集合**恰好**是那 11 个(多一个少一个都算脱钩)",
+          "键集合**恰好**是预期的 %d 个(多一个少一个都算脱钩)" % len(CFG_KEYS),
           "实得 %s" % sorted(cfg))
     check(cfg.get("balance") == 4321 and cfg.get("bet") == 50
           and cfg.get("power_grain") == "每5秒",
@@ -90,9 +91,9 @@ def main():
     print("\n== 二、读回来逐字段复原 ==")
     g2 = _game(path)
     got = {k: getattr(g2, k) for k in CFG_KEYS}
-    want = dict(zip(CFG_KEYS, (100, 2.0, 50, 4321, 7, 21, 9, 90, "每5秒", False)))
+    want = dict(zip(CFG_KEYS, (100, 2.0, 50, 4321, 7, 21, 9, 90, "每5秒", False, True)))
     bad = {k: (want[k], got[k]) for k in CFG_KEYS if got[k] != want[k]}
-    check(not bad, "9 个字段逐个复原", "" if not bad else repr(bad))
+    check(not bad, "%d 个字段逐个复原" % len(CFG_KEYS), "" if not bad else repr(bad))
     check(g2.display_balance == 4321.0 and g2._anim_target_balance == 4321.0,
           "余额复原时 **display/_anim 三个影子字段一起同步**",
           "display=%s target=%s" % (g2.display_balance, g2._anim_target_balance))

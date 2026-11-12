@@ -10,6 +10,7 @@ from danzhu import config as C
 from danzhu.ui.game_area import GameArea
 from danzhu.ui import text as T
 from danzhu.game import Game
+from danzhu.fx.launch_motion import launch_draw_position
 from kivy.graphics import Rectangle, RoundedRectangle
 
 
@@ -24,6 +25,32 @@ class Counted:
 
 
 class MotionTests(unittest.TestCase):
+    def test_launch_extrapolation_moves_only_position_and_rotation_center(self):
+        game = Game()
+        area = GameArea(SimpleNamespace(game=game))
+        game.start_charge()
+        game.power = 1.0
+        game.launch()
+        game.step(1/120)
+        physical = (game.ball.x, game.ball.y, game.ball.spin)
+        for enabled in (False, True, False):
+            game.launch_extrapolation = enabled
+            x, y = launch_draw_position(game)
+            self.assertEqual(y != game.ball.y, enabled)
+            for scale in (.7, 1., 2.):
+                area.size = (C.CW*scale, C.CH*scale)
+                area.pos = (17, 29)
+                area._redraw()
+                area.tick_draw(1/120)
+                cx = area._ball_e.pos[0] + area._ball_e.size[0]/2
+                cy = area._ball_e.pos[1] + area._ball_e.size[1]/2
+                self.assertAlmostEqual(cx, area._ox + x*area._s, places=3)
+                self.assertAlmostEqual(cy, area._oyt - y*area._s, places=3)
+                self.assertAlmostEqual(area._ball_rot.origin[0], cx, places=3)
+                self.assertAlmostEqual(area._ball_rot.origin[1], cy, places=3)
+                self.assertEqual(area._ball_rot.angle, 0)
+                self.assertEqual((game.ball.x,game.ball.y,game.ball.spin), physical)
+
     def test_spring_30hz_rebounds_stable_color_and_no_idle_writes(self):
         for hz in (60, 120, 185):
             area = SimpleNamespace(model=SimpleNamespace(state="charging", power=1.0),

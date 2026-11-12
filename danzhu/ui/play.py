@@ -872,6 +872,7 @@ class PlayMixin(object):
         """帧率上限设定：拖动滑条选档，确认后持久化并立即重申 Android 高刷请求。"""
         from kivy.uix.slider import Slider
         from kivy.uix.switch import Switch
+        from kivy.uix.togglebutton import ToggleButton
 
         values = FPS_CAP_OPTIONS
         current = (self.game.fps_cap_setting if self.game.fps_cap_setting in values
@@ -917,6 +918,22 @@ class PlayMixin(object):
                          color=hex_rgb(COL_SUB)+(1,),size_hint_y=None,height=dp(32))
         cpu_hint.bind(size=lambda w,*_:setattr(w,'text_size',w.size))
         content.add_widget(cpu_hint)
+        motion_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        motion_group = 'launch_motion_%s' % id(content)
+        original = ToggleButton(text='原始显示', group=motion_group, allow_no_selection=False,
+                                state='normal' if self.game.launch_extrapolation else 'down',
+                                font_size='16sp')
+        predicted = ToggleButton(text='发射段外推', group=motion_group, allow_no_selection=False,
+                                 state='down' if self.game.launch_extrapolation else 'normal',
+                                 font_size='16sp')
+        motion_row.add_widget(original)
+        motion_row.add_widget(predicted)
+        content.add_widget(motion_row)
+        motion_hint = Label(text='仅调整发射通道中的显示位置\n用于对比，不改变物理和结算',
+                            font_size='12sp', halign='center', valign='middle',
+                            color=hex_rgb(COL_SUB)+(1,), size_hint_y=None, height=dp(40))
+        motion_hint.bind(size=lambda w, *_: setattr(w, 'text_size', w.size))
+        content.add_widget(motion_hint)
         actions = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
         cancel = Button(text='取消', font_size='16sp', bold=True, background_normal='',
                         background_color=hex_rgb(COL_BTN_OFF) + (1,))
@@ -926,7 +943,7 @@ class PlayMixin(object):
         actions.add_widget(confirm)
         content.add_widget(actions)
         # ⚠️ 0.96 是配合上面那行文案算的: 11sp 要 271dp 而 0.88 的可用宽只有 261dp。
-        popup = self._popup(0.96, 410, title='', content=content,
+        popup = self._popup(0.96, 510, title='', content=content,
                             auto_dismiss=True, separator_height=0)
 
         def _pick(_slider, value):
@@ -939,6 +956,7 @@ class PlayMixin(object):
             # ⚠️ 当拍(`_act`): 老版 `_set_fps_cap_setting` 就是在这句里同步重申高刷请求的
             #    (main.py:20706), 直调会让新上限晚一帧才生效。
             self._act(self.game.set_prefer_fast_cores, bool(cpu_switch.active))
+            self._act(self.game.set_launch_extrapolation, predicted.state == 'down')
             if self._act(self.game.set_fps_cap_setting, picked[0]):
                 self.game_area.center_toast('帧率上限已设为 %d Hz' % picked[0],
                                             hexcolor=COL_GREEN, size=20, life=1.3)

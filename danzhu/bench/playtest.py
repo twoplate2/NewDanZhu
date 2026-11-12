@@ -226,8 +226,10 @@ def format_report(document):
     def number(value):return '未采到' if value is None else '%.3f'%value
     phases=('待机','蓄力','飞行','哑火','落袋','结算','装杯','测试间隔')
     m=document.get('metrics') or {}; settings=document.get('settings',{})
+    motion = settings.get('launch_extrapolation')
     diag=document.get('diagnostics',{})
     lines=['帧率测试诊断报告',
+           '弹珠显示：'+('发射段外推' if motion is True else '原始显示' if motion is False else '未记录'),
            '版本：%s；时长：%.2f 秒；结束原因：%s'%(document.get('version','未知'),document.get('duration_s',0),document.get('reason')),
            '投入：%s；返还率：%.0f%%；屏幕：%s Hz；Kivy 上限：%s'%(
                settings.get('bet'),settings.get('rtp',0)*100,settings.get('display_hz'),settings.get('kivy_cap')),

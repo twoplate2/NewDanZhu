@@ -1821,6 +1821,7 @@ class BenchMixin(object):
                       device={"os": sys.platform, "abi": "unavailable", "model": "unavailable"},
                       runtime={"kivy": kivy.__version__, "sdl": "unavailable", "p4a": "unavailable"},
                       settings={"kivy_cap": getattr(Clock, "_max_fps", None),
+                                "launch_extrapolation": self.game.launch_extrapolation,
                                 "cpu_pinned": mode == "fixed_five" and getattr(self, "_low_pin_cpu", True),
                                 "actual_display_hz": _screen_hz() or "unavailable"}))
         self._low_capture = self.game._low_capture = ACTIVE[0] = capture
