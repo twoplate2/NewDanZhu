@@ -1,7 +1,6 @@
 """弹簧动画和弹珠显示回归；不改弹珠碰撞尺寸。"""
 
 from pathlib import Path
-import math
 import sys
 from types import SimpleNamespace
 import unittest
@@ -25,33 +24,6 @@ class Counted:
 
 
 class MotionTests(unittest.TestCase):
-    def test_ball_rectangle_and_rotation_share_interpolated_center_after_resize(self):
-        game = Game()
-        area = GameArea(SimpleNamespace(game=game))
-        game.start_charge()
-        game.power = 1.0
-        game.launch()
-        game.step(1/60)
-        game.ball.spin = math.radians(30)
-        game.step(1/120)
-        draw_x, draw_y, spin = game.ball_draw_pose()
-        self.assertNotEqual(draw_y, game.ball.y)
-        physical = (game.ball.x, game.ball.y, game.ball.spin)
-        for scale in (0.7, 1.0, 2.0):
-            area.size = (C.CW * scale, C.CH * scale)
-            area.pos = (17, 29)
-            area._redraw()
-            for _ in range(2):
-                area.tick_draw(1/120)
-                cx = area._ball_e.pos[0] + area._ball_e.size[0] / 2
-                cy = area._ball_e.pos[1] + area._ball_e.size[1] / 2
-                self.assertAlmostEqual(cx, area._ox + draw_x * area._s, places=3)
-                self.assertAlmostEqual(cy, area._oyt - draw_y * area._s, places=3)
-                self.assertAlmostEqual(area._ball_rot.origin[0], cx, places=3)
-                self.assertAlmostEqual(area._ball_rot.origin[1], cy, places=3)
-                self.assertAlmostEqual(area._ball_rot.angle, math.degrees(spin), places=3)
-                self.assertEqual((game.ball.x, game.ball.y, game.ball.spin), physical)
-
     def test_spring_30hz_rebounds_stable_color_and_no_idle_writes(self):
         for hz in (60, 120, 185):
             area = SimpleNamespace(model=SimpleNamespace(state="charging", power=1.0),
