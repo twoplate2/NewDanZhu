@@ -47,6 +47,7 @@
 """
 
 import json
+import math
 import os
 import random
 import time
@@ -335,6 +336,8 @@ class Game(object):
         self._topped = False         # 本次飞行是否已播顶部碰撞音
         self._misfire_frames = 0
         self._accumulator = 0.0      # 固定步长累加器(适配任意刷新率)
+        self._ball_draw_previous = None
+        self._ball_draw_contact = False
         self._landing_primed = False
         self._settle_slot = 0
         self._settled = False
@@ -515,6 +518,31 @@ class Game(object):
         self._frame(dt)
         return self.take_events()
 
+    def _remember_ball_pose(self):
+        """每个物理主步开始前留一份显示快照，补步时只保留最后一步。"""
+        b = self.ball
+        self._ball_draw_previous = (b, self.state, b.x, b.y, getattr(b, "spin", 0.0))
+        self._ball_draw_contact = False
+
+    def ball_draw_pose(self):
+        """只读显示位姿；按实际物理余量插值，不按设置的帧率猜时间。"""
+        b = self.ball
+        if b is None:
+            return None
+        x, y, spin = b.x, b.y, getattr(b, "spin", 0.0)
+        prev = self._ball_draw_previous
+        if (prev is None or prev[0] is not b or prev[1] != self.state
+                or self.state not in ("flying", "misfire", "landing")):
+            return x, y, spin
+        alpha = clamp(self._accumulator / FIXED_DT, 0.0, 1.0)
+        # 接触步直接显示碰撞修正后的坐标，避免把反弹路径连成穿钉/穿墙的直线。
+        # 其余帧显示前后两次物理结果之间的位置，标准插值落后模拟一个主步。
+        if not self._ball_draw_contact:
+            x = prev[2] + (x - prev[2]) * alpha
+            y = prev[3] + (y - prev[3]) * alpha
+        angle = (spin - prev[4] + math.pi) % (2.0 * math.pi) - math.pi
+        return x, y, prev[4] + angle * alpha
+
     # ---- 装杯演出 ----
     def set_fx(self, fx):
         """晚绑定装杯演出(`GameArea.win_fx`)。
@@ -576,9 +604,11 @@ class Game(object):
             tick_amp = {}
             while self._accumulator >= FIXED_DT:
                 self._accumulator -= FIXED_DT
+                self._remember_ball_pose()
                 landed = advance_flight(b, self.geo)
                 # 逐物理帧消费事件: 汇总给音效(残留位会让撞钉计数虚高, 实测 35% 偏差)
                 if b.events:
+                    self._ball_draw_contact = True
                     tick_ev |= b.events
                     for bit, spd in (b.amp or {}).items():
                         if spd > tick_amp.get(bit, 0.0):
@@ -666,7 +696,11 @@ class Game(object):
             while self._accumulator >= FIXED_DT:
                 self._accumulator -= FIXED_DT
                 self._misfire_frames += 1     # 每物理步 +1(与飞行分支/selftest 同构, 防刷新率漂移)
-                if advance_misfire(self.ball) or self._misfire_frames > MISFIRE_MAX_FRAMES:
+                self._remember_ball_pose()
+                old_vy = self.ball.vy
+                misfire_done = advance_misfire(self.ball)
+                self._ball_draw_contact = old_vy > 0.0 and self.ball.vy <= 0.0
+                if misfire_done or self._misfire_frames > MISFIRE_MAX_FRAMES:
                     self.ball.x = PLUNGER_X
                     self.ball.y = PLUNGER_Y
                     self.ball.vx = 0.0
@@ -687,6 +721,7 @@ class Game(object):
             floor_y = FLOOR - BALL_R
             while self._accumulator >= FIXED_DT:
                 self._accumulator -= FIXED_DT
+                self._remember_ball_pose()
                 b.vx += (self.land_target_x - b.x) * LAND_K * FIXED_DT
                 b.vx *= LAND_DAMP
                 b.vx = clamp(b.vx, -ALIGN_VX_MAX, ALIGN_VX_MAX)
@@ -694,6 +729,7 @@ class Game(object):
                 b.x += b.vx * FIXED_DT
                 b.y += b.vy * FIXED_DT
                 if b.y >= floor_y:
+                    self._ball_draw_contact = True
                     b.y = floor_y
                     if b.vy > 0:
                         if b.vy > 60.0:
@@ -792,6 +828,7 @@ class Game(object):
     def launch(self):
         if self.state != "charging":
             return
+        self._ball_draw_previous = None
         self._balance_release_at=None
         self._stats_release_at=None
         self._lose_stats_pending=False
@@ -1096,6 +1133,7 @@ class Game(object):
 
     def park_ball(self, reroll=True, silent=False):
         """重掷盘面(reroll=True), 新球停到柱塞, 回 ready。哑火 reroll=False 防免费刷盘。"""
+        self._ball_draw_previous = None
         # ⚠️ 跑分期间**不重掷**: 盘面由跑分链按 BENCH_BOARD 钉死, 这里再掷一次会覆盖掉。
         if reroll and not self._bench_running:
             self._boards = {r: roll_multipliers(r) for r in self._all_rtp()}  # 各档盘面一起刷新
@@ -1410,6 +1448,7 @@ class Game(object):
         self._emit("reflow_row_budget")
 
     def reset_balance(self, notify=True):
+        self._ball_draw_previous = None
         self._balance_release_at=None
         self._stats_release_at=None
         self._lose_stats_pending=False

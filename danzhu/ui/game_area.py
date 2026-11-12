@@ -489,6 +489,7 @@ class GameArea(FloatLayout):
         _t_ball = time.perf_counter()
         b = g.ball
         if b is not None:
+            draw_x, draw_y, draw_spin = g.ball_draw_pose()
             br = BALL_R * BALL_VIEW
             bs = 2 * br * self._s
             # 受击压扁: 沿法线缩、切向胀, 渐回正圆
@@ -500,12 +501,12 @@ class GameArea(FloatLayout):
                 if b.squash > 0.99:
                     b.squash = 1.0
                 sq = b.squash
-            self._ball_e.pos = (self._ox + (b.x - br) * self._s + bs * (1 - sq) * 0.5,
-                                self._oyt - (b.y + br) * self._s + bs * (1 - sq) * 0.5)
+            self._ball_e.pos = (self._ox + (draw_x - br) * self._s + bs * (1 - sq) * 0.5,
+                                self._oyt - (draw_y + br) * self._s + bs * (1 - sq) * 0.5)
             self._ball_e.size = (bs * (2 - sq), bs * sq)
             # 球自转(spin 是碰钉切向速度积分)
-            self._ball_rot.angle = math.degrees(getattr(b, "spin", 0.0) % (2.0 * math.pi))
-            self._ball_rot.origin = (self._ox + b.x * self._s, self._oyt - b.y * self._s)
+            self._ball_rot.angle = math.degrees(draw_spin % (2.0 * math.pi))
+            self._ball_rot.origin = (self._ox + draw_x * self._s, self._oyt - draw_y * self._s)
             # ⚠️ 消费物理层的 peg_flash 信号后**必须清空**, 否则同一颗钉会反复重新点亮。
             pf = getattr(b, "peg_flash", None)
             if pf is not None and pf in self._peg_cols:
