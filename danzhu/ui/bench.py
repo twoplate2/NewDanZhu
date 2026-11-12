@@ -983,11 +983,36 @@ class BenchMixin(object):
         popup = self._popup(0.90, 460, title="", content=content,
                             auto_dismiss=True, separator_height=0)
         close_btn.bind(on_release=popup.dismiss)
+        popup.bind(on_dismiss=self._restore_bench_menu)
         popup.open()
         self._popup_fit_content(popup, content)
 
+    def _restore_bench_menu(self, *_):
+        """仅恢复从菜单进入的测试；普通弹窗、独立测试入口不强行弹菜单。"""
+        if getattr(self, "_bench_menu_return", False):
+            self._bench_menu_return = False
+            self._show_bench_menu()
+
+    def _bench_menu_run(self, action):
+        """测试期间摘掉菜单，避免遮挡画面及污染呈现测量。"""
+        menu = getattr(self, "_bench_menu_popup", None)
+        if menu is not None and menu._is_open:
+            self._bench_menu_return = True
+            menu.dismiss(animation=False)
+        try:
+            action()
+        finally:
+            # 入口可能因球未落定/测试互斥而拒绝启动，不能因此丢掉菜单。
+            if not (self.game._bench_running or getattr(self, "_hp_running", False)
+                    or getattr(self, "_playtest", None) is not None
+                    or getattr(self, "_replay_busy", False)):
+                self._restore_bench_menu()
+
     def _show_bench_menu(self):
         """性能测试菜单：三组测试在上，信息与帧率设定放在最后一行。"""
+        current = getattr(self, "_bench_menu_popup", None)
+        if current is not None and current._is_open:
+            return current
         content = BoxLayout(orientation='vertical', padding=dp(16), spacing=dp(12))
         _ver = _app_version()
         _title = ('性能测试 ' + _ver) if _ver else '性能测试'
@@ -1037,21 +1062,22 @@ class BenchMixin(object):
         #       不改的话测量还会按旧宽度算, 给出假绿。
         popup = self._popup(0.92, 520, title='', content=content,
                             auto_dismiss=True, separator_height=0)
-        start_btn.bind(on_release=lambda *_: (popup.dismiss(), self._start_bench_test()))
-        hist_btn.bind(on_release=lambda *_: (popup.dismiss(), self._show_bench_history()))
-        info_btn.bind(on_release=lambda *_: (popup.dismiss(), self._show_startup_info()))
-        hp_btn.bind(on_release=lambda *_: (popup.dismiss(), self._start_hp_test()))
-        hph_btn.bind(on_release=lambda *_: (popup.dismiss(), self._show_hp_history()))
-        cap_btn.bind(on_release=lambda *_: (popup.dismiss(), self._show_fps_cap_settings()))
+        self._bench_menu_popup = popup
+        start_btn.bind(on_release=lambda *_: self._bench_menu_run(self._start_bench_test))
+        hist_btn.bind(on_release=lambda *_: self._show_bench_history())
+        info_btn.bind(on_release=lambda *_: self._show_startup_info())
+        hp_btn.bind(on_release=lambda *_: self._bench_menu_run(self._start_hp_test))
+        hph_btn.bind(on_release=lambda *_: self._show_hp_history())
+        cap_btn.bind(on_release=lambda *_: self._show_fps_cap_settings())
         for left, right in ((start_btn, hist_btn), (hp_btn, hph_btn)):
             row = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
             row.add_widget(left)
             row.add_widget(right)
             content.add_widget(row)
         playtest_btn = menu_button('开始帧率测试', 3, 48)
-        playtest_btn.bind(on_release=lambda *_: (popup.dismiss(), self._start_playtest()))
+        playtest_btn.bind(on_release=lambda *_: self._bench_menu_run(self._start_playtest))
         playtest_history = menu_button('帧率测试历史', 3, 48)
-        playtest_history.bind(on_release=lambda *_:(popup.dismiss(),self._show_playtest_history()))
+        playtest_history.bind(on_release=lambda *_: self._show_playtest_history())
         playtest_row=BoxLayout(size_hint_y=None,height=dp(48),spacing=dp(8))
         playtest_row.add_widget(playtest_btn);playtest_row.add_widget(playtest_history)
         content.add_widget(playtest_row)
@@ -1061,6 +1087,7 @@ class BenchMixin(object):
         content.add_widget(settings_row)
         popup.open()
         self._popup_fit_content(popup, content)
+        return popup
 
     def _calc_no_audio_ms(self, _veil, _tot_ms=0.0):
         """「无音频加载累计耗时」= **不必等音频就绪的话, 最早什么时候能进游戏**(ms)。
@@ -1254,7 +1281,7 @@ class BenchMixin(object):
                     pass
             popup.bind(on_dismiss=_stop_live)
         ok_btn.bind(on_release=lambda *_: popup.dismiss())
-        replay_btn.bind(on_release=lambda *_: (popup.dismiss(), self._replay_cold_start()))
+        replay_btn.bind(on_release=lambda *_: (popup.dismiss(), self._bench_menu_run(self._replay_cold_start)))
         # ⚠️ 提示**不弹新弹窗**(这里已经在弹窗里了, 叠一个必然出岔子): 照抄 `_save_power_log`
         #    调用方那套 —— 把结果写进按钮文字, 3 秒后复原。
         def _on_save_log(*_a):
@@ -1307,6 +1334,7 @@ class BenchMixin(object):
             popup = self._popup(0.94, 420, title='', content=content,
                                 auto_dismiss=True, separator_height=0)
             ok_btn.bind(on_release=lambda *_: popup.dismiss())
+            popup.bind(on_dismiss=self._restore_bench_menu)
             popup.open()
             self._popup_fit_content(popup, content)
 
@@ -2765,6 +2793,7 @@ class BenchMixin(object):
                             auto_dismiss=False, separator_height=0)
         # ⚠️ 绑定必须在 `popup` 建出来之后(和隐藏档弹窗同一个写法)。
         close_btn.bind(on_release=popup.dismiss)
+        popup.bind(on_dismiss=self._restore_bench_menu)
         popup.open()
         self._popup_fit_content(popup, content)
         self._prog_stop()

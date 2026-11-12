@@ -144,7 +144,13 @@ class PlaytestMixin:
         row = BoxLayout(size_hint_y=None, height=dp(34), spacing=dp(8))
         stop = Button(text='停止', font_size=sp(14))
         save = Button(text='停止并保存', font_size=sp(14))
-        stop.bind(on_release=lambda *_: self._stop_playtest() if self._playtest.active else self._close_playtest())
+        def stop_or_close(*_):
+            if self._playtest.active:
+                self._stop_playtest()
+            else:
+                self._close_playtest()
+                self._restore_bench_menu()
+        stop.bind(on_release=stop_or_close)
         save.bind(on_release=lambda *_: self._save_playtest())
         toggle=Button(text='显示信息',font_size=sp(14),background_normal='',background_down='',
                       background_color=hex_rgb(COL_BTN)+(1,),color=(1,1,1,1))
@@ -555,7 +561,11 @@ class PlaytestMixin:
                 status.text=message
         save.bind(on_release=save_report)
         close.bind(on_release=popup.dismiss)
-        popup.bind(on_dismiss=lambda *_:self._close_playtest() if result is getattr(self,'_playtest_result',None) else None)
+        def close_summary(*_):
+            if result is getattr(self, '_playtest_result', None):
+                self._close_playtest()
+                self._restore_bench_menu()
+        popup.bind(on_dismiss=close_summary)
         popup.open()
         self._playtest_summary_popup=popup
         return popup
